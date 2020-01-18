@@ -269,6 +269,43 @@ To use the `CMakeLists.txt` file with these programs, define the `FOR_IDE` CMake
 
 [Eclipse](https://eclipse.org/cdt/) is another open-source option. It doesn't natively work with CMake projects, and its C++ parser has many similar issues as CLion.
 
+#### Vim/gVim/NeoVim
+
+##### Tags based plugins
+
+The classic vi ctags doesn't work well with modern C++ codebases like Scylla.
+But [universal-ctags](https://github.com/universal-ctags/ctags)
+might be good enough for basic usage.
+
+Some plugins like [tagbar](https://github.com/majutsushi/tagbar)
+work mostly fine as long as the generated tags are reasonably good.
+
+##### YouCompleteMe
+
+[YouCompleteMe](https://github.com/ycm-core/YouCompleteMe#Contents)
+is a more complex system with a daemon running in the background.
+It usess the LLVM compiler so it needs a
+[Compilation Database](http://clang.llvm.org/docs/JSONCompilationDatabase.html).
+
+To generate the Compilation Database go to the root directory of the scylla source,
+run `./configure.py` (if you haven't done it before), and then run:
+
+```bash
+ninja -t compdb $(grep '^rule' build.ninja `find build/dev -name "*.ninja"` | awk '{print $2}') > compile_commands.json
+```
+
+The script will *find* all relevant ninja build files, get the *rule* names,
+and finally it runs
+[ninja to generate the Compilation Database](https://ninja-build.org/manual.html).
+(The example uses `dev` but you can change it to `release` or `debug`).
+
+If YouCompleteMe was already running restart it with `:YcmRestartServer` to
+reload the generated file.
+
+Note: this is still not perfect as compilation flags are generated for GCC
+and there might be incompatibilities with LLVM/clang.
+
+
 ### Distributed compilation: `distcc` and `ccache`
 
 Scylla's compilations times can be long. Two tools help somewhat:
