@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
                             return memory::reclaiming_result::reclaimed_nothing;
                         }
                         refs.pop_front();
+                        assert(false);
                         return memory::reclaiming_result::reclaimed_something;
                     });
                 });
