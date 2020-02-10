@@ -47,6 +47,7 @@
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include "types/map.hh"
 #include "types/list.hh"
+#include "utils/like_matcher.hh"
 
 namespace {
 
@@ -152,7 +153,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     // - a predicate can operate on a column or a collection element, which must always be
     // on the right side: "a = 3" or "collection['key'] IN (1,2,3)"
     // - parameter markers are allowed on the right hand side only
-    // - only <, >, >=, <=, != and IN predicates are supported.
+    // - only <, >, >=, <=, !=, LIKE, and IN predicates are supported.
     // - NULLs and missing values are treated differently from the WHERE clause:
     // a term or cell in IF clause is allowed to be NULL or compared with NULL,
     // and NULL value is treated just like any other value in the domain (there is no
@@ -245,6 +246,22 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         // directly to compare.
         return is_satisfied_by(_op, *cell_value->type(), *column.type, *cell_value, to_bytes(param));
     }
+
+    if (_op == operator_type::LIKE) {
+        if (cell_value == nullptr) {
+            return false;
+        }
+        auto param = _value->bind_and_get(options);  // LIKE pattern
+        if (param.is_unset_value()) {
+            throw exceptions::invalid_request_exception("Invalid 'unset' value in LIKE pattern");
+        }
+        if (param.is_null()) {
+            throw exceptions::invalid_request_exception("Invalid NULL value in LIKE pattern");
+        }
+        like_matcher matcher(to_bytes(param));
+        return matcher(bytes_view(cell_value->serialize_nonnull()));
+    }
+
     assert(_op == operator_type::IN);
 
     std::vector<bytes_opt> in_values;
@@ -307,6 +324,11 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         validate_operation_on_durations(*receiver.type, _op);
         return column_condition::condition(receiver, collection_element_term, _value->prepare(db, keyspace, value_spec), _op);
     }
+
+    if (_op == operator_type::LIKE) {
+        return column_condition::condition(receiver, collection_element_term, _value->prepare(db, keyspace, value_spec), _op);
+    }
+
     if (_op != operator_type::IN) {
         throw exceptions::invalid_request_exception(format("Unsupported operator type {} in a condition ", _op));
     }

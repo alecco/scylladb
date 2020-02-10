@@ -94,7 +94,12 @@ public:
     // and evaluate the condition.
     bool applies_to(const data_value* cell_value, const query_options& options) const;
 
-    // Helper constructor wrapper for  "IF col['key'] = 'foo'" or "IF col = 'foo'" */
+    /**
+     * Helper constructor wrapper for
+     * "IF col['key'] = 'foo'"
+     * "IF col = 'foo'"
+     * "IF col LIKE <pattern>"
+     */
     static ::shared_ptr<column_condition> condition(const column_definition& def, ::shared_ptr<term> collection_element,
             ::shared_ptr<term> value, const operator_type& op) {
         return ::make_shared<column_condition>(def, std::move(collection_element), std::move(value),
@@ -130,7 +135,13 @@ public:
                 , _op(op)
         { }
 
-        /** A condition on a column or collection element. For example: "IF col['key'] = 'foo'" or "IF col = 'foo'" */
+        /**
+         * A condition on a column or collection element.
+         * For example:
+         * "IF col['key'] = 'foo'"
+         * "IF col = 'foo'"
+         * "IF col LIKE 'foo%'"
+         */
         static ::shared_ptr<raw> simple_condition(::shared_ptr<term::raw> value, ::shared_ptr<term::raw> collection_element,
                 const operator_type& op) {
             return ::make_shared<raw>(std::move(value), std::vector<::shared_ptr<term::raw>>{},

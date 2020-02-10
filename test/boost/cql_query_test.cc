@@ -3948,6 +3948,15 @@ void require_rows(cql_test_env& e,
     }
 }
 
+/// Asserts that e.execute_prepared(id, values) doesn't return rows.
+void require_no_rows(cql_test_env& e,
+                  cql3::prepared_cache_key_type id,
+                  const std::vector<cql3::raw_value>& values,
+                  const source_location& loc = source_location::current()) {
+    auto msg = e.execute_prepared(id, values).get0();
+    BOOST_REQUIRE(dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg) == nullptr);
+}
+
 auto I(int32_t x) { return int32_type->decompose(x); }
 
 auto L(int64_t x) { return long_type->decompose(x); }
@@ -4994,5 +5003,39 @@ SEASTAR_TEST_CASE(test_time_uuid_fcts_result) {
         };
 
         require_timestamp_timeuuid_or_date("tounixtimestamp");
+    });
+}
+
+SEASTAR_TEST_CASE(test_like_parameter_marker) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, c text)").get();
+        cquery_nofail(e, "INSERT INTO  t (pk, c) VALUES (1, 'abc')").get();
+        cquery_nofail(e, "INSERT INTO  t (pk, c) VALUES (2, 'bcd')").get();
+
+        auto test_bind = [&] (sstring query, bytes pattern,
+                std::vector<std::vector<bytes_opt>> result_rows) {
+
+            auto id = e.prepare(query).get0();
+            std::vector<cql3::raw_value> raw_values;
+            raw_values.emplace_back(cql3::raw_value::make_value(pattern));
+
+            if (result_rows.size() == 0) {
+                require_no_rows(e, id, raw_values);
+            } else {
+                require_rows(e, id, raw_values, result_rows);
+            }
+        };
+
+        // Valid pattern, changed 1 row value
+        test_bind("UPDATE t SET c = 'zzz' WHERE pk = 1 IF c LIKE ?", T("a%"),
+                {{boolean_type->decompose(true), "abc"}});
+        // No match
+        test_bind("UPDATE t SET c = 'err' WHERE pk = 1 IF c LIKE ?", T("a%"),
+                {{boolean_type->decompose(false), "zzz"}});
+        // No row matching pk
+        test_bind("UPDATE t SET c = 'err' WHERE pk = 9 IF c LIKE ?", T("a%"), {});
+        // Bad pattern (this should probably be a throw)
+        test_bind("UPDATE t SET c = 'err' WHERE pk = 1 IF c LIKE ?", I(1),
+                {{boolean_type->decompose(false), "zzz"}});
     });
 }
