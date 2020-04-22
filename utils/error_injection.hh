@@ -109,6 +109,10 @@ extern logging::logger errinj_logger;
  *
  */
 
+#include <iostream>
+using std::cout;
+using std::endl;
+
 template <bool injection_enabled>
 class error_injection {
     using handler_fun = std::function<void()>;
@@ -210,6 +214,24 @@ public:
         std::chrono::milliseconds duration = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
         errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
         return seastar::sleep<Clock>(duration);
+    }
+
+    // \brief Inject a sleep to deadline (timeout)
+    template <typename Clock, typename Duration, typename Func>
+    [[gnu::always_inline]]
+    std::result_of_t<Func()> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline,
+                Func&& func) {
+        if (is_enabled(name)) {
+            if (is_one_shot(name)) {
+                disable(name);
+            }
+            std::chrono::milliseconds duration = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
+            errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
+            return seastar::sleep<Clock>(duration).then([&func] {
+                    return func(); });
+        } else {
+            return func();
+        }
     }
 
     // \brief Inject exception

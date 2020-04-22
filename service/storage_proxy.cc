@@ -76,6 +76,7 @@
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/intrusive/list.hpp>
+#include <utils/error_injection.hh>
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
@@ -933,6 +934,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 auto da = digest_algorithm(get_local_storage_proxy());
                 if (fbu::is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
+
                     return paxos::paxos_state::prepare(tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
