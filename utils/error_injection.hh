@@ -129,10 +129,6 @@ class error_injection {
     // TODO: change to unordered_set once we have heterogeneous lookups
     std::map<sstring, bool, str_less> _enabled;
 
-    bool is_enabled(const std::string_view& injection_name) const {
-        return _enabled.find(injection_name) != _enabled.end();
-    }
-
     bool is_one_shot(const std::string_view& injection_name) const {
         const auto it = _enabled.find(injection_name);
         if (it == _enabled.end()) {
@@ -142,6 +138,17 @@ class error_injection {
     }
 
 public:
+    // \brief Check if error injection is enabled
+    // \param injection_name name of the injection to check
+    // \param disable_one_shot disable it after checking, default no
+    bool is_enabled(const std::string_view& injection_name, const bool disable_one_shot = false) {
+        auto ret = _enabled.find(injection_name) != _enabled.end();
+        if (ret && disable_one_shot && is_one_shot(injection_name)) {
+            disable(injection_name);
+        }
+        return ret;
+    }
+
     void enable(const std::string_view& injection_name, bool one_shot = false) {
         _enabled.emplace(injection_name, one_shot);
         errinj_logger.debug("Enabling injection {} \"{}\"",
@@ -270,6 +277,10 @@ template <>
 class error_injection<false> {
     using handler_fun = std::function<void()>;
 public:
+    constexpr bool is_enabled(const std::string_view& injection_name, const bool disable_one_shot = false) {
+        return false;
+    }
+
     [[gnu::always_inline]]
     void enable(const std::string_view& injection_name, const bool one_shot = false) {}
 
