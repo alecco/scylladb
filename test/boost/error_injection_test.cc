@@ -64,6 +64,7 @@ SEASTAR_TEST_CASE(test_is_enabled) {
     errinj.enable("is_enabled_test", true);
     BOOST_ASSERT(errinj.enabled_injections().size() == 1);
     BOOST_ASSERT(errinj.is_enabled("is_enabled_test"));
+    BOOST_ASSERT(errinj.is_one_shot("is_enabled_test"));
     errinj.disable("is_enabled_test");
     BOOST_ASSERT(errinj.enabled_injections().size() == 0);
     return make_ready_future<>();
