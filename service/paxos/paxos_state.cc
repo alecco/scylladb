@@ -129,6 +129,9 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
 
 future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
+    if (utils::get_local_injector().is_enabled("paxos_accept_error")) {
+        return make_exception_future<bool>(utils::injected_error("injected_error_on_accept"));
+    }
     return utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout,
             [token = std::move(token), &proposal, schema, tr_state, timeout] {
         utils::latency_counter lc;
