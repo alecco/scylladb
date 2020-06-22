@@ -421,13 +421,17 @@ perf_tests = set([
     'test/perf/perf_big_decimal',
 ])
 
+raft_tests = set([
+    'test/raft/replication'
+])
+
 apps = set([
     'scylla',
     'test/tools/cql_repl',
     'tools/scylla-types',
 ])
 
-tests = scylla_tests | perf_tests
+tests = scylla_tests | perf_tests | raft_tests
 
 other = set([
     'iotune',
@@ -918,11 +922,17 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
     'test/lib/random_schema.cc',
 ]
 
+scylla_raft_dependencies = [
+    'raft/raft.cc',
+    'utils/uuid.cc'
+]
+
 deps = {
     'scylla': idls + ['main.cc', 'release.cc', 'build_id.cc'] + scylla_core + api + alternator + redis,
     'test/tools/cql_repl': idls + ['test/tools/cql_repl.cc'] + scylla_core + scylla_tests_generic_dependencies,
     #FIXME: we don't need all of scylla_core here, only the types module, need to modularize scylla_core.
     'tools/scylla-types': idls + ['tools/scylla-types.cc'] + scylla_core,
+    'test/raft/replication': ['test/raft/replication.cc'] + scylla_raft_dependencies,
 }
 
 pure_boost_tests = set([

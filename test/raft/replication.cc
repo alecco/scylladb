@@ -1,0 +1,336 @@
+#include <fmt/format.h>
+#include <seastar/core/app-template.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/coroutine.hh>
+#include "raft/raft.hh"
+#include "serializer.hh"
+#include "serializer_impl.hh"
+
+using namespace std::chrono_literals;
+
+class state_machine : public raft::state_machine {
+public:
+    using apply_fn = std::function<future<>(utils::UUID id, promise<>&, const std::vector<raft::command_cref>& commands)>;
+private:
+    utils::UUID _id;
+    apply_fn _apply;
+    promise<> _done;
+public:
+    state_machine(utils::UUID id, apply_fn apply) : _id(id), _apply(std::move(apply)) {}
+    virtual future<> apply(const std::vector<raft::command_cref> commands) {
+        return _apply(_id, _done, commands);
+    }
+    virtual future<raft::snapshot_id> take_snaphot() { return make_ready_future<raft::snapshot_id>(raft::snapshot_id()); }
+    virtual void drop_snapshot(raft::snapshot_id id) {}
+    virtual future<> load_snapshot(raft::snapshot_id id) { return make_ready_future<>(); };
+
+    future<> done() {
+        return _done.get_future();
+    }
+};
+
+struct initial_state {
+    raft::term_t term;
+    raft::node_id vote;
+    std::vector<raft::log_entry> log;
+};
+
+class storage : public raft::storage {
+    initial_state _conf;
+public:
+    storage(initial_state conf) : _conf(std::move(conf)) {}
+    storage() {}
+    virtual future<> store_term(raft::term_t term) { co_return seastar::sleep(1ms); }
+    virtual future<raft::term_t> load_term() { return make_ready_future<raft::term_t>(_conf.term); }
+    virtual future<> store_vote(raft::node_id vote) { return make_ready_future<>(); }
+    virtual future<std::optional<raft::node_id>> load_vote() { return make_ready_future<std::optional<raft::node_id>>(_conf.vote); }
+    virtual future<> store_snapshot(raft::snapshot snap, size_t preserve_log_entries) { return make_ready_future<>(); }
+    virtual future<raft::snapshot> load_snapshot() { return make_ready_future<raft::snapshot>(raft::snapshot()); }
+    virtual future<> store_log_entries(const std::vector<raft::log_entry>& entries) { co_return seastar::sleep(1ms); };
+    virtual future<> store_log_entry(const raft::log_entry& entry) { co_return seastar::sleep(1ms); }
+    virtual future<raft::log> load_log() {
+        raft::log log;
+        for (auto&& e : _conf.log) {
+            log.emplace_back(std::move(e));
+        }
+        return make_ready_future<raft::log>(std::move(log));
+    }
+    virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
+};
+
+class rpc : public raft::rpc {
+    static std::unordered_map<utils::UUID, rpc*> net;
+    raft::node_id _id;
+public:
+    rpc(raft::node_id id) : _id(id) {
+        net[_id] = this;
+    }
+    virtual future<> send_snapshot(raft::node_id node_id, raft::snapshot snap) { return make_ready_future<>(); }
+    virtual future<raft::instance::append_reply> send_append_entries(raft::node_id id, const raft::instance::append_request_send& append_request) {
+        raft::instance::append_request_recv req;
+        req.current_term = append_request.current_term;
+        req.leader_id = append_request.leader_id;
+        req.prev_log_index = append_request.prev_log_index;
+        req.prev_log_term = append_request.prev_log_term;
+        req.leader_commit = append_request.leader_commit;
+        for (auto&& e: append_request.entries) {
+            req.entries.push_back(e);
+        }
+        co_return net[id]->_instance->append_entries(_id, std::move(req));
+    }
+    virtual future<raft::instance::vote_reply> send_request_vote(raft::node_id id, const raft::instance::vote_request& avote_request) {
+        return make_ready_future<raft::instance::vote_reply>(raft::instance::vote_reply());
+    }
+    virtual void send_keepalive(raft::node_id id, raft::instance::keep_alive keep_alive) {
+        raft::instance::append_request_recv req;
+        req.current_term = keep_alive.current_term;
+        req.leader_id = keep_alive.leader_id;
+        req.prev_log_index = raft::index_t(0);
+        req.prev_log_term = raft::term_t(0);
+        req.leader_commit = keep_alive.leader_commit;
+        (void)net[id]->_instance->append_entries(_id, std::move(req));
+    }
+    virtual void add_node(raft::node_id id, bytes node_info) {}
+    virtual void remove_node(raft::node_id id) {}
+
+};
+
+std::unordered_map<utils::UUID, rpc*> rpc::net;
+
+std::pair<std::unique_ptr<raft::instance>, state_machine*> create_raft_instance(utils::UUID uuid, state_machine::apply_fn apply,
+        initial_state state = initial_state()) {
+    auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
+    auto& rsm = *sm;
+    auto mrpc = std::make_unique<rpc>(uuid);
+    auto mstorage = std::make_unique<storage>(state);
+    auto raft = std::make_unique<raft::instance>(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
+    return std::make_pair(std::move(raft), &rsm);
+}
+
+future<std::vector<std::pair<std::unique_ptr<raft::instance>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply) {
+    raft::configuration conf;
+    std::vector<std::pair<std::unique_ptr<raft::instance>, state_machine*>> rafts;
+
+    for (size_t i = 0; i < states.size(); i++) {
+        auto uuid = utils::make_random_uuid();
+        conf.nodes.push_back(raft::node{uuid});
+    }
+
+    for (size_t i = 0; i < states.size(); i++) {
+        auto& n = conf.nodes[i];
+        auto& raft = *rafts.emplace_back(create_raft_instance(n.id, apply, states[i])).first;
+        raft.set_config(conf);
+        co_await raft.start();
+    }
+
+    co_return std::move(rafts);
+}
+
+struct log_entry {
+    unsigned term;
+    int value;
+};
+
+std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list) {
+    std::vector<raft::log_entry> log;
+
+    unsigned i = 0;
+    for (auto e : list) {
+        raft::command command;
+        ser::serialize(command, e.value);
+        log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(++i), std::move(command)});
+    }
+
+    return log;
+}
+
+constexpr int itr = 100;
+std::unordered_map<utils::UUID, int> sums;
+
+future<> apply(utils::UUID id, promise<>& done, const std::vector<raft::command_cref>& commands) {
+        fmt::print("sm::apply got {} entries\n", commands.size());
+        for (auto&& d : commands) {
+            auto is = ser::as_input_stream(d);
+            int n = ser::deserialize(is, boost::type<int>());
+            fmt::print("{}: apply {}\n", id, n);
+            auto it = sums.find(id);
+            if (it == sums.end()) {
+                sums[id] = 0;
+            }
+            sums[id] += n;
+        }
+        if (sums[id] == ((itr - 1) * itr)/2) {
+            done.set_value();
+        }
+        return make_ready_future<>();
+};
+
+
+future<> test_simple_replication(size_t size) {
+    std::vector<initial_state> states;
+
+    auto rafts = co_await create_cluster(std::vector<initial_state>(size), apply);
+
+    auto& leader = *rafts[0].first;
+    co_await leader.make_me_leader();
+
+    for (int i = 0; i < itr; i++) {
+        fmt::print("Adding entry {} on a leader\n", i);
+        raft::command command;
+        ser::serialize(command, i);
+        co_await leader.add_entry(std::move(command));
+    }
+
+    for (auto& r:  rafts) {
+        co_await r.second->done();
+    }
+
+    for (auto& r: rafts) {
+        co_await r.first->stop();
+    }
+
+    co_return;
+}
+
+// initially a leader has non empty log
+future<> test_replicate_non_empty_leader_log() {
+    // 2 nodes, leader has entries in his log
+    std::vector<initial_state> states(2);
+    states[0].term = raft::term_t(1);
+    states[0].log = create_log({{1, 0}, {1, 1}, {1, 2}, {1, 3}});
+
+    auto rafts = co_await create_cluster(states, apply);
+    auto& leader = *rafts[0].first;
+
+    co_await leader.make_me_leader();
+
+    for (int i = 4; i < itr; i++) {
+        fmt::print("Adding entry {} on a leader\n", i);
+        raft::command command;
+        ser::serialize(command, i);
+        co_await leader.add_entry(std::move(command));
+    }
+
+    for (auto& r:  rafts) {
+        co_await r.second->done();
+    }
+
+    for (auto& r: rafts) {
+        co_await r.first->stop();
+    }
+    co_return;
+}
+
+// test special case where prev_index = 0 because leadr's log is empty
+future<> test_replace_log_leaders_log_empty() {
+    // current leaders term is 2 and empty log
+    // one of the follower have three entries that should be replaced
+    std::vector<initial_state> states(3);
+    states[0].term = raft::term_t(2);
+    states[2].log = create_log({{1, 10}, {1, 20}, {1, 30}});
+
+    auto rafts = co_await create_cluster(states, apply);
+
+    auto& leader = *rafts[0].first;
+    co_await leader.make_me_leader();
+
+    for (int i = 0; i < itr; i++) {
+        fmt::print("Adding entry {} on a leader\n", i);
+        raft::command command;
+        ser::serialize(command, i);
+        co_await leader.add_entry(std::move(command));
+    }
+
+    for (auto& r:  rafts) {
+        co_await r.second->done();
+    }
+
+    for (auto& r: rafts) {
+        co_await r.first->stop();
+    }
+
+    co_return;
+}
+
+// two nodes, leader has one entry, follower has 3, existing entries do not match
+future<> test_replace_log_leaders_log_not_empty() {
+    // current leaders term is 2 and the log has one entry
+    // one of the follower have three entries that should be replaced
+    std::vector<initial_state> states(2);
+    states[0].term = raft::term_t(3);
+    states[0].log = create_log({{1, 0}});
+    states[1].log = create_log({{2, 10}, {2, 20}, {2, 30}});
+
+    auto rafts = co_await create_cluster(states, apply);
+
+    auto& leader = *rafts[0].first;
+    co_await leader.make_me_leader();
+
+    // start loop from 1 since one entry is already in the log
+    for (int i = 1; i < itr; i++) {
+        fmt::print("Adding entry {} on a leader\n", i);
+        raft::command command;
+        ser::serialize(command, i);
+        co_await leader.add_entry(std::move(command));
+    }
+
+    for (auto& r:  rafts) {
+        co_await r.second->done();
+    }
+
+    for (auto& r: rafts) {
+        co_await r.first->stop();
+    }
+
+    co_return;
+}
+
+// two nodes, leader has 2 entries, follower has 4, index=1 matches index=2 does not
+future<> test_replace_log_leaders_log_not_empty_2() {
+    // current leaders term is 2 and the log has one entry
+    // one of the follower have three entries that should be replaced
+    std::vector<initial_state> states(2);
+    states[0].term = raft::term_t(3);
+    states[0].log = create_log({{1, 0}, {1, 1}});
+    states[1].log = create_log({{1, 0}, {2, 20}, {2, 30}, {2, 40}});
+
+    auto rafts = co_await create_cluster(states, apply);
+
+    auto& leader = *rafts[0].first;
+    co_await leader.make_me_leader();
+
+    // start loop from 2 since two entries are already in the log
+    for (int i = 2; i < itr; i++) {
+        fmt::print("Adding entry {} on a leader\n", i);
+        raft::command command;
+        ser::serialize(command, i);
+        co_await leader.add_entry(std::move(command));
+    }
+
+    for (auto& r:  rafts) {
+        co_await r.second->done();
+    }
+
+    for (auto& r: rafts) {
+        co_await r.first->stop();
+    }
+
+    co_return;
+}
+
+int main(int argc, char* argv[]) {
+    namespace bpo = boost::program_options;
+
+    seastar::app_template::config cfg;
+    seastar::app_template app(cfg);
+
+    return app.run(argc, argv, [] () -> future<> {
+        co_await test_simple_replication(1);
+        co_await test_simple_replication(3);
+        co_await test_replicate_non_empty_leader_log();
+        co_await test_replace_log_leaders_log_empty();
+        co_await test_replace_log_leaders_log_not_empty();
+        co_await test_replace_log_leaders_log_not_empty_2();
+    });
+}
+
