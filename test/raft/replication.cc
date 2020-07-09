@@ -90,7 +90,7 @@ public:
 
         return make_ready_future<raft::vote_reply>(raft::vote_reply());
     }
-    virtual void send_keepalive(raft::node_id id, raft::keep_alive keep_alive) {
+    virtual void send_keepalive(raft::node_id id, const raft::keep_alive& keep_alive) {
         raft::append_request_recv req;
         req.current_term = keep_alive.current_term;
         req.leader_id = keep_alive.leader_id;

@@ -303,7 +303,7 @@ public:
     // but this means that it cannot reply with larger term and convert a leader that sends it
     // to a follower. A new leader that detects stale leader by processing this message needs to
     // contact it explicitly by issuing empty send_append_entries call.
-    virtual void send_keepalive(node_id id, keep_alive keep_alive) = 0;
+    virtual void send_keepalive(node_id id, const keep_alive& keep_alive) = 0;
 
     // When new node is learn this function is called with the info about the node
     virtual void add_node(node_id id, bytes node_info) = 0;
