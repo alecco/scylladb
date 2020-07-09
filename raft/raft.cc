@@ -118,7 +118,7 @@ future<> instance::replication_fiber(node_id node, leader_per_node_state& state)
         index_t prev_index = index_t(0);
         term_t prev_term = _current_term;
         if (state.next_idx != 1) {
-            prev_index = _log[state.next_idx - 1].index;
+            prev_index = index_t(state.next_idx - 1);
             prev_term = _log[state.next_idx - 1].term;
         }
 
