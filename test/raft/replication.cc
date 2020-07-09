@@ -2,11 +2,14 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/util/log.hh>
 #include "raft/raft.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
 
 using namespace std::chrono_literals;
+
+static seastar::logger tlogger("test");
 
 class state_machine : public raft::state_machine {
 public:
@@ -148,11 +151,11 @@ constexpr int itr = 100;
 std::unordered_map<utils::UUID, int> sums;
 
 future<> apply(utils::UUID id, promise<>& done, const std::vector<raft::command_cref>& commands) {
-        fmt::print("sm::apply got {} entries\n", commands.size());
+        tlogger.debug("sm::apply got {} entries\n", commands.size());
         for (auto&& d : commands) {
             auto is = ser::as_input_stream(d);
             int n = ser::deserialize(is, boost::type<int>());
-            fmt::print("{}: apply {}\n", id, n);
+            tlogger.debug("{}: apply {}\n", id, n);
             auto it = sums.find(id);
             if (it == sums.end()) {
                 sums[id] = 0;
@@ -166,16 +169,15 @@ future<> apply(utils::UUID id, promise<>& done, const std::vector<raft::command_
 };
 
 
-future<> test_simple_replication(size_t size) {
-    std::vector<initial_state> states;
-
-    auto rafts = co_await create_cluster(std::vector<initial_state>(size), apply);
+future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
+    auto rafts = co_await create_cluster(states, apply);
 
     auto& leader = *rafts[0].first;
     co_await leader.make_me_leader();
 
-    for (int i = 0; i < itr; i++) {
-        fmt::print("Adding entry {} on a leader\n", i);
+    // start loop from 2 since two entries are already in the log
+    for (int i = start_itr ; i < itr; i++) {
+        tlogger.debug("Adding entry {} on a leader\n", i);
         raft::command command;
         ser::serialize(command, i);
         co_await leader.add_entry(std::move(command));
@@ -192,6 +194,10 @@ future<> test_simple_replication(size_t size) {
     co_return;
 }
 
+future<> test_simple_replication(size_t size) {
+    return test_helper(std::vector<initial_state>(size));
+}
+
 // initially a leader has non empty log
 future<> test_replicate_non_empty_leader_log() {
     // 2 nodes, leader has entries in his log
@@ -199,26 +205,8 @@ future<> test_replicate_non_empty_leader_log() {
     states[0].term = raft::term_t(1);
     states[0].log = create_log({{1, 0}, {1, 1}, {1, 2}, {1, 3}});
 
-    auto rafts = co_await create_cluster(states, apply);
-    auto& leader = *rafts[0].first;
-
-    co_await leader.make_me_leader();
-
-    for (int i = 4; i < itr; i++) {
-        fmt::print("Adding entry {} on a leader\n", i);
-        raft::command command;
-        ser::serialize(command, i);
-        co_await leader.add_entry(std::move(command));
-    }
-
-    for (auto& r:  rafts) {
-        co_await r.second->done();
-    }
-
-    for (auto& r: rafts) {
-        co_await r.first->stop();
-    }
-    co_return;
+    // start iterations from 4 since o4 entry is already in the log
+    return test_helper(std::move(states), 4);
 }
 
 // test special case where prev_index = 0 because leadr's log is empty
@@ -229,27 +217,7 @@ future<> test_replace_log_leaders_log_empty() {
     states[0].term = raft::term_t(2);
     states[2].log = create_log({{1, 10}, {1, 20}, {1, 30}});
 
-    auto rafts = co_await create_cluster(states, apply);
-
-    auto& leader = *rafts[0].first;
-    co_await leader.make_me_leader();
-
-    for (int i = 0; i < itr; i++) {
-        fmt::print("Adding entry {} on a leader\n", i);
-        raft::command command;
-        ser::serialize(command, i);
-        co_await leader.add_entry(std::move(command));
-    }
-
-    for (auto& r:  rafts) {
-        co_await r.second->done();
-    }
-
-    for (auto& r: rafts) {
-        co_await r.first->stop();
-    }
-
-    co_return;
+    return test_helper(std::move(states));
 }
 
 // two nodes, leader has one entry, follower has 3, existing entries do not match
@@ -261,28 +229,8 @@ future<> test_replace_log_leaders_log_not_empty() {
     states[0].log = create_log({{1, 0}});
     states[1].log = create_log({{2, 10}, {2, 20}, {2, 30}});
 
-    auto rafts = co_await create_cluster(states, apply);
-
-    auto& leader = *rafts[0].first;
-    co_await leader.make_me_leader();
-
-    // start loop from 1 since one entry is already in the log
-    for (int i = 1; i < itr; i++) {
-        fmt::print("Adding entry {} on a leader\n", i);
-        raft::command command;
-        ser::serialize(command, i);
-        co_await leader.add_entry(std::move(command));
-    }
-
-    for (auto& r:  rafts) {
-        co_await r.second->done();
-    }
-
-    for (auto& r: rafts) {
-        co_await r.first->stop();
-    }
-
-    co_return;
+    // start iterations from 1 since one entry is already in the log
+    return test_helper(std::move(states), 1);
 }
 
 // two nodes, leader has 2 entries, follower has 4, index=1 matches index=2 does not
@@ -294,28 +242,21 @@ future<> test_replace_log_leaders_log_not_empty_2() {
     states[0].log = create_log({{1, 0}, {1, 1}});
     states[1].log = create_log({{1, 0}, {2, 20}, {2, 30}, {2, 40}});
 
-    auto rafts = co_await create_cluster(states, apply);
+    // start iterations from 2 since 2 entries are already in the log
+    return test_helper(std::move(states), 2);
+}
 
-    auto& leader = *rafts[0].first;
-    co_await leader.make_me_leader();
+// a follower and a leader have matching logs but leader's is shorter
+future<> test_replace_log_leaders_log_not_empty_3() {
+    // current leaders term is 2 and the log has one entry
+    // one of the follower have three entries that should be replaced
+    std::vector<initial_state> states(2);
+    states[0].term = raft::term_t(2);
+    states[0].log = create_log({{1, 0}, {1, 1}});
+    states[1].log = create_log({{1, 0}, {1, 1}, {1, 2}, {1, 3}});
 
-    // start loop from 2 since two entries are already in the log
-    for (int i = 2; i < itr; i++) {
-        fmt::print("Adding entry {} on a leader\n", i);
-        raft::command command;
-        ser::serialize(command, i);
-        co_await leader.add_entry(std::move(command));
-    }
-
-    for (auto& r:  rafts) {
-        co_await r.second->done();
-    }
-
-    for (auto& r: rafts) {
-        co_await r.first->stop();
-    }
-
-    co_return;
+    // start iterations from 2 since 2 entries are already in the log
+    return test_helper(std::move(states), 2);
 }
 
 int main(int argc, char* argv[]) {
@@ -324,13 +265,22 @@ int main(int argc, char* argv[]) {
     seastar::app_template::config cfg;
     seastar::app_template app(cfg);
 
-    return app.run(argc, argv, [] () -> future<> {
-        co_await test_simple_replication(1);
-        co_await test_simple_replication(3);
-        co_await test_replicate_non_empty_leader_log();
-        co_await test_replace_log_leaders_log_empty();
-        co_await test_replace_log_leaders_log_not_empty();
-        co_await test_replace_log_leaders_log_not_empty_2();
+    using test_fn = std::function<future<>()>;
+
+    test_fn tests[] =  {
+            std::bind(test_simple_replication, 1),
+            std::bind(test_simple_replication, 2),
+            test_replicate_non_empty_leader_log,
+            test_replace_log_leaders_log_empty,
+            test_replace_log_leaders_log_not_empty,
+            test_replace_log_leaders_log_not_empty_2,
+            test_replace_log_leaders_log_not_empty_3
+    };
+
+    return app.run(argc, argv, [&tests] () -> future<> {
+        for (auto& t : tests) {
+            co_await t();
+        }
     });
 }
 
