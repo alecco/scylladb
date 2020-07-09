@@ -1122,7 +1122,7 @@ compiler_test_src = '''
     #if __GNUC_MINOR__ < 1
         #error "MINOR"
     #elif __GNUC_MINOR__ == 1
-        #if __GNUC_PATCHLEVEL__ < 1
+        #if __GNUC_PATCHLEVEL__ < 0
             #error "PATCHLEVEL"
         #endif
     #endif
