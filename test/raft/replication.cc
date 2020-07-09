@@ -13,13 +13,13 @@ static seastar::logger tlogger("test");
 
 class state_machine : public raft::state_machine {
 public:
-    using apply_fn = std::function<future<>(utils::UUID id, promise<>&, const std::vector<raft::command_cref>& commands)>;
+    using apply_fn = std::function<future<>(raft::node_id id, promise<>&, const std::vector<raft::command_cref>& commands)>;
 private:
-    utils::UUID _id;
+    raft::node_id _id;
     apply_fn _apply;
     promise<> _done;
 public:
-    state_machine(utils::UUID id, apply_fn apply) : _id(id), _apply(std::move(apply)) {}
+    state_machine(raft::node_id id, apply_fn apply) : _id(id), _apply(std::move(apply)) {}
     virtual future<> apply(const std::vector<raft::command_cref> commands) {
         return _apply(_id, _done, commands);
     }
@@ -62,7 +62,7 @@ public:
 };
 
 class rpc : public raft::rpc {
-    static std::unordered_map<utils::UUID, rpc*> net;
+    static std::unordered_map<raft::node_id, rpc*> net;
     raft::node_id _id;
 public:
     rpc(raft::node_id id) : _id(id) {
@@ -98,9 +98,9 @@ public:
 
 };
 
-std::unordered_map<utils::UUID, rpc*> rpc::net;
+std::unordered_map<raft::node_id, rpc*> rpc::net;
 
-std::pair<std::unique_ptr<raft::instance>, state_machine*> create_raft_instance(utils::UUID uuid, state_machine::apply_fn apply,
+std::pair<std::unique_ptr<raft::instance>, state_machine*> create_raft_instance(raft::node_id uuid, state_machine::apply_fn apply,
         initial_state state = initial_state()) {
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
     auto& rsm = *sm;
@@ -148,14 +148,14 @@ std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list) {
 }
 
 constexpr int itr = 100;
-std::unordered_map<utils::UUID, int> sums;
+std::unordered_map<raft::node_id, int> sums;
 
-future<> apply(utils::UUID id, promise<>& done, const std::vector<raft::command_cref>& commands) {
-        tlogger.debug("sm::apply got {} entries\n", commands.size());
+future<> apply(raft::node_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
+        tlogger.debug("sm::apply got {} entries", commands.size());
         for (auto&& d : commands) {
             auto is = ser::as_input_stream(d);
             int n = ser::deserialize(is, boost::type<int>());
-            tlogger.debug("{}: apply {}\n", id, n);
+            tlogger.debug("{}: apply {}", id, n);
             auto it = sums.find(id);
             if (it == sums.end()) {
                 sums[id] = 0;
@@ -177,7 +177,7 @@ future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
 
     // start loop from 2 since two entries are already in the log
     for (int i = start_itr ; i < itr; i++) {
-        tlogger.debug("Adding entry {} on a leader\n", i);
+        tlogger.debug("Adding entry {} on a leader", i);
         raft::command command;
         ser::serialize(command, i);
         co_await leader.add_entry(std::move(command));
@@ -191,6 +191,7 @@ future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
         co_await r.first->stop();
     }
 
+    sums.clear();
     co_return;
 }
 

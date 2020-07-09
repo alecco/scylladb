@@ -1,7 +1,7 @@
 #include <map>
 #include <vector>
 #include <unordered_map>
-#include <deque>
+#include <functional>
 #include <boost/container/deque.hpp>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/future.hh>
@@ -15,12 +15,6 @@ namespace raft {
 // into it before passing to raft and deserialize in apply() before applying
 using command = bytes_ostream;
 using command_cref = std::reference_wrapper<const command>;
-
-// This is user provided id for a snapshot
-using snapshot_id = utils::UUID;
-
-// Unique identifier of a node in a raft group
-using node_id = utils::UUID;
 
 namespace internal {
 
@@ -65,7 +59,38 @@ public:
     }
 };
 
+template<typename Tag>
+struct generic_id {
+    utils::UUID id;
+    bool operator==(const generic_id& o) const {
+        return id == o.id;
+    }
+};
+template<typename Tag>
+std::ostream& operator<<(std::ostream& os, const generic_id<Tag>& id) {
+    os << id.id;
+    return os;
 }
+
+}
+}
+
+namespace std {
+
+template<typename Tag>
+struct hash<raft::internal::generic_id<Tag>> {
+    size_t operator()(const raft::internal::generic_id<Tag>& id) const {
+        return hash<utils::UUID>()(id.id);
+    }
+};
+}
+
+namespace raft {
+
+// This is user provided id for a snapshot
+using snapshot_id = internal::generic_id<struct shapshot_id_tag>;
+// Unique identifier of a node in a raft group
+using node_id = internal::generic_id<struct node_id_tag>;
 
 using term_t = internal::typed_uint64<struct term_tag>;
 using index_t = internal::typed_uint64<struct index_tag>;
