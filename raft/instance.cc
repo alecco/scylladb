@@ -18,53 +18,17 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include "instance.hh"
 #include <seastar/util/log.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
-#include "instance.hh"
 
 using namespace std::chrono_literals;
 
 namespace raft {
 
 static seastar::logger logger("raft");
-
-future<seastar::semaphore_units<>> log::lock() {
-    return seastar::get_units(*_log_lock, 1);
-}
-
-log_entry& log::operator[](size_t i) {
-    assert(index_t(i) >= _log_starting_index);
-    return _log[i - _log_starting_index];
-}
-
-// reserve n additional entries
-void log::ensure_capacity(size_t n) {
-     // there is not reserver for std::deque!
-     //_log.reserve(_log.size() + n);
-}
-
-void log::emplace_back(log_entry&& e) {
-    _log.emplace_back(std::move(e));
-}
-
-bool log::empty() const {
-    return _log.empty();
-}
-
-index_t log::last_idx() const {
-    return index_t(_log.size()) + _log_starting_index - index_t(1);
-}
-
-index_t log::next_idx() const {
-    return last_idx() + index_t(1);
-}
-
-void log::truncate_head(size_t i) {
-    auto it = _log.begin() + (i - _log_starting_index);
-    _log.erase(it, _log.end());
-}
 
 instance::instance(node_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage) :
             _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)), _my_id(id) {
@@ -459,4 +423,4 @@ void instance::set_committed(index_t idx) {
     _commit_index = idx;
 }
 
-}
+} // end of namespace raft
