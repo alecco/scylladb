@@ -22,7 +22,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
-#include "raft.hh"
+#include "instance.hh"
 
 using namespace std::chrono_literals;
 
@@ -301,7 +301,7 @@ void instance::become_follower() {
     }
 }
 
-future<instance::append_reply> instance::append_entries(node_id from, append_request_recv&& append_request) {
+future<append_reply> instance::append_entries(node_id from, append_request_recv&& append_request) {
     if (append_request.current_term < _current_term) {
         co_return append_reply{_current_term, false};
     }

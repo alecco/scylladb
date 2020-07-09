@@ -3,7 +3,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
-#include "raft/raft.hh"
+#include "raft/instance.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
 
@@ -69,8 +69,11 @@ public:
         net[_id] = this;
     }
     virtual future<> send_snapshot(raft::node_id node_id, raft::snapshot snap) { return make_ready_future<>(); }
-    virtual future<raft::instance::append_reply> send_append_entries(raft::node_id id, const raft::instance::append_request_send& append_request) {
-        raft::instance::append_request_recv req;
+    virtual future<raft::append_reply> send_append_entries(
+        raft::node_id id,
+        const raft::append_request_send& append_request) {
+
+        raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
         req.prev_log_index = append_request.prev_log_index;
@@ -81,11 +84,14 @@ public:
         }
         co_return net[id]->_instance->append_entries(_id, std::move(req));
     }
-    virtual future<raft::instance::vote_reply> send_request_vote(raft::node_id id, const raft::instance::vote_request& avote_request) {
-        return make_ready_future<raft::instance::vote_reply>(raft::instance::vote_reply());
+    virtual future<raft::vote_reply> send_request_vote(
+        raft::node_id id,
+        const raft::vote_request& avote_request) {
+
+        return make_ready_future<raft::vote_reply>(raft::vote_reply());
     }
-    virtual void send_keepalive(raft::node_id id, raft::instance::keep_alive keep_alive) {
-        raft::instance::append_request_recv req;
+    virtual void send_keepalive(raft::node_id id, raft::keep_alive keep_alive) {
+        raft::append_request_recv req;
         req.current_term = keep_alive.current_term;
         req.leader_id = keep_alive.leader_id;
         req.prev_log_index = raft::index_t(0);
@@ -210,7 +216,7 @@ future<> test_replicate_non_empty_leader_log() {
     return test_helper(std::move(states), 4);
 }
 
-// test special case where prev_index = 0 because leadr's log is empty
+// test special case where prev_index = 0 because the leader's log is empty
 future<> test_replace_log_leaders_log_empty() {
     // current leaders term is 2 and empty log
     // one of the follower have three entries that should be replaced
@@ -236,7 +242,7 @@ future<> test_replace_log_leaders_log_not_empty() {
 
 // two nodes, leader has 2 entries, follower has 4, index=1 matches index=2 does not
 future<> test_replace_log_leaders_log_not_empty_2() {
-    // current leaders term is 2 and the log has one entry
+    // current leader's term is 2 and the log has one entry
     // one of the follower have three entries that should be replaced
     std::vector<initial_state> states(2);
     states[0].term = raft::term_t(3);
