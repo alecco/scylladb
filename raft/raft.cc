@@ -208,7 +208,7 @@ void instance::commit_entries(index_t new_commit_idx) {
     _commit_index = new_commit_idx;
     logger.trace("commit_entries {}: signal apply thread: committed: {} applied: {}", _my_id, _commit_index, _last_applied);
     _apply_entries.signal();
-    while(_awaited_commits.size() != 0) {
+    while (_awaited_commits.size() != 0) {
         auto it = _awaited_commits.begin();
         if (it->first > _commit_index) {
             break;

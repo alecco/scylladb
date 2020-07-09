@@ -375,7 +375,7 @@ private:
     // each leadership transition is serialized by this future
     future<> _leadership_transition = make_ready_future();
 
-    // called when a node wins an ellection
+    // called when a node wins an election
     future<> become_leader();
 
     // called when a node stops been a leader
