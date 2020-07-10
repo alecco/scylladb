@@ -93,8 +93,8 @@ std::ostream& operator<<(std::ostream& os, const generic_id<Tag>& id) {
     return os;
 }
 
-}
-}
+} // end of namespace internal
+} // end of namespace raft
 
 namespace std {
 
@@ -104,7 +104,7 @@ struct hash<raft::internal::generic_id<Tag>> {
         return hash<utils::UUID>()(id.id);
     }
 };
-}
+} // end of namespace std
 
 namespace raft {
 
@@ -120,6 +120,7 @@ using clock_type = lowres_clock;
 
 struct node {
     node_id id;
+    // Opaque connection properties
     bytes info;
 };
 

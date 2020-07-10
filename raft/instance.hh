@@ -185,6 +185,5 @@ private:
     future<> keepalive_fiber();
 };
 
-
 } // namespace raft
 
