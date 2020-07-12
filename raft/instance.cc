@@ -138,7 +138,7 @@ future<> instance::replication_fiber(node_id node, leader_per_node_state& state)
         // we cannot have stale responses and if a follower had smaller term it should have updated itself
         assert(reply.current_term == _current_term);
 
-        if (!reply.result) {
+        if (!reply.appended) {
             // failed to apply, need to move to previous entry
             state.next_idx--;
             assert(state.next_idx != state.match_idx); // we should not fail to apply an entry next after a matched one

@@ -216,7 +216,7 @@ struct append_reply {
     term_t current_term;
     // 'true' if all entries were successfully appended
     // 'false' if a receivers term is larger or there was a mismatch in index/term
-    bool result;
+    bool appended;
 };
 
 // this is an extension of Raft used for keepalive aggregation between multiple groups
