@@ -315,42 +315,62 @@ private:
     friend instance;
 };
 
+// This class represents persistent storage state.
 class storage {
 public:
     virtual ~storage() {}
     // Persist given term and resets vote atomically
+    // Can be called concurrently with other and with itself
+    // but an implementation has to make sure that result is leniarizable
+    // vs itself and store_vote() function (since both modify the vote)
     virtual future<> store_term(term_t term) = 0;
 
     // Load persisted term
+    // Called during raft instance initialization only, should not run in parallel with store
     virtual future<term_t> load_term() = 0;
 
     // Persist given vote
+    // Can be called concurrently with other and with itself
+    // but an implementation has to make sure that result is leniarizable
+    // vs itself and store_term() function (since both modify the vote)
     virtual future<> store_vote(node_id vote) = 0;
 
     // Load persisted vote
+    // Called during raft instance initialization only, should not run in parallel with store
     virtual future<std::optional<node_id>> load_vote() = 0;
 
     // Persist given snapshot and drops all but 'preserve_log_entries'
     // entries from the raft log starting from the beginning
     // This will rewrite previously persisted snapshot
+    // Should be called only after previous invocation completes
+    // IOW a caller should serialize. Can be called in parallel with
+    // store_log_entries() but snap.index should belong to already persisted entry
     virtual future<> store_snapshot(snapshot snap, size_t preserve_log_entries) = 0;
 
     // Load a saved snapshot
     // This only loads it into memory, but does not apply yet
     // To apply call 'state_machine::load_snapshot(snapshot::id)'
+    // Called during raft instance initialization only, should not run in parallel with store
     virtual future<snapshot> load_snapshot() = 0;
 
     // Persist given log entries
+    // can be called without waiting for previous call to resolve, but internally
+    // all writes should be serialized info forming one contigious log that holds
+    // entris in order of the function invocation.
     virtual future<> store_log_entries(const std::vector<log_entry>& entries) = 0;
 
     // Persist given log entry
     virtual future<> store_log_entry(const log_entry& entry) = 0;
 
     // Load saved raft log
+    // Called during raft instance initialization only, should not run in parallel with store
     virtual future<log> load_log() = 0;
 
     // Truncate all entries with index greater that idx in the log
-    // and persist it
+    // and persist the truncation. Can be called in parallel with store_log_entries()
+    // but internally should be linearized vs store_log_entries(): store_log_entries()
+    // called after truncate_log() should wait for truncation to complete internally before
+    // persisting its entries.
     virtual future<> truncate_log(index_t idx) = 0;
 };
 
