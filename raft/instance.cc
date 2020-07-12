@@ -139,8 +139,17 @@ future<> instance::replication_fiber(node_id node, leader_per_node_state& state)
         assert(reply.current_term == _current_term);
 
         if (!reply.appended) {
-            // failed to apply, need to move to previous entry
-            state.next_idx--;
+            index_t n = state.next_idx;
+            // skip all the entries from next_idx to non_matching_idx that do not have non_matching_term
+            for (; n >= std::max(_log.start_index(), reply.non_matching_idx); n--) {
+                if (_log[n].term == reply.non_matching_term) {
+                    break;
+                }
+            }
+            logger.trace("replication_fiber[{}->{}]: n={}", _my_id, node, n);
+            n++; // we found a matching entry, now move to the next one
+            state.next_idx = n;
+            logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _my_id, node, state.next_idx, state.match_idx);
             assert(state.next_idx != state.match_idx); // we should not fail to apply an entry next after a matched one
         } else {
             // update node's state
@@ -267,7 +276,7 @@ void instance::become_follower() {
 
 future<append_reply> instance::append_entries(node_id from, append_request_recv&& append_request) {
     if (append_request.current_term < _current_term) {
-        co_return append_reply{_current_term, false};
+        co_return append_reply{_current_term, false, term_t(0), index_t(0)};
     }
 
     // Can it happen that a leader gets append request with the same term?
@@ -289,17 +298,30 @@ future<append_reply> instance::append_entries(node_id from, append_request_recv&
     if (append_request.entries.size()) { // empty request is just a heartbeat, only leader_commit is interesting
         logger.trace("append_entries[{}]: my log length {}, received prev_log_index {}\n", _my_id, _log.last_idx(), append_request.prev_log_index);
         if (append_request.prev_log_index != 0) {
-            bool match = false;
             if (_log.last_idx() >= append_request.prev_log_index) {
+                // the follower has prev_log_index, so we need to check that it matches
                 const log_entry& entry = _log[append_request.prev_log_index];
                 // we should really get rid of keeping the index in the entry, but for now check that it is correct
                 assert(entry.index == append_request.prev_log_index);
-                match = (entry.term == append_request.prev_log_term);
-                logger.trace("append_entries[{}]: {}", _my_id, match ? "match" : "no match");
-            }
-            if (!match) {
-                // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-                co_return append_reply{_current_term, false};
+                if (entry.term != append_request.prev_log_term) {
+                    logger.trace("append_entries[{}]: no match", _my_id);
+                    // search for a first entry in the log with non matching term
+                    term_t t = _log[append_request.prev_log_index].term;
+                    index_t i = append_request.prev_log_index;
+                    while (i >= _log.start_index() && _log[i].term == _log[append_request.prev_log_index].term) {
+                        i--;
+                    }
+                    i++; // point to first entry that contains term t
+                    logger.trace("append_entries[{}]: reply with term {} index {}", _my_id, t, i);
+                    // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+                    co_return append_reply{_current_term, false, t, i};
+
+                } else {
+                    logger.trace("append_entries[{}]: match", _my_id);
+                }
+            } else {
+                // leader's log is longer, the follower does not have an entry to check
+                co_return append_reply{_current_term, false, term_t(0), _log.last_idx()};
             }
         }
 
@@ -310,11 +332,11 @@ future<append_reply> instance::append_entries(node_id from, append_request_recv&
         for (auto& e : append_request.entries) {
             if (!append) {
                 if (_log[e.index].term == e.term) {
-                    logger.trace("append_entries[{}]: entries with index {} has matching terms {}\n", _my_id, e.index, e.term);
+                    logger.trace("append_entries[{}]: entries with index {} has matching terms {}", _my_id, e.index, e.term);
                     // already have this one, skip to the next;
                     continue;
                 }
-                logger.trace("append_entries[{}]: entries with index {} has non matching terms {} != {}\n", _my_id, e.index, e.term, _log[e.index].term);
+                logger.trace("append_entries[{}]: entries with index {} has non matching terms {} != {}", _my_id, e.index, e.term, _log[e.index].term);
                 // If an existing entry conflicts with a new one (same index but different terms), delete the existing
                 // entry and all that follow it (§5.3)
                 co_await _storage->truncate_log(e.index);

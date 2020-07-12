@@ -159,6 +159,7 @@ public:
     index_t next_idx() const;
     index_t last_idx() const;
     void truncate_head(size_t i);
+    index_t start_index() const;
 };
 
 struct error : public std::runtime_error {
@@ -217,6 +218,11 @@ struct append_reply {
     // 'true' if all entries were successfully appended
     // 'false' if a receivers term is larger or there was a mismatch in index/term
     bool appended;
+    // the following is valid only if appended == false
+    // term of the conflicting entry
+    term_t non_matching_term;
+    // first index for the conflicting term
+    index_t non_matching_idx;
 };
 
 // this is an extension of Raft used for keepalive aggregation between multiple groups

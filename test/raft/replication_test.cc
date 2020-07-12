@@ -266,6 +266,45 @@ future<> test_replace_log_leaders_log_not_empty_3() {
     return test_helper(std::move(states), 2);
 }
 
+// a follower and a leader have no common entries
+future<> test_replace_no_common_entries() {
+    // current leaders term is 2 and the log has one entry
+    // one of the follower have three entries that should be replaced
+    std::vector<initial_state> states(2);
+    states[0].term = raft::term_t(3);
+    states[0].log = create_log({{1, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}});
+    states[1].log = create_log({{2, 10}, {2, 11}, {2, 12}, {2, 13}, {2, 14}, {2, 15}, {2, 16}});
+
+    // start iterations from 7 since 7 entries are already in the log
+    return test_helper(std::move(states), 7);
+}
+
+// a follower and a leader have one common entry
+future<> test_replace_one_common_entry() {
+    // current leaders term is 2 and the log has one entry
+    // one of the follower have three entries that should be replaced
+    std::vector<initial_state> states(2);
+    states[0].term = raft::term_t(4);
+    states[0].log = create_log({{1, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {3, 6}});
+    states[1].log = create_log({{1, 0}, {2, 11}, {2, 12}, {2, 13}, {2, 14}, {2, 15}, {2, 16}});
+
+    // start iterations from 7 since 7 entries are already in the log
+    return test_helper(std::move(states), 7);
+}
+
+// a follower and a leader have t1i common entry in different terms
+future<> test_replace_two_common_entry_different_terms() {
+    // current leaders term is 2 and the log has one entry
+    // one of the follower have three entries that should be replaced
+    std::vector<initial_state> states(2);
+    states[0].term = raft::term_t(5);
+    states[0].log = create_log({{1, 0}, {2, 1}, {3, 2}, {3, 3}, {3, 4}, {3, 5}, {4, 6}});
+    states[1].log = create_log({{1, 0}, {2, 1}, {2, 12}, {2, 13}, {2, 14}, {2, 15}, {2, 16}});
+
+    // start iterations from 7 since 7 entries are already in the log
+    return test_helper(std::move(states), 7);
+}
+
 int main(int argc, char* argv[]) {
     namespace bpo = boost::program_options;
 
@@ -275,13 +314,16 @@ int main(int argc, char* argv[]) {
     using test_fn = std::function<future<>()>;
 
     test_fn tests[] =  {
-            std::bind(test_simple_replication, 1),
-            std::bind(test_simple_replication, 2),
-            test_replicate_non_empty_leader_log,
-            test_replace_log_leaders_log_empty,
-            test_replace_log_leaders_log_not_empty,
-            test_replace_log_leaders_log_not_empty_2,
-            test_replace_log_leaders_log_not_empty_3
+        std::bind(test_simple_replication, 1),
+        std::bind(test_simple_replication, 2),
+        test_replicate_non_empty_leader_log,
+        test_replace_log_leaders_log_empty,
+        test_replace_log_leaders_log_not_empty,
+        test_replace_log_leaders_log_not_empty_2,
+        test_replace_log_leaders_log_not_empty_3,
+        test_replace_no_common_entries,
+        test_replace_one_common_entry,
+        test_replace_two_common_entry_different_terms
     };
 
     return app.run(argc, argv, [&tests] () -> future<> {

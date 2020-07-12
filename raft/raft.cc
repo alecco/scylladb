@@ -58,4 +58,8 @@ void log::truncate_head(size_t i) {
     _log.erase(it, _log.end());
 }
 
+index_t log::start_index() const {
+    return _log_starting_index;
+}
+
 } // end of namespace raft
