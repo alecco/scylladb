@@ -222,7 +222,7 @@ struct append_reply {
     // term of the conflicting entry
     term_t non_matching_term;
     // first index for the conflicting term
-    index_t non_matching_idx;
+    index_t first_idx_for_non_matching_term;
 };
 
 // this is an extension of Raft used for keepalive aggregation between multiple groups

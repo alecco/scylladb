@@ -140,8 +140,8 @@ future<> instance::replication_fiber(node_id node, leader_per_node_state& state)
 
         if (!reply.appended) {
             index_t n = state.next_idx;
-            // skip all the entries from next_idx to non_matching_idx that do not have non_matching_term
-            for (; n >= std::max(_log.start_index(), reply.non_matching_idx); n--) {
+            // skip all the entries from next_idx to first_idx_for_non_matching_term that do not have non_matching_term
+            for (; n >= std::max(_log.start_index(), reply.first_idx_for_non_matching_term); n--) {
                 if (_log[n].term == reply.non_matching_term) {
                     break;
                 }
