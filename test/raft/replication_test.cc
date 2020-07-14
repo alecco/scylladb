@@ -181,13 +181,12 @@ future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
     auto& leader = *rafts[0].first;
     co_await leader.make_me_leader();
 
-    // start loop from 2 since two entries are already in the log
-    for (int i = start_itr ; i < itr; i++) {
-        tlogger.debug("Adding entry {} on a leader", i);
-        raft::command command;
-        ser::serialize(command, i);
-        co_await leader.add_entry(std::move(command));
-    }
+    co_await seastar::parallel_for_each(std::views::iota(start_itr, itr), [&] (int i) {
+            tlogger.debug("Adding entry {} on a leader", i);
+            raft::command command;
+            ser::serialize(command, i);
+            return leader.add_entry(std::move(command));
+    });
 
     for (auto& r:  rafts) {
         co_await r.second->done();
