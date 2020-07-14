@@ -111,22 +111,22 @@ namespace raft {
 
 // This is user provided id for a snapshot
 using snapshot_id = internal::generic_id<struct shapshot_id_tag>;
-// Unique identifier of a node in a raft group
-using node_id = internal::generic_id<struct node_id_tag>;
+// Unique identifier of a server in a Raft group
+using server_id = internal::generic_id<struct server_id_tag>;
 
 using term_t = internal::typed_uint64<struct term_tag>;
 using index_t = internal::typed_uint64<struct index_tag>;
 
 using clock_type = lowres_clock;
 
-struct node {
-    node_id id;
+struct server_address {
+    server_id id;
     // Opaque connection properties
     bytes info;
 };
 
 struct configuration {
-    std::vector<node> nodes;
+    std::vector<server_address> servers;
 };
 
 struct log_entry {
@@ -169,8 +169,8 @@ struct error : public std::runtime_error {
 };
 
 struct not_leader : public error {
-    node_id leader;
-    not_leader(node_id l) : error("Not a leader"), leader(l) {}
+    server_id leader;
+    not_leader(server_id l) : error("Not a leader"), leader(l) {}
 };
 
 struct dropped_entry : public error {
@@ -198,7 +198,7 @@ struct append_request_base {
     term_t current_term;
     // so follower can redirect clients
     // In practice we do not need it since we should know sender's id anyway
-    node_id leader_id;
+    server_id leader_id;
     // index of log entry immediately preceding new ones
     index_t prev_log_index;
     // term of prev_log_index entry
@@ -234,7 +234,7 @@ struct keep_alive {
     // so follower can redirect clients
     // here it has to be included since this will be sent not
     // as point to point message but as part of an aggregated one.
-    node_id leader_id;
+    server_id leader_id;
     // leader's commit_index
     index_t leader_commit;
 };
@@ -243,7 +243,7 @@ struct vote_request {
     // candidate’s term
     term_t term;
     // candidate requesting vote
-    node_id candidate_id;
+    server_id candidate_id;
     // index of candidate's last log entry
     index_t last_log_idx;
     // term of candidate's last log entry
@@ -265,7 +265,7 @@ class storage;
 class state_machine {
 public:
     virtual ~state_machine() {}
-    // This is called after entries are committed (replicated to at least quorum of nodes).
+    // This is called after entries are committed (replicated to at least quorum of servers).
     // Multiple entries can be committed simultaneously.
     // Will be eventually called on all replicas.
     // Raft owns the data since it may be still replicating.
@@ -281,7 +281,7 @@ public:
     virtual void drop_snapshot(snapshot_id id) = 0;
 
     // reload state machine from a snapshot id
-    // To be used by a restarting node or by a follower that
+    // To be used by a restarting server or by a follower that
     // catches up to a leader
     virtual future<> load_snapshot(snapshot_id id) = 0;
 
@@ -292,38 +292,38 @@ public:
     virtual future<> stop() = 0;
 };
 
-class instance;
+class server;
 
 class rpc {
 protected:
-    // Pointer to the instance. Needed for passing rpc messages.
-    instance* _instance = nullptr;
+    // Pointer to the server. Needed for passing RPC messages.
+    server* _server = nullptr;
 public:
     virtual ~rpc() {}
 
-    // Send a snapshot snap to a node node_id.
+    // Send a snapshot snap to a server server_id.
     // A returned future is resolved when snapshot is sent and successfully applied
     // by a receiver
-    virtual future<> send_snapshot(node_id node_id, snapshot snap) = 0;
+    virtual future<> send_snapshot(server_id server_id, snapshot snap) = 0;
 
-    // Sends provided append_request to supplied node and waits for a reply
-    virtual future<append_reply> send_append_entries(node_id id, const append_request_send& append_request) = 0;
+    // Sends provided append_request to the supplied server and waits for a reply
+    virtual future<append_reply> send_append_entries(server_id id, const append_request_send& append_request) = 0;
 
     // Sends vote requests and returns vote reply
-    virtual future<vote_reply> send_request_vote(node_id id, const vote_request& vote_request) = 0;
+    virtual future<vote_reply> send_request_vote(server_id id, const vote_request& vote_request) = 0;
 
     // This is an extension of Raft used for keepalive aggregation between multiple groups
     // This RPC does not return anything since it will be aggregated for many groups
     // but this means that it cannot reply with larger term and convert a leader that sends it
     // to a follower. A new leader that detects stale leader by processing this message needs to
     // contact it explicitly by issuing empty send_append_entries call.
-    virtual void send_keepalive(node_id id, const keep_alive& keep_alive) = 0;
+    virtual void send_keepalive(server_id id, const keep_alive& keep_alive) = 0;
 
-    // When new node is learn this function is called with the info about the node
-    virtual void add_node(node_id id, bytes node_info) = 0;
+    // When a new server is learn this function is called with the info about the server
+    virtual void add_server(server_id id, bytes server_info) = 0;
 
-    // When a node is removed from local config this call is executed
-    virtual void remove_node(node_id id) = 0;
+    // When a server is removed from local config this call is executed
+    virtual void remove_server(server_id id) = 0;
 
     // stops the rpc instance by aborting the work
     // that can be aborted and waiting for all the rest to complete
@@ -331,8 +331,8 @@ public:
     // function is called
     virtual future<> stop() = 0;
 private:
-    void set_instance(raft::instance& instance) { _instance = &instance; }
-    friend instance;
+    void set_server(raft::server& server) { _server = &server; }
+    friend server;
 };
 
 // This class represents persistent storage state.
@@ -341,23 +341,23 @@ public:
     virtual ~storage() {}
     // Persist given term and resets vote atomically
     // Can be called concurrently with other and with itself
-    // but an implementation has to make sure that result is leniarizable
+    // but an implementation has to make sure that result is linearisable
     // vs itself and store_vote() function (since both modify the vote)
     virtual future<> store_term(term_t term) = 0;
 
     // Load persisted term
-    // Called during raft instance initialization only, should not run in parallel with store
+    // Called during raft server initialization only, should not run in parallel with store
     virtual future<term_t> load_term() = 0;
 
     // Persist given vote
     // Can be called concurrently with other and with itself
-    // but an implementation has to make sure that result is leniarizable
+    // but an implementation has to make sure that result is linearisable
     // vs itself and store_term() function (since both modify the vote)
-    virtual future<> store_vote(node_id vote) = 0;
+    virtual future<> store_vote(server_id vote) = 0;
 
     // Load persisted vote
-    // Called during raft instance initialization only, should not run in parallel with store
-    virtual future<std::optional<node_id>> load_vote() = 0;
+    // Called during raft server initialization only, should not run in parallel with store
+    virtual future<std::optional<server_id>> load_vote() = 0;
 
     // Persist given snapshot and drops all but 'preserve_log_entries'
     // entries from the raft log starting from the beginning
@@ -370,20 +370,20 @@ public:
     // Load a saved snapshot
     // This only loads it into memory, but does not apply yet
     // To apply call 'state_machine::load_snapshot(snapshot::id)'
-    // Called during raft instance initialization only, should not run in parallel with store
+    // Called during raft server initialization only, should not run in parallel with store
     virtual future<snapshot> load_snapshot() = 0;
 
     // Persist given log entries
     // can be called without waiting for previous call to resolve, but internally
-    // all writes should be serialized info forming one contigious log that holds
-    // entris in order of the function invocation.
+    // all writes should be serialized info forming one contiguous log that holds
+    // entries in order of the function invocation.
     virtual future<> store_log_entries(const std::vector<log_entry>& entries) = 0;
 
     // Persist given log entry
     virtual future<> store_log_entry(const log_entry& entry) = 0;
 
     // Load saved raft log
-    // Called during raft instance initialization only, should not run in parallel with store
+    // Called during raft server initialization only, should not run in parallel with store
     virtual future<log> load_log() = 0;
 
     // Truncate all entries with index greater that idx in the log
@@ -393,7 +393,7 @@ public:
     // persisting its entries.
     virtual future<> truncate_log(index_t idx) = 0;
 
-    // stops the a storage instance by aborting the work
+    // stops the storage instance by aborting the work
     // that can be aborted and waiting for all the rest to complete
     // any unfinished store/load operation may return an error after this
     // function is called

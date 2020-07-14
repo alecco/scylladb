@@ -13,13 +13,13 @@ static seastar::logger tlogger("test");
 
 class state_machine : public raft::state_machine {
 public:
-    using apply_fn = std::function<future<>(raft::node_id id, promise<>&, const std::vector<raft::command_cref>& commands)>;
+    using apply_fn = std::function<future<>(raft::server_id id, promise<>&, const std::vector<raft::command_cref>& commands)>;
 private:
-    raft::node_id _id;
+    raft::server_id _id;
     apply_fn _apply;
     promise<> _done;
 public:
-    state_machine(raft::node_id id, apply_fn apply) : _id(id), _apply(std::move(apply)) {}
+    state_machine(raft::server_id id, apply_fn apply) : _id(id), _apply(std::move(apply)) {}
     virtual future<> apply(const std::vector<raft::command_cref> commands) {
         return _apply(_id, _done, commands);
     }
@@ -35,7 +35,7 @@ public:
 
 struct initial_state {
     raft::term_t term;
-    raft::node_id vote;
+    raft::server_id vote;
     std::vector<raft::log_entry> log;
 };
 
@@ -46,8 +46,8 @@ public:
     storage() {}
     virtual future<> store_term(raft::term_t term) { co_return seastar::sleep(1ms); }
     virtual future<raft::term_t> load_term() { return make_ready_future<raft::term_t>(_conf.term); }
-    virtual future<> store_vote(raft::node_id vote) { return make_ready_future<>(); }
-    virtual future<std::optional<raft::node_id>> load_vote() { return make_ready_future<std::optional<raft::node_id>>(_conf.vote); }
+    virtual future<> store_vote(raft::server_id vote) { return make_ready_future<>(); }
+    virtual future<std::optional<raft::server_id>> load_vote() { return make_ready_future<std::optional<raft::server_id>>(_conf.vote); }
     virtual future<> store_snapshot(raft::snapshot snap, size_t preserve_log_entries) { return make_ready_future<>(); }
     virtual future<raft::snapshot> load_snapshot() { return make_ready_future<raft::snapshot>(raft::snapshot()); }
     virtual future<> store_log_entries(const std::vector<raft::log_entry>& entries) { co_return seastar::sleep(1ms); };
@@ -64,15 +64,15 @@ public:
 };
 
 class rpc : public raft::rpc {
-    static std::unordered_map<raft::node_id, rpc*> net;
-    raft::node_id _id;
+    static std::unordered_map<raft::server_id, rpc*> net;
+    raft::server_id _id;
 public:
-    rpc(raft::node_id id) : _id(id) {
+    rpc(raft::server_id id) : _id(id) {
         net[_id] = this;
     }
-    virtual future<> send_snapshot(raft::node_id node_id, raft::snapshot snap) { return make_ready_future<>(); }
+    virtual future<> send_snapshot(raft::server_id server_id, raft::snapshot snap) { return make_ready_future<>(); }
     virtual future<raft::append_reply> send_append_entries(
-        raft::node_id id,
+        raft::server_id id,
         const raft::append_request_send& append_request) {
 
         raft::append_request_recv req;
@@ -84,52 +84,52 @@ public:
         for (auto&& e: append_request.entries) {
             req.entries.push_back(e);
         }
-        co_return net[id]->_instance->append_entries(_id, std::move(req));
+        co_return net[id]->_server->append_entries(_id, std::move(req));
     }
     virtual future<raft::vote_reply> send_request_vote(
-        raft::node_id id,
+        raft::server_id id,
         const raft::vote_request& avote_request) {
 
         return make_ready_future<raft::vote_reply>(raft::vote_reply());
     }
-    virtual void send_keepalive(raft::node_id id, const raft::keep_alive& keep_alive) {
+    virtual void send_keepalive(raft::server_id id, const raft::keep_alive& keep_alive) {
         raft::append_request_recv req;
         req.current_term = keep_alive.current_term;
         req.leader_id = keep_alive.leader_id;
         req.prev_log_index = raft::index_t(0);
         req.prev_log_term = raft::term_t(0);
         req.leader_commit = keep_alive.leader_commit;
-        (void)net[id]->_instance->append_entries(_id, std::move(req));
+        (void)net[id]->_server->append_entries(_id, std::move(req));
     }
-    virtual void add_node(raft::node_id id, bytes node_info) {}
-    virtual void remove_node(raft::node_id id) {}
+    virtual void add_server(raft::server_id id, bytes node_info) {}
+    virtual void remove_server(raft::server_id id) {}
     virtual future<> stop() { return make_ready_future<>(); }
 };
 
-std::unordered_map<raft::node_id, rpc*> rpc::net;
+std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-std::pair<std::unique_ptr<raft::instance>, state_machine*> create_raft_instance(raft::node_id uuid, state_machine::apply_fn apply,
+std::pair<std::unique_ptr<raft::server>, state_machine*> create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
         initial_state state = initial_state()) {
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
-    auto raft = std::make_unique<raft::instance>(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
+    auto raft = std::make_unique<raft::server>(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
     return std::make_pair(std::move(raft), &rsm);
 }
 
-future<std::vector<std::pair<std::unique_ptr<raft::instance>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply) {
+future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply) {
     raft::configuration conf;
-    std::vector<std::pair<std::unique_ptr<raft::instance>, state_machine*>> rafts;
+    std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
     for (size_t i = 0; i < states.size(); i++) {
         auto uuid = utils::make_random_uuid();
-        conf.nodes.push_back(raft::node{uuid});
+        conf.servers.push_back(raft::server_address{uuid});
     }
 
     for (size_t i = 0; i < states.size(); i++) {
-        auto& n = conf.nodes[i];
-        auto& raft = *rafts.emplace_back(create_raft_instance(n.id, apply, states[i])).first;
+        auto& s = conf.servers[i];
+        auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i])).first;
         raft.set_config(conf);
         co_await raft.start();
     }
@@ -156,9 +156,9 @@ std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list) {
 }
 
 constexpr int itr = 100;
-std::unordered_map<raft::node_id, int> sums;
+std::unordered_map<raft::server_id, int> sums;
 
-future<> apply(raft::node_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
+future<> apply(raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
         tlogger.debug("sm::apply got {} entries", commands.size());
         for (auto&& d : commands) {
             auto is = ser::as_input_stream(d);

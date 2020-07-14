@@ -24,13 +24,16 @@
 
 namespace raft {
 
-class instance {
+// A single uniquely identified participant of the Raft group.
+// Thread-safety: safe to use within a single Seastar shard,
+// calls from different Seastar shards must be synchronized.
+class server {
 public:
-    explicit instance(node_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage);
-    instance(instance&&) = delete;
+    explicit server(server_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage);
+    server(server&&) = delete;
 
     // Returns current leader for this raft group
-    node_id get_current_leader() const {
+    server_id get_current_leader() const {
         return _current_leader;
     }
 
@@ -41,30 +44,33 @@ public:
     // by another leader
     future<> add_entry(command command);
 
-    // This function is called by append_entries rpc and a reply is forwarded to a remote instance
+    // This function is called by append_entries RPC and a reply is forwarded to a remote server
     // Returned future is resolved when either request is rejected or data is persisted
-    future<append_reply> append_entries(node_id from, append_request_recv&& append_request);
+    future<append_reply> append_entries(server_id from, append_request_recv&& append_request);
 
-    // This function is called by request vote rpc and a reply is forwarded to a remote instance
-    future<vote_reply> request_vote(node_id from, vote_request&& vote_request);
+    // This function is called by request vote RPC and a reply is forwarded to a remote server
+    future<vote_reply> request_vote(server_id from, vote_request&& vote_request);
 
-    // Adds new instance to a cluster. If a node is already a member of the cluster does nothing
+    // Adds new server to a cluster. If a node is already a member of the cluster does nothing
     // Provided node_info is passed to rpc::new_node() on each node in a cluster as it learns about
     // joining node. Connection info can be passed there.
     // Can be called on a leader only otherwise throws
-    future<> add_node(node_id id, bytes node_info, clock_type::duration timeout);
+    future<> add_server(server_id id, bytes node_info, clock_type::duration timeout);
 
-    // Removes a node from a cluster. If a node is not a member of the cluster does nothing
+    // Removes a server from a cluster. If a node is not a member of the cluster does nothing
     // Can be called on a leader only otherwise throws
-    future<> remove_node(node_id id, clock_type::duration timeout);
+    future<> remove_server(server_id id, clock_type::duration timeout);
 
-    // Load persisted state and starts background work that need to run for raft instance to function;
-    // The raft instance cannot be used untill the returned future is resolved
+    // Load persisted state and starts background work that needs
+    // to run for this raft server to function; The object cannot
+    // be used until the returned future is resolved.
     future<> start();
 
-    // stop this raft instance, all submitted, but not completed operation will get an error
-    // and a caller will not be able to know if they succeeded or not. If an instance was a leader
-    // it will relingiush its leadership and cease replication
+    // Stop this raft server, all submitted, but not completed
+    // operations will get an error and callers will not be able
+    // to know if they succeeded or not. If this server was
+    // a leader it will relinquish its leadership and cease
+    // replication.
     future<> stop();
 
     // Ad hoc functions for testing
@@ -79,9 +85,9 @@ private:
     std::unique_ptr<storage> _storage;
 
     // id of this node
-    node_id _my_id;
+    server_id _my_id;
     // id of a current leader
-    node_id _current_leader;
+    server_id _current_leader;
     // currently committed configuration
     configuration _commited_config;
     // currently used configuration, may be different from committed during configuration change
@@ -94,15 +100,15 @@ private:
     index_t _last_applied =index_t(0);
 
     // _current_term, _voted_for && _log are persisted in storage
-    // latest term instance has seen
+    // latest term the server has seen
     term_t _current_term = term_t(0);
     // candidateId that received vote in current term (or null if none)
-    std::optional<node_id> _voted_for;
+    std::optional<server_id> _voted_for;
     // log entries; each entry contains command for state machine,
     // and term when entry was received by leader
     log _log;
 
-    struct leader_per_node_state {
+    struct follower_progress {
         // index of the next log entry to send to that serve
         index_t next_idx;
         // index of highest log entry known to be replicated on the node
@@ -114,7 +120,7 @@ private:
         // signaled on a leader each time an entry is added to the log
         seastar::condition_variable _log_entry_added;
         // a state for each follower
-        std::unordered_map<node_id, leader_per_node_state> _nodes_state;
+        std::unordered_map<server_id, follower_progress> _progress;
         // on a leader holds futures of all replication fibers
         std::vector<future<>> _replicatoin_fibers;
         // status of a keepalive fiber
@@ -146,9 +152,9 @@ private:
     }
 
     // constantly replicate the log to a given node.
-    // Started when a node becomes a leader
-    // Stopped when a node stopped been a leader
-    future<> replication_fiber(node_id node, leader_per_node_state&);
+    // Started when a server becomes a leader
+    // Stopped when a server stopped been a leader
+    future<> replication_fiber(server_id id, follower_progress& state);
 
     // called when one of the replicas advanced its match index
     // so it may be the case that some entries are committed now
@@ -156,7 +162,7 @@ private:
 
     // calculates current quorum
     size_t quorum() {
-        return _current_config.nodes.size() / 2 + 1;
+        return _current_config.servers.size() / 2 + 1;
     }
 
     // called when next entry is committed (on a leader or otherwise)

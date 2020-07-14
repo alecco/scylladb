@@ -30,12 +30,14 @@ namespace raft {
 
 static seastar::logger logger("raft");
 
-instance::instance(node_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage) :
+server::server(
+    server_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
+    std::unique_ptr<storage> storage) :
             _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)), _my_id(id) {
-    _rpc->set_instance(*this);
+    _rpc->set_server(*this);
 }
 
-future<> instance::start() {
+future<> server::start() {
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
 
@@ -47,7 +49,7 @@ future<> instance::start() {
     co_return;
 }
 
-future<> instance::add_entry(command command) {
+future<> server::add_entry(command command) {
     if (!is_leader()) {
         throw not_leader(_current_leader);
     }
@@ -64,22 +66,22 @@ future<> instance::add_entry(command command) {
     logger.trace("Log lock acquired");
 
     _log.ensure_capacity(1); // ensure we have enough memory to insert an entry
-    log_entry e{_current_term, _leader_state->_nodes_state[_my_id].next_idx, std::move(command)};
+    log_entry e{_current_term, _leader_state->_progress[_my_id].next_idx, std::move(command)};
     co_await _storage->store_log_entry(e);
 
     logger.trace("Log entry is persisted locally");
 
     // put into the log after persisting, so that if persisting fails the entry will not end up in a log
     _log.emplace_back(std::move(e));
-    // update this node's state
-    _leader_state->_nodes_state[_my_id].match_idx = _leader_state->_nodes_state[_my_id].next_idx++;
+    // update this server's state
+    _leader_state->_progress[_my_id].match_idx = _leader_state->_progress[_my_id].next_idx++;
 
     // this will track the commit status of the entry
     auto [it, inserted] = _awaited_commits.emplace(e.index, commit_status{_current_term, promise<>()});
     assert(inserted);
     // take future here since check_committed() may delete the _awaited_commits entry
     future<> f = it->second.committed.get_future();
-    if (_current_config.nodes.size() == 1) { // special case for one node cluster
+    if (_current_config.servers.size() == 1) { // special case for one node cluster
         check_committed();
     } else {
         _leader_state->_log_entry_added.broadcast();
@@ -87,7 +89,7 @@ future<> instance::add_entry(command command) {
     co_return std::move(f);
 }
 
-future<> instance::replication_fiber(node_id node, leader_per_node_state& state) {
+future<> server::replication_fiber(server_id server, follower_progress& state) {
     while (is_leader()) {
         if (_log.empty() || state.next_idx > _log.last_idx()) {
             // everything is replicated already, wait for the next entry to be added
@@ -120,7 +122,7 @@ future<> instance::replication_fiber(node_id node, leader_per_node_state& state)
         append_reply reply;
 
         try {
-            reply = co_await _rpc->send_append_entries(node, req);
+            reply = co_await _rpc->send_append_entries(server, req);
         } catch(...) {
             continue; // if there was an error sending try again
         }
@@ -130,7 +132,7 @@ future<> instance::replication_fiber(node_id node, leader_per_node_state& state)
         }
 
         if (reply.current_term > _current_term) {
-            // receiver knows something about newer leader, so this node has to convert to a follower
+            // receiver knows something about newer leader, so this server has to convert to a follower
             become_follower();
             break;
         }
@@ -146,13 +148,13 @@ future<> instance::replication_fiber(node_id node, leader_per_node_state& state)
                     break;
                 }
             }
-            logger.trace("replication_fiber[{}->{}]: n={}", _my_id, node, n);
+            logger.trace("replication_fiber[{}->{}]: n={}", _my_id, server, n);
             n++; // we found a matching entry, now move to the next one
             state.next_idx = n;
-            logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _my_id, node, state.next_idx, state.match_idx);
+            logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _my_id, server, state.next_idx, state.match_idx);
             assert(state.next_idx != state.match_idx); // we should not fail to apply an entry next after a matched one
         } else {
-            // update node's state
+            // update follower's state
             state.match_idx = state.next_idx++;
 
             // check if any new entry can be committed
@@ -162,13 +164,13 @@ future<> instance::replication_fiber(node_id node, leader_per_node_state& state)
     co_return;
 }
 
-void instance::check_committed() {
+void server::check_committed() {
     index_t commit_index = _commit_index;
     while (true) {
         size_t count = 0;
-        for (const auto& ns : _leader_state->_nodes_state) {
-            logger.trace("check committed {}: {} {}", ns.first, ns.second.match_idx, _commit_index);
-            if (ns.second.match_idx > _commit_index) {
+        for (const auto& p : _leader_state->_progress) {
+            logger.trace("check committed {}: {} {}", p.first, p.second.match_idx, _commit_index);
+            if (p.second.match_idx > _commit_index) {
                 count++;
             }
         }
@@ -187,13 +189,13 @@ void instance::check_committed() {
         }
 
         logger.trace("check committed commit {}", commit_index);
-        // we have quorum of nodes with match_idx greater than current commit
+        // we have quorum of servers with match_idx greater than current commit
         // it means we can commit next entry
         commit_entries(commit_index);
     }
 }
 
-void instance::commit_entries(index_t new_commit_idx) {
+void server::commit_entries(index_t new_commit_idx) {
     assert(_commit_index <= new_commit_idx);
     if (new_commit_idx == _commit_index) {
         return;
@@ -219,7 +221,7 @@ void instance::commit_entries(index_t new_commit_idx) {
     }
 }
 
-future<> instance::become_leader() {
+future<> server::become_leader() {
     // wait for previous transition to complete, it is done async
     co_await std::move(_leadership_transition);
 
@@ -234,17 +236,17 @@ future<> instance::become_leader() {
     // start sending keepalives to maintain leadership
     _leader_state->keepalive_status = keepalive_fiber();
 
-    for (auto node : _current_config.nodes) {
-        auto e = _leader_state->_nodes_state.emplace(node.id, leader_per_node_state{_log.next_idx(), index_t(0)});
-        if (node.id != _my_id) {
-            _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(node.id, e.first->second));
+    for (auto s : _current_config.servers) {
+        auto e = _leader_state->_progress.emplace(s.id, follower_progress{_log.next_idx(), index_t(0)});
+        if (s.id != _my_id) {
+            _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(s.id, e.first->second));
         }
     }
 
     co_return;
 }
 
-future<> instance::drop_leadership(state new_state) {
+future<> server::drop_leadership(state new_state) {
     assert(_state == state::LEADER);
     assert(new_state != state::LEADER);
 
@@ -265,7 +267,7 @@ future<> instance::drop_leadership(state new_state) {
           });
 }
 
-void instance::become_follower() {
+void server::become_follower() {
     if (_state == state::LEADER) {
         assert(_leadership_transition.available());
         _leadership_transition = drop_leadership(state::FOLLOWER);
@@ -274,7 +276,7 @@ void instance::become_follower() {
     }
 }
 
-future<append_reply> instance::append_entries(node_id from, append_request_recv&& append_request) {
+future<append_reply> server::append_entries(server_id from, append_request_recv&& append_request) {
     if (append_request.current_term < _current_term) {
         co_return append_reply{_current_term, false, term_t(0), index_t(0)};
     }
@@ -361,7 +363,7 @@ future<append_reply> instance::append_entries(node_id from, append_request_recv&
     co_return append_reply{_current_term, true};
 }
 
-future<> instance::set_current_term(term_t term) {
+future<> server::set_current_term(term_t term) {
     if (_current_term < term) {
         co_await _storage->store_term(term); // this resets voted_for in persistent storage as well
         _current_term = term;
@@ -370,7 +372,7 @@ future<> instance::set_current_term(term_t term) {
     co_return;
 }
 
-future<> instance::applier_fiber() {
+future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while(true) {
@@ -396,7 +398,7 @@ future<> instance::applier_fiber() {
     co_return;
 }
 
-future<> instance::keepalive_fiber() {
+future<> server::keepalive_fiber() {
     logger.trace("keepalive_fiber starts");
     while(is_leader()) {
         co_await sleep(100ms);
@@ -411,9 +413,9 @@ future<> instance::keepalive_fiber() {
             .leader_commit = _commit_index
         };
 
-        for (auto node : _current_config.nodes) {
-            if (node.id != _my_id) {
-                _rpc->send_keepalive(node.id, ka);
+        for (auto server : _current_config.servers) {
+            if (server.id != _my_id) {
+                _rpc->send_keepalive(server.id, ka);
             }
         }
     }
@@ -421,7 +423,7 @@ future<> instance::keepalive_fiber() {
     co_return;
 }
 
-future<> instance::stop() {
+future<> server::stop() {
     logger.trace("stop() called");
     become_follower();
     _apply_entries.broken();
@@ -434,15 +436,15 @@ future<> instance::stop() {
 }
 
 // dbg APIs
-void instance::set_config(configuration config) {
+void server::set_config(configuration config) {
     _current_config = _commited_config = config;
 }
 
-future<> instance::make_me_leader() {
+future<> server::make_me_leader() {
     return become_leader();
 }
 
-void instance::set_committed(index_t idx) {
+void server::set_committed(index_t idx) {
     _commit_index = idx;
 }
 
