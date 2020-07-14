@@ -3,7 +3,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
-#include "raft/instance.hh"
+#include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
 

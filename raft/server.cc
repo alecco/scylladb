@@ -18,7 +18,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include "instance.hh"
+#include "server.hh"
 #include <seastar/util/log.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>

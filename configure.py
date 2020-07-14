@@ -924,7 +924,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
 
 scylla_raft_dependencies = [
     'raft/raft.cc',
-    'raft/instance.cc',
+    'raft/server.cc',
     'utils/uuid.cc'
 ]
 
