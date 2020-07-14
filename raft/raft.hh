@@ -294,6 +294,23 @@ public:
 
 class server;
 
+// 3.3 Raft Basics
+// At any given time each server is in one of three states:
+// leader, follower, or candidate.
+// In normal operation there is exactly one leader and all of the
+// other servers are followers. Followers are passive: they issue
+// no requests on their own but simply respond to requests from
+// leaders and candidates. The leader handles all client requests
+// (if a client contacts a follower, the follower redirects it to
+// the leader). The third state, candidate, is used to elect a new
+// leader.
+enum class server_state : uint8_t {
+    LEADER,
+    FOLLOWER,
+    CANDIDATE,
+};
+
+
 class rpc {
 protected:
     // Pointer to the server. Needed for passing RPC messages.

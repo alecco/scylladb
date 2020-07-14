@@ -137,18 +137,12 @@ private:
     // entries that have a waiter that needs to be notified when committed
     std::map<index_t, commit_status> _awaited_commits;
 
-    enum class state : uint8_t {
-        LEADER,
-        FOLLOWER,
-        CANDIDATE,
-    };
-
     // What state the node is
-    state _state = state::FOLLOWER;
+    server_state _state = server_state::FOLLOWER;
 
     bool is_leader() const {
-        assert(_state != state::LEADER || _my_id == _current_leader);
-        return _state == state::LEADER;
+        assert(_state != server_state::LEADER || _my_id == _current_leader);
+        return _state == server_state::LEADER;
     }
 
     // constantly replicate the log to a given node.
@@ -176,7 +170,7 @@ private:
 
     // called when a node stops been a leader
     // a future resolves when all the leader background work is stopped
-    future<> drop_leadership(state);
+    future<> drop_leadership(server_state new_state);
 
     // called when the node become a follower
     void become_follower();

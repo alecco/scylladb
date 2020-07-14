@@ -225,10 +225,10 @@ future<> server::become_leader() {
     // wait for previous transition to complete, it is done async
     co_await std::move(_leadership_transition);
 
-    assert(_state != state::LEADER);
+    assert(_state != server_state::LEADER);
     assert(!_leader_state);
 
-    _state = state::LEADER;
+    _state = server_state::LEADER;
     _current_leader = _my_id;
     _leadership_transition = make_ready_future<>(); // prepare to next transition
 
@@ -246,9 +246,9 @@ future<> server::become_leader() {
     co_return;
 }
 
-future<> server::drop_leadership(state new_state) {
-    assert(_state == state::LEADER);
-    assert(new_state != state::LEADER);
+future<> server::drop_leadership(server_state new_state) {
+    assert(_state == server_state::LEADER);
+    assert(new_state != server_state::LEADER);
 
     _state = new_state;
     _leader_state->_log_entry_added.broken();
@@ -268,11 +268,11 @@ future<> server::drop_leadership(state new_state) {
 }
 
 void server::become_follower() {
-    if (_state == state::LEADER) {
+    if (_state == server_state::LEADER) {
         assert(_leadership_transition.available());
-        _leadership_transition = drop_leadership(state::FOLLOWER);
+        _leadership_transition = drop_leadership(server_state::FOLLOWER);
     } else {
-        _state = state::FOLLOWER;
+        _state = server_state::FOLLOWER;
     }
 }
 
@@ -283,9 +283,9 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
 
     // Can it happen that a leader gets append request with the same term?
     // What should we do about it?
-    assert(_state != state::LEADER || _current_term > append_request.current_term);
+    assert(_state != server_state::LEADER || _current_term > append_request.current_term);
 
-    if (_state != state::FOLLOWER) {
+    if (_state != server_state::FOLLOWER) {
         become_follower();
     }
 
