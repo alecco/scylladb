@@ -429,7 +429,8 @@ future<> instance::stop() {
         ac.second.committed.set_exception(stopped_error());
     }
     _awaited_commits.clear();
-    return seastar::when_all_succeed(std::move(_leadership_transition), std::move(_applier_status)).discard_result();
+    return seastar::when_all_succeed(std::move(_leadership_transition), std::move(_applier_status),
+            _rpc->stop(), _state_machine->stop(), _storage->stop()).discard_result();
 }
 
 // dbg APIs

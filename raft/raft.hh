@@ -282,6 +282,12 @@ public:
     // To be used by a restarting node or by a follower that
     // catches up to a leader
     virtual future<> load_snapshot(snapshot_id id) = 0;
+
+    // stops the state machine instance by aborting the work
+    // that can be aborted and waiting for all the rest to complete
+    // any unfinished apply/snapshot operation may return an error after
+    // this function is called
+    virtual future<> stop() = 0;
 };
 
 class instance;
@@ -316,6 +322,12 @@ public:
 
     // When a node is removed from local config this call is executed
     virtual void remove_node(node_id id) = 0;
+
+    // stops the rpc instance by aborting the work
+    // that can be aborted and waiting for all the rest to complete
+    // any unfinished send operation may return an error after this
+    // function is called
+    virtual future<> stop() = 0;
 private:
     void set_instance(raft::instance& instance) { _instance = &instance; }
     friend instance;
@@ -378,6 +390,12 @@ public:
     // called after truncate_log() should wait for truncation to complete internally before
     // persisting its entries.
     virtual future<> truncate_log(index_t idx) = 0;
+
+    // stops the a storage instance by aborting the work
+    // that can be aborted and waiting for all the rest to complete
+    // any unfinished store/load operation may return an error after this
+    // function is called
+    virtual future<> stop() = 0;
 };
 
 } // namespace raft

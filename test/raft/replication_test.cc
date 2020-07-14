@@ -26,6 +26,7 @@ public:
     virtual future<raft::snapshot_id> take_snaphot() { return make_ready_future<raft::snapshot_id>(raft::snapshot_id()); }
     virtual void drop_snapshot(raft::snapshot_id id) {}
     virtual future<> load_snapshot(raft::snapshot_id id) { return make_ready_future<>(); };
+    virtual future<> stop() { return make_ready_future<>(); }
 
     future<> done() {
         return _done.get_future();
@@ -59,6 +60,7 @@ public:
         return make_ready_future<raft::log>(std::move(log));
     }
     virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
+    virtual future<> stop() { return make_ready_future<>(); }
 };
 
 class rpc : public raft::rpc {
@@ -101,7 +103,7 @@ public:
     }
     virtual void add_node(raft::node_id id, bytes node_info) {}
     virtual void remove_node(raft::node_id id) {}
-
+    virtual future<> stop() { return make_ready_future<>(); }
 };
 
 std::unordered_map<raft::node_id, rpc*> rpc::net;
