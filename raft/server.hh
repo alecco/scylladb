@@ -73,7 +73,6 @@ public:
     // Set cluster configuration, in real app should be taken from log
     void set_config(configuration config);
     future<> make_me_leader();
-    void set_committed(index_t idx);
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
