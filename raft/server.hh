@@ -20,7 +20,7 @@
  */
 #pragma once
 
-#include "raft.hh"
+#include "fsm.hh"
 
 namespace raft {
 
@@ -83,9 +83,9 @@ private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
     std::unique_ptr<storage> _storage;
+    // Protocol deterministic finite-state machine
+    fsm _fsm;
 
-    // id of this node
-    server_id _my_id;
     // id of a current leader
     server_id _current_leader;
     // currently committed configuration
@@ -141,7 +141,7 @@ private:
     server_state _state = server_state::FOLLOWER;
 
     bool is_leader() const {
-        assert(_state != server_state::LEADER || _my_id == _current_leader);
+        assert(_state != server_state::LEADER || _fsm._my_id == _current_leader);
         return _state == server_state::LEADER;
     }
 

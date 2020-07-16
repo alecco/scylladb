@@ -33,7 +33,7 @@ static seastar::logger logger("raft");
 server::server(
     server_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
     std::unique_ptr<storage> storage) :
-            _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)), _my_id(id) {
+            _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)), _fsm(id) {
     _rpc->set_server(*this);
 }
 
@@ -45,7 +45,7 @@ future<> server::start() {
     _voted_for = co_await _storage->load_vote();
     _log = co_await _storage->load_log();
 
-    logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
+    logger.trace("{}: starting log length {}", _fsm._my_id, _log.last_idx());
     co_return;
 }
 
@@ -66,7 +66,7 @@ future<> server::add_entry(command command) {
     logger.trace("Log lock acquired");
 
     _log.ensure_capacity(1); // ensure we have enough memory to insert an entry
-    log_entry e{_current_term, _leader_state->_progress[_my_id].next_idx, std::move(command)};
+    log_entry e{_current_term, _leader_state->_progress[_fsm._my_id].next_idx, std::move(command)};
     co_await _storage->store_log_entry(e);
 
     logger.trace("Log entry is persisted locally");
@@ -74,7 +74,7 @@ future<> server::add_entry(command command) {
     // put into the log after persisting, so that if persisting fails the entry will not end up in a log
     _log.emplace_back(std::move(e));
     // update this server's state
-    _leader_state->_progress[_my_id].match_idx = _leader_state->_progress[_my_id].next_idx++;
+    _leader_state->_progress[_fsm._my_id].match_idx = _leader_state->_progress[_fsm._my_id].next_idx++;
 
     // this will track the commit status of the entry
     auto [it, inserted] = _awaited_commits.emplace(e.index, commit_status{_current_term, promise<>()});
@@ -110,7 +110,7 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
 
         append_request_send req = {{
                 .current_term = _current_term,
-                .leader_id = _my_id,
+                .leader_id = _fsm._my_id,
                 .prev_log_index = prev_index,
                 .prev_log_term = prev_term,
                 .leader_commit = _commit_index
@@ -148,10 +148,10 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
                     break;
                 }
             }
-            logger.trace("replication_fiber[{}->{}]: n={}", _my_id, server, n);
+            logger.trace("replication_fiber[{}->{}]: n={}", _fsm._my_id, server, n);
             n++; // we found a matching entry, now move to the next one
             state.next_idx = n;
-            logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _my_id, server, state.next_idx, state.match_idx);
+            logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _fsm._my_id, server, state.next_idx, state.match_idx);
             assert(state.next_idx != state.match_idx); // we should not fail to apply an entry next after a matched one
         } else {
             // update follower's state
@@ -201,7 +201,7 @@ void server::commit_entries(index_t new_commit_idx) {
         return;
     }
     _commit_index = new_commit_idx;
-    logger.trace("commit_entries {}: signal apply thread: committed: {} applied: {}", _my_id, _commit_index, _last_applied);
+    logger.trace("commit_entries {}: signal apply thread: committed: {} applied: {}", _fsm._my_id, _commit_index, _last_applied);
     _apply_entries.signal();
     while (_awaited_commits.size() != 0) {
         auto it = _awaited_commits.begin();
@@ -229,7 +229,7 @@ future<> server::become_leader() {
     assert(!_leader_state);
 
     _state = server_state::LEADER;
-    _current_leader = _my_id;
+    _current_leader = _fsm._my_id;
     _leadership_transition = make_ready_future<>(); // prepare to next transition
 
     _leader_state.emplace(); // recreate leader's state
@@ -238,7 +238,7 @@ future<> server::become_leader() {
 
     for (auto s : _current_config.servers) {
         auto e = _leader_state->_progress.emplace(s.id, follower_progress{_log.next_idx(), index_t(0)});
-        if (s.id != _my_id) {
+        if (s.id != _fsm._my_id) {
             _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(s.id, e.first->second));
         }
     }
@@ -301,7 +301,7 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
     // TODO: need to handle keep alive management here
 
     if (append_request.entries.size()) { // empty request is just a heartbeat, only leader_commit is interesting
-        logger.trace("append_entries[{}]: my log length {}, received prev_log_index {}\n", _my_id, _log.last_idx(), append_request.prev_log_index);
+        logger.trace("append_entries[{}]: my log length {}, received prev_log_index {}\n", _fsm._my_id, _log.last_idx(), append_request.prev_log_index);
         if (append_request.prev_log_index != 0) {
             if (_log.last_idx() >= append_request.prev_log_index) {
                 // the follower has prev_log_index, so we need to check that it matches
@@ -309,7 +309,7 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
                 // we should really get rid of keeping the index in the entry, but for now check that it is correct
                 assert(entry.index == append_request.prev_log_index);
                 if (entry.term != append_request.prev_log_term) {
-                    logger.trace("append_entries[{}]: no match", _my_id);
+                    logger.trace("append_entries[{}]: no match", _fsm._my_id);
                     // search for a first entry in the log with non matching term
                     term_t t = _log[append_request.prev_log_index].term;
                     index_t i = append_request.prev_log_index;
@@ -317,12 +317,12 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
                         i--;
                     }
                     i++; // point to first entry that contains term t
-                    logger.trace("append_entries[{}]: reply with term {} index {}", _my_id, t, i);
+                    logger.trace("append_entries[{}]: reply with term {} index {}", _fsm._my_id, t, i);
                     // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
                     co_return append_reply{_current_term, false, t, i};
 
                 } else {
-                    logger.trace("append_entries[{}]: match", _my_id);
+                    logger.trace("append_entries[{}]: match", _fsm._my_id);
                 }
             } else {
                 // leader's log is longer, the follower does not have an entry to check
@@ -337,11 +337,11 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
         for (auto& e : append_request.entries) {
             if (!append) {
                 if (_log[e.index].term == e.term) {
-                    logger.trace("append_entries[{}]: entries with index {} has matching terms {}", _my_id, e.index, e.term);
+                    logger.trace("append_entries[{}]: entries with index {} has matching terms {}", _fsm._my_id, e.index, e.term);
                     // already have this one, skip to the next;
                     continue;
                 }
-                logger.trace("append_entries[{}]: entries with index {} has non matching terms {} != {}", _my_id, e.index, e.term, _log[e.index].term);
+                logger.trace("append_entries[{}]: entries with index {} has non matching terms {} != {}", _fsm._my_id, e.index, e.term, _log[e.index].term);
                 // If an existing entry conflicts with a new one (same index but different terms), delete the existing
                 // entry and all that follow it (§5.3)
                 co_await _storage->truncate_log(e.index);
@@ -360,7 +360,7 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
         }
     }
 
-    logger.trace("append_entries[{}]: leader_commit={}", _my_id, append_request.leader_commit);
+    logger.trace("append_entries[{}]: leader_commit={}", _fsm._my_id, append_request.leader_commit);
     commit_entries(append_request.leader_commit);
 
     co_return append_reply{_current_term, true};
@@ -380,7 +380,7 @@ future<> server::applier_fiber() {
     try {
         while(true) {
             co_await _apply_entries.wait([this] { return _commit_index > _last_applied && _log.last_idx() > _last_applied; });
-            logger.trace("applier_fiber {} commit index: {} last applied: {}", _my_id, _commit_index, _last_applied);
+            logger.trace("applier_fiber {} commit index: {} last applied: {}", _fsm._my_id, _commit_index, _last_applied);
             std::vector<command_cref> commands;
             commands.reserve(_commit_index - _last_applied);
             auto last_applied = _last_applied;
@@ -396,7 +396,7 @@ future<> server::applier_fiber() {
     } catch(seastar::broken_condition_variable&) {
         // replication fiber is stopped explicitly.
     } catch(...) {
-        logger.error("replication fiber {} stopped because of the error: {}", _my_id, std::current_exception());
+        logger.error("replication fiber {} stopped because of the error: {}", _fsm._my_id, std::current_exception());
     }
     co_return;
 }
@@ -417,7 +417,7 @@ future<> server::keepalive_fiber() {
         };
 
         for (auto server : _current_config.servers) {
-            if (server.id != _my_id) {
+            if (server.id != _fsm._my_id) {
                 _rpc->send_keepalive(server.id, ka);
             }
         }

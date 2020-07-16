@@ -78,6 +78,11 @@ namespace raft {
 // provides a facade to the state machine, running send and
 // receive fibers, handling I/O and timer events.
 struct fsm {
+    // id of this node
+    server_id _my_id;
+
+public:
+    explicit fsm(server_id id);
 };
 
 } // namespace raft
