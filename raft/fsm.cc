@@ -22,8 +22,8 @@
 
 namespace raft {
 
-fsm::fsm(server_id id) :
-        _my_id(id) {
+fsm::fsm(server_id id, term_t current_term) :
+        _my_id(id), _current_term(current_term) {
 
     assert(_current_leader.is_nil());
 }

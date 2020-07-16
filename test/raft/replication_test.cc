@@ -114,7 +114,7 @@ std::pair<std::unique_ptr<raft::server>, state_machine*> create_raft_server(raft
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
-    raft::fsm fsm{uuid};
+    raft::fsm fsm{uuid, state.term};
     auto raft = std::make_unique<raft::server>(std::move(fsm), std::move(mrpc), std::move(sm), std::move(mstorage));
     return std::make_pair(std::move(raft), &rsm);
 }
