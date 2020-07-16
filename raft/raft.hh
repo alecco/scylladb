@@ -374,10 +374,6 @@ public:
     // vs itself and store_term() function (since both modify the vote)
     virtual future<> store_vote(server_id vote) = 0;
 
-    // Load persisted vote
-    // Called during raft server initialization only, should not run in parallel with store
-    virtual future<std::optional<server_id>> load_vote() = 0;
-
     // Persist given snapshot and drops all but 'preserve_log_entries'
     // entries from the raft log starting from the beginning
     // This will rewrite previously persisted snapshot

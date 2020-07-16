@@ -87,8 +87,10 @@ struct fsm {
     // _current_term, _voted_for && _log are persisted in storage
     // latest term the server has seen
     term_t _current_term = term_t(0);
+    // candidateId that received vote in current term (or nil if none)
+    server_id _voted_for;
 public:
-    explicit fsm(server_id id, term_t current_term);
+    explicit fsm(server_id id, term_t current_term, server_id voted_for);
 
     bool is_leader() const {
         assert(_state != server_state::LEADER || _my_id == _current_leader);

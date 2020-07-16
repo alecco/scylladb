@@ -42,7 +42,6 @@ future<> server::start() {
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
 
-    _voted_for = co_await _storage->load_vote();
     _log = co_await _storage->load_log();
 
     logger.trace("{}: starting log length {}", _fsm._my_id, _log.last_idx());
@@ -354,9 +353,9 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
 
 future<> server::set_current_term(term_t term) {
     if (_fsm._current_term < term) {
-        co_await _storage->store_term(term); // this resets voted_for in persistent storage as well
         _fsm._current_term = term;
-        _voted_for = std::nullopt;
+        _fsm._voted_for = server_id{};
+        co_await _storage->store_term(term); // this resets voted_for in persistent storage as well
     }
     co_return;
 }
