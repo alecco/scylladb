@@ -31,9 +31,10 @@ namespace raft {
 static seastar::logger logger("raft");
 
 server::server(
-    server_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
+    fsm fsm, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
     std::unique_ptr<storage> storage) :
-            _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)), _fsm(id) {
+            _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)),
+            _fsm(std::move(fsm)) {
     _rpc->set_server(*this);
 }
 
