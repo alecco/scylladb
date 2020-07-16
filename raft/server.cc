@@ -280,7 +280,10 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
     }
 
     if (_fsm._current_term < append_request.current_term) {
-        co_await set_current_term(append_request.current_term);
+        _fsm._current_term = append_request.current_term;
+        _fsm._voted_for = server_id{};
+        // this resets voted_for in persistent storage as well
+        co_await _storage->store_term(append_request.current_term);
     }
 
     // TODO: need to handle keep alive management here
@@ -349,15 +352,6 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
     commit_entries(append_request.leader_commit);
 
     co_return append_reply{_fsm._current_term, true};
-}
-
-future<> server::set_current_term(term_t term) {
-    if (_fsm._current_term < term) {
-        _fsm._current_term = term;
-        _fsm._voted_for = server_id{};
-        co_await _storage->store_term(term); // this resets voted_for in persistent storage as well
-    }
-    co_return;
 }
 
 future<> server::applier_fiber() {

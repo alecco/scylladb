@@ -151,11 +151,7 @@ private:
     // a future resolves when all the leader background work is stopped
     future<> drop_leadership();
 
-    // called when the node become a follower
     void become_follower();
-
-    // set and persists current term
-    future<> set_current_term(term_t term);
 
     // this fibers run in a background and applies commited entries
     future<> applier_fiber();
