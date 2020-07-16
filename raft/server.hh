@@ -32,11 +32,6 @@ public:
     explicit server(server_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage);
     server(server&&) = delete;
 
-    // Returns current leader for this raft group
-    server_id get_current_leader() const {
-        return _current_leader;
-    }
-
     // Adds command to replicated log
     // Returned future is resolved when command is committed (but not necessary applied yet)
     // The function has to be called on a leader, throws otherwise
