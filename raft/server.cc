@@ -434,8 +434,4 @@ future<> server::make_me_leader() {
     return become_leader();
 }
 
-void server::set_committed(index_t idx) {
-    _commit_index = idx;
-}
-
 } // end of namespace raft
