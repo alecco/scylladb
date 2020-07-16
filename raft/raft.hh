@@ -368,10 +368,6 @@ public:
     // vs itself and store_vote() function (since both modify the vote)
     virtual future<> store_term(term_t term) = 0;
 
-    // Load persisted term
-    // Called during raft server initialization only, should not run in parallel with store
-    virtual future<term_t> load_term() = 0;
-
     // Persist given vote
     // Can be called concurrently with other and with itself
     // but an implementation has to make sure that result is linearisable
