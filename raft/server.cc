@@ -50,20 +50,16 @@ future<> server::start() {
 }
 
 future<> server::add_entry(command command) {
-    if (!is_leader()) {
-        throw not_leader(_current_leader);
-    }
+
+    _fsm.check_is_leader();
 
     logger.trace("An entry is submitted on a leader");
 
     // lock access to the raft log while it is been updated
     seastar::semaphore_units<> units = co_await _log.lock();
-
-    if (!is_leader()) { // re-check in case leader changed while we were waiting for the lock
-        throw not_leader(_current_leader);
-    }
-
     logger.trace("Log lock acquired");
+
+    _fsm.check_is_leader(); // re-check in case leader changed while we were waiting for the lock
 
     _log.ensure_capacity(1); // ensure we have enough memory to insert an entry
     log_entry e{_current_term, _leader_state->_progress[_fsm._my_id].next_idx, std::move(command)};
@@ -90,7 +86,7 @@ future<> server::add_entry(command command) {
 }
 
 future<> server::replication_fiber(server_id server, follower_progress& state) {
-    while (is_leader()) {
+    while (_fsm.is_leader()) {
         if (_log.empty() || state.next_idx > _log.last_idx()) {
             // everything is replicated already, wait for the next entry to be added
             try {
@@ -127,7 +123,7 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
             continue; // if there was an error sending try again
         }
 
-        if (!is_leader()) { // check that leader did not change while we were sending
+        if (!_fsm.is_leader()) { // check that leader did not change while we were sending
             break;
         }
 
@@ -225,11 +221,10 @@ future<> server::become_leader() {
     // wait for previous transition to complete, it is done async
     co_await std::move(_leadership_transition);
 
-    assert(_state != server_state::LEADER);
     assert(!_leader_state);
 
-    _state = server_state::LEADER;
-    _current_leader = _fsm._my_id;
+    _fsm.become_leader();
+
     _leadership_transition = make_ready_future<>(); // prepare to next transition
 
     _leader_state.emplace(); // recreate leader's state
@@ -246,11 +241,7 @@ future<> server::become_leader() {
     co_return;
 }
 
-future<> server::drop_leadership(server_state new_state) {
-    assert(_state == server_state::LEADER);
-    assert(new_state != server_state::LEADER);
-
-    _state = new_state;
+future<> server::drop_leadership() {
     _leader_state->_log_entry_added.broken();
 
     // FIXME: waiting for https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95895 to be fixed
@@ -268,11 +259,11 @@ future<> server::drop_leadership(server_state new_state) {
 }
 
 void server::become_follower() {
-    if (_state == server_state::LEADER) {
+    bool was_leader = _fsm.is_leader();
+    _fsm.become_follower(server_id{});
+    if (was_leader) {
         assert(_leadership_transition.available());
-        _leadership_transition = drop_leadership(server_state::FOLLOWER);
-    } else {
-        _state = server_state::FOLLOWER;
+        _leadership_transition = drop_leadership();
     }
 }
 
@@ -286,9 +277,9 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
 
     // Can it happen that a leader gets append request with the same term?
     // What should we do about it?
-    assert(_state != server_state::LEADER || _current_term > append_request.current_term);
+    assert(!_fsm.is_leader() || _current_term > append_request.current_term);
 
-    if (_state != server_state::FOLLOWER) {
+    if (!_fsm.is_follower()) {
         become_follower();
     }
 
@@ -296,7 +287,6 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
         co_await set_current_term(append_request.current_term);
     }
 
-    _current_leader = from;
 
     // TODO: need to handle keep alive management here
 
@@ -403,16 +393,16 @@ future<> server::applier_fiber() {
 
 future<> server::keepalive_fiber() {
     logger.trace("keepalive_fiber starts");
-    while(is_leader()) {
+    while (_fsm.is_leader()) {
         co_await sleep(100ms);
 
-        if (!is_leader()) { // may have lost leadership while sleeping
+        if (!_fsm.is_leader()) { // may have lost leadership while sleeping
             break;
         }
 
         keep_alive ka {
             .current_term = _current_term,
-            .leader_id = _current_leader,
+            .leader_id = _fsm._current_leader,
             .leader_commit = _commit_index
         };
 
@@ -428,7 +418,9 @@ future<> server::keepalive_fiber() {
 
 future<> server::stop() {
     logger.trace("stop() called");
-    become_follower();
+    if (!_fsm.is_follower()) {
+        become_follower();
+    }
     _apply_entries.broken();
     for (auto& ac: _awaited_commits) {
         ac.second.committed.set_exception(stopped_error());

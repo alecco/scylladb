@@ -24,6 +24,8 @@ namespace raft {
 
 fsm::fsm(server_id id) :
         _my_id(id) {
+
+    assert(_current_leader.is_nil());
 }
 
 } // end of namespace raft

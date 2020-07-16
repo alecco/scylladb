@@ -81,8 +81,6 @@ private:
     // Protocol deterministic finite-state machine
     fsm _fsm;
 
-    // id of a current leader
-    server_id _current_leader;
     // currently committed configuration
     configuration _commited_config;
     // currently used configuration, may be different from committed during configuration change
@@ -132,14 +130,6 @@ private:
     // entries that have a waiter that needs to be notified when committed
     std::map<index_t, commit_status> _awaited_commits;
 
-    // What state the node is
-    server_state _state = server_state::FOLLOWER;
-
-    bool is_leader() const {
-        assert(_state != server_state::LEADER || _fsm._my_id == _current_leader);
-        return _state == server_state::LEADER;
-    }
-
     // constantly replicate the log to a given node.
     // Started when a server becomes a leader
     // Stopped when a server stopped been a leader
@@ -165,7 +155,7 @@ private:
 
     // called when a node stops been a leader
     // a future resolves when all the leader background work is stopped
-    future<> drop_leadership(server_state new_state);
+    future<> drop_leadership();
 
     // called when the node become a follower
     void become_follower();
