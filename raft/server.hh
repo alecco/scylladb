@@ -29,7 +29,7 @@ namespace raft {
 // calls from different Seastar shards must be synchronized.
 class server {
 public:
-    explicit server(server_id id, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage);
+    explicit server(fsm fsm, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage);
     server(server&&) = delete;
 
     // Adds command to replicated log
