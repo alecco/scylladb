@@ -46,7 +46,6 @@ public:
     storage() {}
     virtual future<> store_term(raft::term_t term) { co_return seastar::sleep(1ms); }
     virtual future<> store_vote(raft::server_id vote) { return make_ready_future<>(); }
-    virtual future<std::optional<raft::server_id>> load_vote() { return make_ready_future<std::optional<raft::server_id>>(_conf.vote); }
     virtual future<> store_snapshot(raft::snapshot snap, size_t preserve_log_entries) { return make_ready_future<>(); }
     virtual future<raft::snapshot> load_snapshot() { return make_ready_future<raft::snapshot>(raft::snapshot()); }
     virtual future<> store_log_entries(const std::vector<raft::log_entry>& entries) { co_return seastar::sleep(1ms); };
@@ -113,7 +112,7 @@ std::pair<std::unique_ptr<raft::server>, state_machine*> create_raft_server(raft
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
-    raft::fsm fsm{uuid, state.term};
+    raft::fsm fsm{uuid, state.term, state.vote};
     auto raft = std::make_unique<raft::server>(std::move(fsm), std::move(mrpc), std::move(sm), std::move(mstorage));
     return std::make_pair(std::move(raft), &rsm);
 }
