@@ -92,9 +92,6 @@ private:
     // index of highest log entry applied to the state machine
     index_t _last_applied =index_t(0);
 
-    // _current_term, _voted_for && _log are persisted in storage
-    // latest term the server has seen
-    term_t _current_term = term_t(0);
     // candidateId that received vote in current term (or null if none)
     std::optional<server_id> _voted_for;
     // log entries; each entry contains command for state machine,

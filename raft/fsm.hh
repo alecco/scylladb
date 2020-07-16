@@ -84,8 +84,11 @@ struct fsm {
     server_id _current_leader;
     // What state the server is in.
     server_state _state = server_state::FOLLOWER;
+    // _current_term, _voted_for && _log are persisted in storage
+    // latest term the server has seen
+    term_t _current_term = term_t(0);
 public:
-    explicit fsm(server_id id);
+    explicit fsm(server_id id, term_t current_term);
 
     bool is_leader() const {
         assert(_state != server_state::LEADER || _my_id == _current_leader);

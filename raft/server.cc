@@ -42,7 +42,6 @@ future<> server::start() {
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
 
-    _current_term = co_await _storage->load_term();
     _voted_for = co_await _storage->load_vote();
     _log = co_await _storage->load_log();
 
@@ -63,7 +62,7 @@ future<> server::add_entry(command command) {
     _fsm.check_is_leader(); // re-check in case leader changed while we were waiting for the lock
 
     _log.ensure_capacity(1); // ensure we have enough memory to insert an entry
-    log_entry e{_current_term, _leader_state->_progress[_fsm._my_id].next_idx, std::move(command)};
+    log_entry e{_fsm._current_term, _leader_state->_progress[_fsm._my_id].next_idx, std::move(command)};
     co_await _storage->store_log_entry(e);
 
     logger.trace("Log entry is persisted locally");
@@ -74,7 +73,7 @@ future<> server::add_entry(command command) {
     _leader_state->_progress[_fsm._my_id].match_idx = _leader_state->_progress[_fsm._my_id].next_idx++;
 
     // this will track the commit status of the entry
-    auto [it, inserted] = _awaited_commits.emplace(e.index, commit_status{_current_term, promise<>()});
+    auto [it, inserted] = _awaited_commits.emplace(e.index, commit_status{_fsm._current_term, promise<>()});
     assert(inserted);
     // take future here since check_committed() may delete the _awaited_commits entry
     future<> f = it->second.committed.get_future();
@@ -99,14 +98,14 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
         assert(!_log.empty());
         const log_entry& entry = _log[state.next_idx];
         index_t prev_index = index_t(0);
-        term_t prev_term = _current_term;
+        term_t prev_term = _fsm._current_term;
         if (state.next_idx != 1) {
             prev_index = index_t(state.next_idx - 1);
             prev_term = _log[state.next_idx - 1].term;
         }
 
         append_request_send req = {{
-                .current_term = _current_term,
+                .current_term = _fsm._current_term,
                 .leader_id = _fsm._my_id,
                 .prev_log_index = prev_index,
                 .prev_log_term = prev_term,
@@ -128,14 +127,14 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
             break;
         }
 
-        if (reply.current_term > _current_term) {
+        if (reply.current_term > _fsm._current_term) {
             // receiver knows something about newer leader, so this server has to convert to a follower
             become_follower();
             break;
         }
 
         // we cannot have stale responses and if a follower had smaller term it should have updated itself
-        assert(reply.current_term == _current_term);
+        assert(reply.current_term == _fsm._current_term);
 
         if (!reply.appended) {
             index_t n = state.next_idx;
@@ -176,12 +175,12 @@ void server::check_committed() {
             break;
         }
         commit_index++;
-        if (_log[commit_index].term != _current_term) {
+        if (_log[commit_index].term != _fsm._current_term) {
             // Only entries from current term can be committed
             // based on vote counting, so if current log entry has
             // different term lets move to the next one in hope it
             // is committed already and has current term
-            logger.trace("check committed: cannot commit because of term {} != {}", _log[commit_index].term, _current_term);
+            logger.trace("check committed: cannot commit because of term {} != {}", _log[commit_index].term, _fsm._current_term);
             continue;
         }
 
@@ -269,25 +268,21 @@ void server::become_follower() {
 }
 
 future<append_reply> server::append_entries(server_id from, append_request_recv&& append_request) {
-    // lock access to the raft log while it is been updated
-    seastar::semaphore_units<> units = co_await _log.lock();
-
-    if (append_request.current_term < _current_term) {
-        co_return append_reply{_current_term, false, term_t(0), index_t(0)};
+    if (append_request.current_term < _fsm._current_term) {
+        co_return append_reply{_fsm._current_term, false, term_t(0), index_t(0)};
     }
 
     // Can it happen that a leader gets append request with the same term?
     // What should we do about it?
-    assert(!_fsm.is_leader() || _current_term > append_request.current_term);
+    assert(!_fsm.is_leader() || _fsm._current_term > append_request.current_term);
 
     if (!_fsm.is_follower()) {
         become_follower();
     }
 
-    if (_current_term < append_request.current_term) {
+    if (_fsm._current_term < append_request.current_term) {
         co_await set_current_term(append_request.current_term);
     }
-
 
     // TODO: need to handle keep alive management here
 
@@ -310,14 +305,14 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
                     i++; // point to first entry that contains term t
                     logger.trace("append_entries[{}]: reply with term {} index {}", _fsm._my_id, t, i);
                     // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-                    co_return append_reply{_current_term, false, t, i};
+                    co_return append_reply{_fsm._current_term, false, t, i};
 
                 } else {
                     logger.trace("append_entries[{}]: match", _fsm._my_id);
                 }
             } else {
                 // leader's log is longer, the follower does not have an entry to check
-                co_return append_reply{_current_term, false, term_t(0), _log.last_idx()};
+                co_return append_reply{_fsm._current_term, false, term_t(0), _log.last_idx()};
             }
         }
 
@@ -354,13 +349,13 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
     logger.trace("append_entries[{}]: leader_commit={}", _fsm._my_id, append_request.leader_commit);
     commit_entries(append_request.leader_commit);
 
-    co_return append_reply{_current_term, true};
+    co_return append_reply{_fsm._current_term, true};
 }
 
 future<> server::set_current_term(term_t term) {
-    if (_current_term < term) {
+    if (_fsm._current_term < term) {
         co_await _storage->store_term(term); // this resets voted_for in persistent storage as well
-        _current_term = term;
+        _fsm._current_term = term;
         _voted_for = std::nullopt;
     }
     co_return;
@@ -402,7 +397,7 @@ future<> server::keepalive_fiber() {
         }
 
         keep_alive ka {
-            .current_term = _current_term,
+            .current_term = _fsm._current_term,
             .leader_id = _fsm._current_leader,
             .leader_commit = _commit_index
         };
