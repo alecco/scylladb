@@ -80,9 +80,35 @@ namespace raft {
 struct fsm {
     // id of this node
     server_id _my_id;
-
+    // id of the current leader
+    server_id _current_leader;
+    // What state the server is in.
+    server_state _state = server_state::FOLLOWER;
 public:
     explicit fsm(server_id id);
+
+    bool is_leader() const {
+        assert(_state != server_state::LEADER || _my_id == _current_leader);
+        return _state == server_state::LEADER;
+    }
+    bool is_follower() const {
+        return _state == server_state::FOLLOWER;
+    }
+    void check_is_leader() const {
+        if (!is_leader()) {
+            throw not_leader(_current_leader);
+        }
+    }
+    void become_leader() {
+        assert(_state != server_state::LEADER);
+        _state = server_state::LEADER;
+        _current_leader = _my_id;
+    }
+    void become_follower(server_id leader) {
+        assert(_state != server_state::FOLLOWER);
+        _current_leader = leader;
+        _state = server_state::FOLLOWER;
+    }
 };
 
 } // namespace raft

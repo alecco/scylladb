@@ -87,7 +87,13 @@ struct generic_id {
     bool operator==(const generic_id& o) const {
         return id == o.id;
     }
+    // The default constructor sets the id to nil, which is
+    // guaranteed to not match any valid id.
+    bool is_nil() const {
+        return id.get_least_significant_bits() == 0 && id.get_most_significant_bits() == 0;
+    }
 };
+
 template<typename Tag>
 std::ostream& operator<<(std::ostream& os, const generic_id<Tag>& id) {
     os << id.id;
