@@ -19,3 +19,11 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "fsm.hh"
+
+namespace raft {
+
+fsm::fsm(server_id id) :
+        _my_id(id) {
+}
+
+} // end of namespace raft
