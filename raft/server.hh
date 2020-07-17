@@ -123,11 +123,18 @@ private:
     // a future resolves when all the leader background work is stopped
     future<> stop_leadership();
 
-    // this fibers run in a background and applies commited entries
+    // This fibers persists unstable log entries on disk.
+    future<> log_fiber();
+
+    // This fiber runs in the background and applies committed entries.
     future<> applier_fiber();
+
+    // Signaled when there is an entry to persist in the log
+    seastar::condition_variable _log_entries;
     // signaled when there is an entry to apply
     seastar::condition_variable _apply_entries;
     future<> _applier_status = make_ready_future<>();
+    future<> _log_status = make_ready_future<>();
 
     future<> keepalive_fiber();
 };

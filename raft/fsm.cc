@@ -59,7 +59,6 @@ index_t log::start_idx() const {
 }
 
 void log::stable_to(index_t idx) {
-    logger.trace("{} {}", _stable_idx, idx);
     assert(_stable_idx < idx);
     assert(idx <= last_idx());
     _stable_idx = idx;
@@ -78,7 +77,7 @@ const log_entry& fsm::add_entry(command command) {
     check_is_leader(); // it's only possible to add entries on a leader
 
     _log.ensure_capacity(1); // ensure we have enough memory to insert an entry
-    log_entry e{_current_term, _progress[_my_id].next_idx, std::move(command)};
+    log_entry e{_current_term, _log.next_idx(), std::move(command)};
 
     _log.emplace_back(std::move(e));
 
@@ -94,12 +93,12 @@ void fsm::stable_to(term_t term, index_t idx) {
     // @todo If we get a notification after a term has
     // changed, we need to handle it by updating truncate
     // offset.
-    assert(term == _current_term);
-
-    _log.stable_to(idx);
-    // update this server's state
-    _progress[_my_id].match_idx = idx;
-    _progress[_my_id].next_idx = index_t{idx + 1};
+    if (term == _current_term && idx > _log.stable_idx()) {
+        _log.stable_to(idx);
+        // update this server's state
+        _progress[_my_id].match_idx = idx;
+        _progress[_my_id].next_idx = index_t{idx + 1};
+    }
 }
 
 
