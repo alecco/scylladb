@@ -36,6 +36,8 @@ server::server(
 }
 
 future<> server::start() {
+    // start fiber to persist entries added to in-memory log
+    _log_status = log_fiber();
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
 
@@ -54,36 +56,26 @@ future<> server::add_entry(command command) {
     // yields, before removing _log_lock.
     const log_entry& e = _fsm.add_entry(std::move(command));
 
-    co_await _storage->store_log_entry(e);
-
-    logger.trace("Log entry is persisted locally");
-
-    _fsm.stable_to(e.term, e.idx);
+    _log_entries.broadcast();
 
     // This will track the commit status of the entry
     auto [it, inserted] = _awaited_commits.emplace(e.idx, commit_status{_fsm._current_term, promise<>()});
     assert(inserted);
-    // take future here since check_committed() may delete the _awaited_commits entry
     future<> f = it->second.committed.get_future();
-    if (_fsm._current_config.servers.size() == 1) { // special case for one node cluster
-        check_committed();
-    } else {
-        _leader_state->_log_entry_added.broadcast();
-    }
     co_return std::move(f);
 }
 
 future<> server::replication_fiber(server_id server, follower_progress& state) {
     while (_fsm.is_leader()) {
-        if (_fsm._log.empty() || state.next_idx > _fsm._log.stable_idx()) {
+        while (_fsm._log.empty() || state.next_idx > _fsm._log.stable_idx()) {
             // everything is replicated already, wait for the next entry to be added
             try {
                 co_await _leader_state->_log_entry_added.wait();
             } catch (...) {
-                continue; // if waiting for cv failed continue
+                co_return;
             }
         }
-        assert(!_fsm._log.empty());
+        assert(!_fsm._log.empty() && state.next_idx <= _fsm._log.stable_idx());
         const log_entry& entry = _fsm._log[state.next_idx];
         index_t prev_idx = index_t(0);
         term_t prev_term = _fsm._current_term;
@@ -341,6 +333,44 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
     co_return append_reply{_fsm._current_term, true};
 }
 
+future<> server::log_fiber() {
+    logger.trace("log_fiber start");
+    try {
+        while (true) {
+            co_await _log_entries.wait([this] { return _fsm._log.stable_idx() < _fsm._log.last_idx(); });
+            logger.trace("log_fiber {} stable index: {} last index: {}", _fsm._my_id,
+                _fsm._log.stable_idx(), _fsm._log.last_idx());
+
+
+            auto stable_idx = _fsm._log.stable_idx();
+            while (stable_idx < _fsm._log.last_idx()) {
+                // @todo: remove _log_lock, it requires making entry
+                // reference stable and possibly adjusting stable_to() for
+                // out-of-order updates.
+                seastar::semaphore_units<> units = co_await seastar::get_units(*_log_lock, 1);
+                const log_entry& entry = _fsm._log[++stable_idx];
+                assert(entry.idx == stable_idx);
+                // @todo: switch to batched store_log_entry API
+                co_await _storage->store_log_entry(entry);
+                logger.trace("{} Log entry {} is persisted locally", _fsm._my_id, stable_idx);
+                _fsm.stable_to(entry.term, entry.idx);
+
+                if (_fsm._current_config.servers.size() == 1) { // special case for one node cluster
+                    check_committed();
+                } else if (_fsm.is_leader()) {
+                    _leader_state->_log_entry_added.broadcast();
+                }
+            }
+        }
+    } catch (seastar::broken_condition_variable&) {
+        // log fiber is stopped explicitly.
+    } catch (...) {
+        logger.error("log fiber {} stopped because of the error: {}", _fsm._my_id, std::current_exception());
+    }
+    co_return;
+}
+
+
 future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
@@ -399,12 +429,14 @@ future<> server::stop() {
         _fsm.become_follower(server_id{});
         _leadership_transition = stop_leadership();
     }
+    _log_entries.broken();
     _apply_entries.broken();
     for (auto& ac: _awaited_commits) {
         ac.second.committed.set_exception(stopped_error());
     }
     _awaited_commits.clear();
-    return seastar::when_all_succeed(std::move(_leadership_transition), std::move(_applier_status),
+    return seastar::when_all_succeed(std::move(_leadership_transition),
+            std::move(_log_status), std::move(_applier_status),
             _rpc->stop(), _state_machine->stop(), _storage->stop()).discard_result();
 }
 
