@@ -23,8 +23,8 @@
 namespace raft {
 
 log_entry& log::operator[](size_t i) {
-    assert(index_t(i) >= _log_starting_index);
-    return _log[i - _log_starting_index];
+    assert(index_t(i) >= _start_idx);
+    return _log[i - _start_idx];
 }
 
 // reserve n additional entries
@@ -42,7 +42,7 @@ bool log::empty() const {
 }
 
 index_t log::last_idx() const {
-    return index_t(_log.size()) + _log_starting_index - index_t(1);
+    return index_t(_log.size()) + _start_idx - index_t(1);
 }
 
 index_t log::next_idx() const {
@@ -50,12 +50,12 @@ index_t log::next_idx() const {
 }
 
 void log::truncate_head(size_t i) {
-    auto it = _log.begin() + (i - _log_starting_index);
+    auto it = _log.begin() + (i - _start_idx);
     _log.erase(it, _log.end());
 }
 
-index_t log::start_index() const {
-    return _log_starting_index;
+index_t log::start_idx() const {
+    return _start_idx;
 }
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :

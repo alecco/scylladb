@@ -69,9 +69,9 @@ public:
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
-        req.prev_log_index = append_request.prev_log_index;
+        req.prev_log_idx = append_request.prev_log_idx;
         req.prev_log_term = append_request.prev_log_term;
-        req.leader_commit = append_request.leader_commit;
+        req.leader_commit_idx = append_request.leader_commit_idx;
         for (auto&& e: append_request.entries) {
             req.entries.push_back(e);
         }
@@ -87,9 +87,9 @@ public:
         raft::append_request_recv req;
         req.current_term = keep_alive.current_term;
         req.leader_id = keep_alive.leader_id;
-        req.prev_log_index = raft::index_t(0);
+        req.prev_log_idx = raft::index_t(0);
         req.prev_log_term = raft::term_t(0);
-        req.leader_commit = keep_alive.leader_commit;
+        req.leader_commit_idx = keep_alive.leader_commit_idx;
         (void)net[id]->_server->append_entries(_id, std::move(req));
     }
     virtual void add_server(raft::server_id id, bytes node_info) {}

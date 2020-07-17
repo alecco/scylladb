@@ -66,7 +66,7 @@ future<> server::add_entry(command command) {
     _fsm._progress[_fsm._my_id].match_idx = _fsm._progress[_fsm._my_id].next_idx++;
 
     // this will track the commit status of the entry
-    auto [it, inserted] = _awaited_commits.emplace(e.index, commit_status{_fsm._current_term, promise<>()});
+    auto [it, inserted] = _awaited_commits.emplace(e.idx, commit_status{_fsm._current_term, promise<>()});
     assert(inserted);
     // take future here since check_committed() may delete the _awaited_commits entry
     future<> f = it->second.committed.get_future();
@@ -90,19 +90,19 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
         }
         assert(!_fsm._log.empty());
         const log_entry& entry = _fsm._log[state.next_idx];
-        index_t prev_index = index_t(0);
+        index_t prev_idx = index_t(0);
         term_t prev_term = _fsm._current_term;
         if (state.next_idx != 1) {
-            prev_index = index_t(state.next_idx - 1);
+            prev_idx = index_t(state.next_idx - 1);
             prev_term = _fsm._log[state.next_idx - 1].term;
         }
 
         append_request_send req = {{
                 .current_term = _fsm._current_term,
                 .leader_id = _fsm._my_id,
-                .prev_log_index = prev_index,
+                .prev_log_idx = prev_idx,
                 .prev_log_term = prev_term,
-                .leader_commit = _fsm._commit_index
+                .leader_commit_idx = _fsm._commit_idx
             },
             // TODO: send only one entry for now, but we should batch in the future
             std::vector<log_entry_cref>(1, std::cref(entry))
@@ -133,7 +133,7 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
         if (!reply.appended) {
             index_t n = state.next_idx;
             // skip all the entries from next_idx to first_idx_for_non_matching_term that do not have non_matching_term
-            for (; n >= std::max(_fsm._log.start_index(), reply.first_idx_for_non_matching_term); n--) {
+            for (; n >= std::max(_fsm._log.start_idx(), reply.first_idx_for_non_matching_term); n--) {
                 if (_fsm._log[n].term == reply.non_matching_term) {
                     break;
                 }
@@ -155,12 +155,12 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
 }
 
 void server::check_committed() {
-    index_t commit_index = _fsm._commit_index;
+    index_t commit_idx = _fsm._commit_idx;
     while (true) {
         size_t count = 0;
         for (const auto& p : _fsm._progress) {
-            logger.trace("check committed {}: {} {}", p.first, p.second.match_idx, _fsm._commit_index);
-            if (p.second.match_idx > _fsm._commit_index) {
+            logger.trace("check committed {}: {} {}", p.first, p.second.match_idx, _fsm._commit_idx);
+            if (p.second.match_idx > _fsm._commit_idx) {
                 count++;
             }
         }
@@ -168,35 +168,35 @@ void server::check_committed() {
         if (count < _fsm.quorum()) {
             break;
         }
-        commit_index++;
-        if (_fsm._log[commit_index].term != _fsm._current_term) {
+        commit_idx++;
+        if (_fsm._log[commit_idx].term != _fsm._current_term) {
             // Only entries from current term can be committed
             // based on vote counting, so if current log entry has
             // different term lets move to the next one in hope it
             // is committed already and has current term
-            logger.trace("check committed: cannot commit because of term {} != {}", _fsm._log[commit_index].term, _fsm._current_term);
+            logger.trace("check committed: cannot commit because of term {} != {}", _fsm._log[commit_idx].term, _fsm._current_term);
             continue;
         }
 
-        logger.trace("check committed commit {}", commit_index);
+        logger.trace("check committed commit {}", commit_idx);
         // we have quorum of servers with match_idx greater than current commit
         // it means we can commit next entry
-        commit_entries(commit_index);
+        commit_entries(commit_idx);
     }
 }
 
 void server::commit_entries(index_t new_commit_idx) {
-    assert(_fsm._commit_index <= new_commit_idx);
-    if (new_commit_idx == _fsm._commit_index) {
+    assert(_fsm._commit_idx <= new_commit_idx);
+    if (new_commit_idx == _fsm._commit_idx) {
         return;
     }
-    _fsm._commit_index = new_commit_idx;
+    _fsm._commit_idx = new_commit_idx;
     logger.trace("commit_entries {}: signal apply thread: committed: {} applied: {}", _fsm._my_id,
-        _fsm._commit_index, _fsm._last_applied);
+        _fsm._commit_idx, _fsm._last_applied);
     _apply_entries.signal();
     while (_awaited_commits.size() != 0) {
         auto it = _awaited_commits.begin();
-        if (it->first > _fsm._commit_index) {
+        if (it->first > _fsm._commit_idx) {
             break;
         }
         auto [entry_idx, status] = std::move(*it);
@@ -275,21 +275,22 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
 
     // TODO: need to handle keep alive management here
 
-    if (append_request.entries.size()) { // empty request is just a heartbeat, only leader_commit is interesting
-        logger.trace("append_entries[{}]: my log length {}, received prev_log_index {}\n",
-            _fsm._my_id, _fsm._log.last_idx(), append_request.prev_log_index);
-        if (append_request.prev_log_index != 0) {
-            if (_fsm._log.last_idx() >= append_request.prev_log_index) {
-                // the follower has prev_log_index, so we need to check that it matches
-                const log_entry& entry = _fsm._log[append_request.prev_log_index];
+    if (append_request.entries.size()) {
+        // empty request is just a heartbeat, only leader_commit_idx is interesting
+        logger.trace("append_entries[{}]: my log length {}, received prev_log_idx {}\n",
+            _fsm._my_id, _fsm._log.last_idx(), append_request.prev_log_idx);
+        if (append_request.prev_log_idx != 0) {
+            if (_fsm._log.last_idx() >= append_request.prev_log_idx) {
+                // the follower has prev_log_idx, so we need to check that it matches
+                const log_entry& entry = _fsm._log[append_request.prev_log_idx];
                 // we should really get rid of keeping the index in the entry, but for now check that it is correct
-                assert(entry.index == append_request.prev_log_index);
+                assert(entry.idx == append_request.prev_log_idx);
                 if (entry.term != append_request.prev_log_term) {
                     logger.trace("append_entries[{}]: no match", _fsm._my_id);
                     // search for a first entry in the log with non matching term
-                    term_t t = _fsm._log[append_request.prev_log_index].term;
-                    index_t i = append_request.prev_log_index;
-                    while (i >= _fsm._log.start_index() && _fsm._log[i].term == _fsm._log[append_request.prev_log_index].term) {
+                    term_t t = _fsm._log[append_request.prev_log_idx].term;
+                    index_t i = append_request.prev_log_idx;
+                    while (i >= _fsm._log.start_idx() && _fsm._log[i].term == _fsm._log[append_request.prev_log_idx].term) {
                         i--;
                     }
                     i++; // point to first entry that contains term t
@@ -306,23 +307,24 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
             }
         }
 
-        bool append = _fsm._log.last_idx() < append_request.entries[0].index;
+        bool append = _fsm._log.last_idx() < append_request.entries[0].idx;
         std::vector<log_entry> to_add;
         to_add.reserve(append_request.entries.size());
 
         for (auto& e : append_request.entries) {
             if (!append) {
-                if (_fsm._log[e.index].term == e.term) {
-                    logger.trace("append_entries[{}]: entries with index {} has matching terms {}", _fsm._my_id, e.index, e.term);
+                if (_fsm._log[e.idx].term == e.term) {
+                    logger.trace("append_entries[{}]: entries with index {} has matching terms {}",
+                        _fsm._my_id, e.idx, e.term);
                     // already have this one, skip to the next;
                     continue;
                 }
                 logger.trace("append_entries[{}]: entries with index {} has non matching terms {} != {}",
-                    _fsm._my_id, e.index, e.term, _fsm._log[e.index].term);
+                    _fsm._my_id, e.idx, e.term, _fsm._log[e.idx].term);
                 // If an existing entry conflicts with a new one (same index but different terms), delete the existing
                 // entry and all that follow it (§5.3)
-                co_await _storage->truncate_log(e.index);
-                _fsm._log.truncate_head(e.index);
+                co_await _storage->truncate_log(e.idx);
+                _fsm._log.truncate_head(e.idx);
                 append = true; // append after we truncated
             }
             to_add.emplace_back(std::move(e));
@@ -337,8 +339,8 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
         }
     }
 
-    logger.trace("append_entries[{}]: leader_commit={}", _fsm._my_id, append_request.leader_commit);
-    commit_entries(append_request.leader_commit);
+    logger.trace("append_entries[{}]: leader_commit_idx={}", _fsm._my_id, append_request.leader_commit_idx);
+    commit_entries(append_request.leader_commit_idx);
 
     co_return append_reply{_fsm._current_term, true};
 }
@@ -347,13 +349,13 @@ future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while (true) {
-            co_await _apply_entries.wait([this] { return _fsm._commit_index > _fsm._last_applied && _fsm._log.last_idx() > _fsm._last_applied; });
+            co_await _apply_entries.wait([this] { return _fsm._commit_idx > _fsm._last_applied && _fsm._log.last_idx() > _fsm._last_applied; });
             logger.trace("applier_fiber {} commit index: {} last applied: {}", _fsm._my_id,
-                _fsm._commit_index, _fsm._last_applied);
+                _fsm._commit_idx, _fsm._last_applied);
             std::vector<command_cref> commands;
-            commands.reserve(_fsm._commit_index - _fsm._last_applied);
+            commands.reserve(_fsm._commit_idx - _fsm._last_applied);
             auto last_applied = _fsm._last_applied;
-            while (last_applied < _fsm._commit_index && _fsm._log.last_idx() > last_applied) {
+            while (last_applied < _fsm._commit_idx && _fsm._log.last_idx() > last_applied) {
                 const auto& entry = _fsm._log[++last_applied];
                 if (std::holds_alternative<command>(entry.data)) {
                     commands.push_back(std::cref(std::get<command>(entry.data)));
@@ -382,7 +384,7 @@ future<> server::keepalive_fiber() {
         keep_alive ka {
             .current_term = _fsm._current_term,
             .leader_id = _fsm._current_leader,
-            .leader_commit = _fsm._commit_index
+            .leader_commit_idx = _fsm._commit_idx,
         };
 
         for (auto server : _fsm._current_config.servers) {
