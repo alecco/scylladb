@@ -22,6 +22,8 @@
 
 namespace raft {
 
+seastar::logger logger("raft");
+
 future<seastar::semaphore_units<>> log::lock() {
     return seastar::get_units(*_log_lock, 1);
 }

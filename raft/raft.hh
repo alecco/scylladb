@@ -29,6 +29,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/util/log.hh>
 #include "bytes_ostream.hh"
 #include "utils/UUID.hh"
 
@@ -37,6 +38,8 @@ namespace raft {
 // into it before passing to raft and deserialize in apply() before applying
 using command = bytes_ostream;
 using command_cref = std::reference_wrapper<const command>;
+
+extern seastar::logger logger;
 
 namespace internal {
 
