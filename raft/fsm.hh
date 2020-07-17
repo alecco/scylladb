@@ -32,6 +32,32 @@ struct follower_progress {
     index_t match_idx;
 };
 
+// This class represents the Raft log in memory.
+// The value of the first index is 1.
+// New entries are added at the back.
+// Entries are persisted locally after they are added.
+// Entries may be dropped from the beginning by snapshotting
+// and from the end by a new leader replacing stale entries.
+class log {
+    // we need something that can be truncated form both sides.
+    // std::deque move constructor is not nothrow hence cannot be used
+    boost::container::deque<log_entry> _log;
+    // the index of the first entry in the log (index starts from 1)
+    // will be increased by log gc
+    index_t _log_starting_index = index_t(1);
+public:
+    log_entry& operator[](size_t i);
+    // reserve n additional entries
+    void ensure_capacity(size_t n);
+    void emplace_back(log_entry&& e);
+    // return true if in memory log is empty
+    bool empty() const;
+    index_t next_idx() const;
+    index_t last_idx() const;
+    void truncate_head(size_t i);
+    index_t start_index() const;
+};
+
 // Raft protocol finite state machine
 //
 // A serious concern that prevented inheriting Scylla Raft from an
