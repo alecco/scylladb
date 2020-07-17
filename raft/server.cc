@@ -217,12 +217,7 @@ void server::commit_entries(index_t new_commit_idx) {
 }
 
 future<> server::become_leader() {
-    // wait for previous transition to complete, it is done async
-    co_await std::move(_leadership_transition);
-
     assert(!_leader_state);
-
-    _fsm.become_leader();
 
     _leadership_transition = make_ready_future<>(); // prepare to next transition
 
@@ -267,6 +262,7 @@ void server::become_follower() {
 }
 
 future<append_reply> server::append_entries(server_id from, append_request_recv&& append_request) {
+
     if (append_request.current_term < _fsm._current_term) {
         co_return append_reply{_fsm._current_term, false, term_t(0), index_t(0)};
     }
@@ -425,7 +421,12 @@ void server::set_config(configuration config) {
 }
 
 future<> server::make_me_leader() {
-    return become_leader();
+    // wait for previous transition to complete, it is done async
+    co_await std::move(_leadership_transition);
+
+    _fsm.become_leader();
+
+    co_return become_leader();
 }
 
 } // end of namespace raft
