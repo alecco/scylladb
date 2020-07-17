@@ -397,10 +397,6 @@ public:
     // Persist given log entry
     virtual future<> store_log_entry(const log_entry& entry) = 0;
 
-    // Load saved raft log
-    // Called during raft server initialization only, should not run in parallel with store
-    virtual future<log> load_log() = 0;
-
     // Truncate all entries with index greater that idx in the log
     // and persist the truncation. Can be called in parallel with store_log_entries()
     // but internally should be linearized vs store_log_entries(): store_log_entries()
