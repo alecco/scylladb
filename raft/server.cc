@@ -70,7 +70,7 @@ future<> server::add_entry(command command) {
     assert(inserted);
     // take future here since check_committed() may delete the _awaited_commits entry
     future<> f = it->second.committed.get_future();
-    if (_current_config.servers.size() == 1) { // special case for one node cluster
+    if (_fsm._current_config.servers.size() == 1) { // special case for one node cluster
         check_committed();
     } else {
         _leader_state->_log_entry_added.broadcast();
@@ -221,7 +221,7 @@ future<> server::start_leadership() {
     // start sending keepalives to maintain leadership
     _leader_state->keepalive_status = keepalive_fiber();
 
-    for (auto s : _current_config.servers) {
+    for (auto s : _fsm._current_config.servers) {
         auto e = _fsm._progress.emplace(s.id, follower_progress{_fsm._log.next_idx(), index_t(0)});
         if (s.id != _fsm._my_id) {
             _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(s.id, e.first->second));
@@ -385,7 +385,7 @@ future<> server::keepalive_fiber() {
             .leader_commit = _fsm._commit_index
         };
 
-        for (auto server : _current_config.servers) {
+        for (auto server : _fsm._current_config.servers) {
             if (server.id != _fsm._my_id) {
                 _rpc->send_keepalive(server.id, ka);
             }
@@ -408,11 +408,6 @@ future<> server::stop() {
     _awaited_commits.clear();
     return seastar::when_all_succeed(std::move(_leadership_transition), std::move(_applier_status),
             _rpc->stop(), _state_machine->stop(), _storage->stop()).discard_result();
-}
-
-// dbg APIs
-void server::set_config(configuration config) {
-    _current_config = _commited_config = config;
 }
 
 future<> server::make_me_leader() {

@@ -99,8 +99,10 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-std::pair<std::unique_ptr<raft::server>, state_machine*> create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
-        initial_state state = initial_state()) {
+std::pair<std::unique_ptr<raft::server>, state_machine*>
+create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
+        const raft::configuration& config, initial_state state) {
+
     raft::log log;
     for (auto&& e : state.log) {
         log.emplace_back(std::move(e));
@@ -110,23 +112,23 @@ std::pair<std::unique_ptr<raft::server>, state_machine*> create_raft_server(raft
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
     raft::fsm fsm{uuid, state.term, state.vote, std::move(log)};
+    fsm.set_configuration(config);
     auto raft = std::make_unique<raft::server>(std::move(fsm), std::move(mrpc), std::move(sm), std::move(mstorage));
     return std::make_pair(std::move(raft), &rsm);
 }
 
 future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply) {
-    raft::configuration conf;
+    raft::configuration config;
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
     for (size_t i = 0; i < states.size(); i++) {
         auto uuid = utils::make_random_uuid();
-        conf.servers.push_back(raft::server_address{uuid});
+        config.servers.push_back(raft::server_address{uuid});
     }
 
     for (size_t i = 0; i < states.size(); i++) {
-        auto& s = conf.servers[i];
-        auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i])).first;
-        raft.set_config(conf);
+        auto& s = config.servers[i];
+        auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, config, states[i])).first;
         co_await raft.start();
     }
 

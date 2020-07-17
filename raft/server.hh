@@ -70,8 +70,6 @@ public:
 
     // Ad hoc functions for testing
 
-    // Set cluster configuration, in real app should be taken from log
-    void set_config(configuration config);
     future<> make_me_leader();
 private:
     std::unique_ptr<rpc> _rpc;
@@ -82,11 +80,6 @@ private:
     std::unique_ptr<seastar::semaphore> _log_lock = std::make_unique<seastar::semaphore>(1);
     // Protocol deterministic finite-state machine
     fsm _fsm;
-
-    // currently committed configuration
-    configuration _commited_config;
-    // currently used configuration, may be different from committed during configuration change
-    configuration _current_config;
 
     // the sate that is valid only on leader
     struct leader_state {
@@ -119,7 +112,7 @@ private:
 
     // calculates current quorum
     size_t quorum() {
-        return _current_config.servers.size() / 2 + 1;
+        return _fsm._current_config.servers.size() / 2 + 1;
     }
 
     // called when next entry is committed (on a leader or otherwise)
