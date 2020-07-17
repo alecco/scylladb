@@ -58,9 +58,7 @@ future<> server::add_entry(command command) {
 
     logger.trace("Log entry is persisted locally");
 
-    _fsm._log.stable_to(_fsm._progress[_fsm._my_id].next_idx);
-    // update this server's state
-    _fsm._progress[_fsm._my_id].match_idx = _fsm._progress[_fsm._my_id].next_idx++;
+    _fsm.stable_to(e.term, e.idx);
 
     // This will track the commit status of the entry
     auto [it, inserted] = _awaited_commits.emplace(e.idx, commit_status{_fsm._current_term, promise<>()});
@@ -77,7 +75,7 @@ future<> server::add_entry(command command) {
 
 future<> server::replication_fiber(server_id server, follower_progress& state) {
     while (_fsm.is_leader()) {
-        if (_fsm._log.empty() || state.next_idx > _fsm._log.last_idx()) {
+        if (_fsm._log.empty() || state.next_idx > _fsm._log.stable_idx()) {
             // everything is replicated already, wait for the next entry to be added
             try {
                 co_await _leader_state->_log_entry_added.wait();
@@ -347,13 +345,13 @@ future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while (true) {
-            co_await _apply_entries.wait([this] { return _fsm._commit_idx > _fsm._last_applied && _fsm._log.last_idx() > _fsm._last_applied; });
+            co_await _apply_entries.wait([this] { return _fsm._commit_idx > _fsm._last_applied && _fsm._log.stable_idx() > _fsm._last_applied; });
             logger.trace("applier_fiber {} commit index: {} last applied: {}", _fsm._my_id,
                 _fsm._commit_idx, _fsm._last_applied);
             std::vector<command_cref> commands;
             commands.reserve(_fsm._commit_idx - _fsm._last_applied);
             auto last_applied = _fsm._last_applied;
-            while (last_applied < _fsm._commit_idx && _fsm._log.last_idx() > last_applied) {
+            while (last_applied < _fsm._commit_idx && _fsm._log.stable_idx() > last_applied) {
                 const auto& entry = _fsm._log[++last_applied];
                 if (std::holds_alternative<command>(entry.data)) {
                     commands.push_back(std::cref(std::get<command>(entry.data)));
