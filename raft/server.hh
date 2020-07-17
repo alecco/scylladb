@@ -110,11 +110,6 @@ private:
     // so it may be the case that some entries are committed now
     void check_committed();
 
-    // calculates current quorum
-    size_t quorum() {
-        return _fsm._current_config.servers.size() / 2 + 1;
-    }
-
     // called when next entry is committed (on a leader or otherwise)
     void commit_entries(index_t);
 

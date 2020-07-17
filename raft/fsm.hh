@@ -150,6 +150,10 @@ public:
     void set_configuration(const configuration& config) {
         _current_config = _commited_config = config;
     }
+    // Calculates current quorum
+    size_t quorum() const {
+        return _current_config.servers.size() / 2 + 1;
+    }
 };
 
 } // namespace raft

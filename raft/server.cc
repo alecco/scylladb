@@ -164,8 +164,8 @@ void server::check_committed() {
                 count++;
             }
         }
-        logger.trace("check committed count {} quorum {}", count, quorum());
-        if (count < quorum()) {
+        logger.trace("check committed count {} quorum {}", count, _fsm.quorum());
+        if (count < _fsm.quorum()) {
             break;
         }
         commit_index++;
