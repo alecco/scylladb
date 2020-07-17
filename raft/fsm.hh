@@ -114,6 +114,12 @@ public:
         _current_leader = leader;
         _state = server_state::FOLLOWER;
     }
+    void update_current_term(term_t current_term) {
+        assert(_state == server_state::FOLLOWER);
+        assert(_current_term < current_term);
+        _current_term = current_term;
+        _voted_for = server_id{};
+    }
 };
 
 } // namespace raft

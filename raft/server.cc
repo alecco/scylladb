@@ -273,8 +273,7 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
     }
 
     if (_fsm._current_term < append_request.current_term) {
-        _fsm._current_term = append_request.current_term;
-        _fsm._voted_for = server_id{};
+        _fsm.update_current_term(append_request.current_term);
         // this resets voted_for in persistent storage as well
         co_await _storage->store_term(append_request.current_term);
     }
