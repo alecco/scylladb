@@ -140,7 +140,7 @@ struct configuration {
 
 struct log_entry {
     term_t term;
-    index_t index;
+    index_t idx;
     std::variant<command, configuration> data;
 };
 
@@ -163,7 +163,7 @@ struct stopped_error : public error {
 
 struct snapshot {
     // Index and term of last entry in the snapshot
-    index_t index;
+    index_t idx;
     term_t term;
     // The committed configuration in the snapshot
     configuration config;
@@ -180,11 +180,11 @@ struct append_request_base {
     // In practice we do not need it since we should know sender's id anyway
     server_id leader_id;
     // index of log entry immediately preceding new ones
-    index_t prev_log_index;
-    // term of prev_log_index entry
+    index_t prev_log_idx;
+    // term of prev_log_idx entry
     term_t prev_log_term;
-    // leader's commit_index
-    index_t leader_commit;
+    // leader's commit_idx
+    index_t leader_commit_idx;
 };
 struct append_request_send : public append_request_base {
     // log entries to store (empty for heartbeat; may send more than one for efficiency)
@@ -216,7 +216,7 @@ struct keep_alive {
     // as point to point message but as part of an aggregated one.
     server_id leader_id;
     // leader's commit_index
-    index_t leader_commit;
+    index_t leader_commit_idx;
 };
 
 struct vote_request {
@@ -371,7 +371,7 @@ public:
     // Persist given log entry
     virtual future<> store_log_entry(const log_entry& entry) = 0;
 
-    // Truncate all entries with index greater that idx in the log
+    // Truncate all entries with index greater that index in the log
     // and persist the truncation. Can be called in parallel with store_log_entries()
     // but internally should be linearized vs store_log_entries(): store_log_entries()
     // called after truncate_log() should wait for truncation to complete internally before

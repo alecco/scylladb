@@ -44,7 +44,7 @@ class log {
     boost::container::deque<log_entry> _log;
     // the index of the first entry in the log (index starts from 1)
     // will be increased by log gc
-    index_t _log_starting_index = index_t(1);
+    index_t _start_idx = index_t(1);
 public:
     log_entry& operator[](size_t i);
     // reserve n additional entries
@@ -55,7 +55,7 @@ public:
     index_t next_idx() const;
     index_t last_idx() const;
     void truncate_head(size_t i);
-    index_t start_index() const;
+    index_t start_idx() const;
 };
 
 // Raft protocol finite state machine
@@ -125,7 +125,7 @@ struct fsm {
     server_id _voted_for;
     // commit_index && last_applied are volatile state
     // index of highest log entry known to be committed
-    index_t _commit_index = index_t(0);
+    index_t _commit_idx = index_t(0);
     // index of highest log entry applied to the state machine
     index_t _last_applied = index_t(0);
     // log entries; each entry contains command for state machine,
