@@ -24,6 +24,14 @@
 
 namespace raft {
 
+struct follower_progress {
+    // Index of the next log entry to send to that server
+    index_t next_idx;
+    // Index of the highest log entry known to be replicated to this
+    // server.
+    index_t match_idx;
+};
+
 // Raft protocol finite state machine
 //
 // A serious concern that prevented inheriting Scylla Raft from an
@@ -97,6 +105,9 @@ struct fsm {
     // log entries; each entry contains command for state machine,
     // and term when entry was received by leader
     log _log;
+
+    // A state for each follower, maintained only on the leader.
+    std::unordered_map<server_id, follower_progress> _progress;
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
@@ -114,6 +125,7 @@ public:
     }
     void become_leader() {
         assert(_state != server_state::LEADER);
+        assert(_progress.empty());
         _state = server_state::LEADER;
         _current_leader = _my_id;
     }
@@ -121,6 +133,7 @@ public:
         assert(_state != server_state::FOLLOWER);
         _current_leader = leader;
         _state = server_state::FOLLOWER;
+        _progress.clear();
     }
     void update_current_term(term_t current_term) {
         assert(_state == server_state::FOLLOWER);

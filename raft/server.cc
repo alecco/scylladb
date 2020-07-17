@@ -55,7 +55,7 @@ future<> server::add_entry(command command) {
     _fsm.check_is_leader(); // re-check in case leader changed while we were waiting for the lock
 
     _fsm._log.ensure_capacity(1); // ensure we have enough memory to insert an entry
-    log_entry e{_fsm._current_term, _leader_state->_progress[_fsm._my_id].next_idx, std::move(command)};
+    log_entry e{_fsm._current_term, _fsm._progress[_fsm._my_id].next_idx, std::move(command)};
     co_await _storage->store_log_entry(e);
 
     logger.trace("Log entry is persisted locally");
@@ -63,7 +63,7 @@ future<> server::add_entry(command command) {
     // put into the log after persisting, so that if persisting fails the entry will not end up in a log
     _fsm._log.emplace_back(std::move(e));
     // update this server's state
-    _leader_state->_progress[_fsm._my_id].match_idx = _leader_state->_progress[_fsm._my_id].next_idx++;
+    _fsm._progress[_fsm._my_id].match_idx = _fsm._progress[_fsm._my_id].next_idx++;
 
     // this will track the commit status of the entry
     auto [it, inserted] = _awaited_commits.emplace(e.index, commit_status{_fsm._current_term, promise<>()});
@@ -158,7 +158,7 @@ void server::check_committed() {
     index_t commit_index = _fsm._commit_index;
     while (true) {
         size_t count = 0;
-        for (const auto& p : _leader_state->_progress) {
+        for (const auto& p : _fsm._progress) {
             logger.trace("check committed {}: {} {}", p.first, p.second.match_idx, _fsm._commit_index);
             if (p.second.match_idx > _fsm._commit_index) {
                 count++;
@@ -222,7 +222,7 @@ future<> server::start_leadership() {
     _leader_state->keepalive_status = keepalive_fiber();
 
     for (auto s : _current_config.servers) {
-        auto e = _leader_state->_progress.emplace(s.id, follower_progress{_fsm._log.next_idx(), index_t(0)});
+        auto e = _fsm._progress.emplace(s.id, follower_progress{_fsm._log.next_idx(), index_t(0)});
         if (s.id != _fsm._my_id) {
             _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(s.id, e.first->second));
         }
