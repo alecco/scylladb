@@ -59,10 +59,10 @@ index_t log::start_idx() const {
 }
 
 void log::stable_to(index_t idx) {
-    logger.trace("{} {}", _unstable_idx, idx);
-    assert(_unstable_idx < idx);
+    logger.trace("{} {}", _stable_idx, idx);
+    assert(_stable_idx < idx);
     assert(idx <= last_idx());
-    _unstable_idx = idx;
+    _stable_idx = idx;
 }
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
@@ -84,5 +84,23 @@ const log_entry& fsm::add_entry(command command) {
 
     return _log[_log.last_idx()];
 }
+
+
+void fsm::stable_to(term_t term, index_t idx) {
+
+    // It's OK if we get notifications about persisting
+    // entries out of order: we can simply skip outdated
+    // ones.
+    // @todo If we get a notification after a term has
+    // changed, we need to handle it by updating truncate
+    // offset.
+    assert(term == _current_term);
+
+    _log.stable_to(idx);
+    // update this server's state
+    _progress[_my_id].match_idx = idx;
+    _progress[_my_id].next_idx = index_t{idx + 1};
+}
+
 
 } // end of namespace raft

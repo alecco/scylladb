@@ -45,9 +45,9 @@ class log {
     // the index of the first entry in the log (index starts from 1)
     // will be increased by log gc
     index_t _start_idx = index_t(1);
-    // Index of the first unstable (not persisted) entry in the
+    // Index of the first stable (persisted) entry in the
     // log.
-    index_t _unstable_idx = index_t(0);
+    index_t _stable_idx = index_t(0);
 public:
     log_entry& operator[](size_t i);
     // reserve n additional entries
@@ -60,6 +60,9 @@ public:
     bool empty() const;
     index_t next_idx() const;
     index_t last_idx() const;
+    index_t stable_idx() const {
+        return _stable_idx;
+    }
     void truncate_head(size_t i);
     index_t start_idx() const;
 };
@@ -189,6 +192,9 @@ public:
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
     const log_entry& add_entry(command command);
+    // Called after an added entry is persisted on disk,
+    // is called on the leader.
+    void stable_to(term_t term, index_t idx);
 };
 
 } // namespace raft
