@@ -44,20 +44,15 @@ future<> server::start() {
 
 future<> server::add_entry(command command) {
 
-    _fsm.check_is_leader();
-
     logger.trace("An entry is submitted on a leader");
 
     // lock access to the raft log while it is been updated
     seastar::semaphore_units<> units = co_await seastar::get_units(*_log_lock, 1);
     logger.trace("Log lock acquired");
 
-    _fsm.check_is_leader(); // re-check in case leader changed while we were waiting for the lock
-
-    _fsm._log.ensure_capacity(1); // ensure we have enough memory to insert an entry
-    log_entry e{_fsm._current_term, _fsm._progress[_fsm._my_id].next_idx, std::move(command)};
-
-    _fsm._log.emplace_back(std::move(e));
+    // @todo: ensure the reference to the entry is stable between
+    // yields, before removing _log_lock.
+    const log_entry& e = _fsm.add_entry(std::move(command));
 
     co_await _storage->store_log_entry(e);
 
@@ -67,7 +62,7 @@ future<> server::add_entry(command command) {
     // update this server's state
     _fsm._progress[_fsm._my_id].match_idx = _fsm._progress[_fsm._my_id].next_idx++;
 
-    // this will track the commit status of the entry
+    // This will track the commit status of the entry
     auto [it, inserted] = _awaited_commits.emplace(e.idx, commit_status{_fsm._current_term, promise<>()});
     assert(inserted);
     // take future here since check_committed() may delete the _awaited_commits entry

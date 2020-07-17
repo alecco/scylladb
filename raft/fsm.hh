@@ -186,6 +186,9 @@ public:
     size_t quorum() const {
         return _current_config.servers.size() / 2 + 1;
     }
+    // Add an entry to in-memory log. The entry has to be
+    // committed to the persistent Raft log afterwards.
+    const log_entry& add_entry(command command);
 };
 
 } // namespace raft

@@ -74,4 +74,15 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
     assert(_current_leader.is_nil());
 }
 
+const log_entry& fsm::add_entry(command command) {
+    check_is_leader(); // it's only possible to add entries on a leader
+
+    _log.ensure_capacity(1); // ensure we have enough memory to insert an entry
+    log_entry e{_current_term, _progress[_my_id].next_idx, std::move(command)};
+
+    _log.emplace_back(std::move(e));
+
+    return _log[_log.last_idx()];
+}
+
 } // end of namespace raft
