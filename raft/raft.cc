@@ -24,10 +24,6 @@ namespace raft {
 
 seastar::logger logger("raft");
 
-future<seastar::semaphore_units<>> log::lock() {
-    return seastar::get_units(*_log_lock, 1);
-}
-
 log_entry& log::operator[](size_t i) {
     assert(index_t(i) >= _log_starting_index);
     return _log[i - _log_starting_index];

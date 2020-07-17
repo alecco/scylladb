@@ -77,6 +77,9 @@ private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
     std::unique_ptr<storage> _storage;
+    // Prevents concurrent writes to storage->store_log().
+    // Use unique_ptr to make server class movable (semaphore is not).
+    std::unique_ptr<seastar::semaphore> _log_lock = std::make_unique<seastar::semaphore>(1);
     // Protocol deterministic finite-state machine
     fsm _fsm;
 

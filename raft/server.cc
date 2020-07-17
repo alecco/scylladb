@@ -49,7 +49,7 @@ future<> server::add_entry(command command) {
     logger.trace("An entry is submitted on a leader");
 
     // lock access to the raft log while it is been updated
-    seastar::semaphore_units<> units = co_await _fsm._log.lock();
+    seastar::semaphore_units<> units = co_await seastar::get_units(*_log_lock, 1);
     logger.trace("Log lock acquired");
 
     _fsm.check_is_leader(); // re-check in case leader changed while we were waiting for the lock
