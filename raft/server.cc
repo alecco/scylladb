@@ -361,9 +361,9 @@ future<> server::applier_fiber() {
             _fsm._last_applied = last_applied; // has to be updated after apply succeeds, to not be snapshoted to early
         }
     } catch (seastar::broken_condition_variable&) {
-        // replication fiber is stopped explicitly.
+        // applier fiber is stopped explicitly.
     } catch (...) {
-        logger.error("replication fiber {} stopped because of the error: {}", _fsm._my_id, std::current_exception());
+        logger.error("applier fiber {} stopped because of the error: {}", _fsm._my_id, std::current_exception());
     }
     co_return;
 }
