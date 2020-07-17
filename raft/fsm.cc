@@ -26,6 +26,8 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)) {
 
+    logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
+
     assert(_current_leader.is_nil());
 }
 

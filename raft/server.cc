@@ -39,8 +39,6 @@ future<> server::start() {
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
 
-    logger.trace("{}: starting log length {}", _fsm._my_id, _fsm._log.last_idx());
-
     co_return;
 }
 
