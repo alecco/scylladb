@@ -50,13 +50,6 @@ public:
     virtual future<raft::snapshot> load_snapshot() { return make_ready_future<raft::snapshot>(raft::snapshot()); }
     virtual future<> store_log_entries(const std::vector<raft::log_entry>& entries) { co_return seastar::sleep(1ms); };
     virtual future<> store_log_entry(const raft::log_entry& entry) { co_return seastar::sleep(1ms); }
-    virtual future<raft::log> load_log() {
-        raft::log log;
-        for (auto&& e : _conf.log) {
-            log.emplace_back(std::move(e));
-        }
-        return make_ready_future<raft::log>(std::move(log));
-    }
     virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
     virtual future<> stop() { return make_ready_future<>(); }
 };
@@ -108,11 +101,15 @@ std::unordered_map<raft::server_id, rpc*> rpc::net;
 
 std::pair<std::unique_ptr<raft::server>, state_machine*> create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
         initial_state state = initial_state()) {
+    raft::log log;
+    for (auto&& e : state.log) {
+        log.emplace_back(std::move(e));
+    }
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
-    raft::fsm fsm{uuid, state.term, state.vote};
+    raft::fsm fsm{uuid, state.term, state.vote, std::move(log)};
     auto raft = std::make_unique<raft::server>(std::move(fsm), std::move(mrpc), std::move(sm), std::move(mstorage));
     return std::make_pair(std::move(raft), &rsm);
 }

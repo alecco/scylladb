@@ -85,10 +85,6 @@ private:
     // currently used configuration, may be different from committed during configuration change
     configuration _current_config;
 
-    // log entries; each entry contains command for state machine,
-    // and term when entry was received by leader
-    log _log;
-
     struct follower_progress {
         // index of the next log entry to send to that serve
         index_t next_idx;

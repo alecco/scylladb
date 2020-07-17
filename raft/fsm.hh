@@ -94,8 +94,11 @@ struct fsm {
     index_t _commit_index = index_t(0);
     // index of highest log entry applied to the state machine
     index_t _last_applied = index_t(0);
+    // log entries; each entry contains command for state machine,
+    // and term when entry was received by leader
+    log _log;
 public:
-    explicit fsm(server_id id, term_t current_term, server_id voted_for);
+    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
     bool is_leader() const {
         assert(_state != server_state::LEADER || _my_id == _current_leader);
