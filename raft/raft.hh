@@ -153,14 +153,10 @@ class log {
     // we need something that can be truncated form both sides.
     // std::deque move constructor is not nothrow hence cannot be used
     boost::container::deque<log_entry> _log;
-    // prevents concurrent write to the log
-    // it is unique_ptr to make log class movable (smeaophore is not)
-    std::unique_ptr<seastar::semaphore> _log_lock = std::make_unique<seastar::semaphore>(1);
     // the index of the first entry in the log (index starts from 1)
     // will be increased by log gc
     index_t _log_starting_index = index_t(1);
 public:
-    future<seastar::semaphore_units<>> lock();
     log_entry& operator[](size_t i);
     // reserve n additional entries
     void ensure_capacity(size_t n);
