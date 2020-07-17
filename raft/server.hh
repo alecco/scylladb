@@ -144,12 +144,12 @@ private:
     // each leadership transition is serialized by this future
     future<> _leadership_transition = make_ready_future();
 
-    // called when a node wins an election
-    future<> become_leader();
+    // Called when a node wins an election
+    future<> start_leadership();
 
-    // called when a node stops been a leader
+    // Called when a node stops being a leader
     // a future resolves when all the leader background work is stopped
-    future<> drop_leadership();
+    future<> stop_leadership();
 
     void become_follower();
 

@@ -216,7 +216,7 @@ void server::commit_entries(index_t new_commit_idx) {
     }
 }
 
-future<> server::become_leader() {
+future<> server::start_leadership() {
     assert(!_leader_state);
 
     _leadership_transition = make_ready_future<>(); // prepare to next transition
@@ -235,7 +235,7 @@ future<> server::become_leader() {
     co_return;
 }
 
-future<> server::drop_leadership() {
+future<> server::stop_leadership() {
     _leader_state->_log_entry_added.broken();
 
     // FIXME: waiting for https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95895 to be fixed
@@ -257,7 +257,7 @@ void server::become_follower() {
     _fsm.become_follower(server_id{});
     if (was_leader) {
         assert(_leadership_transition.available());
-        _leadership_transition = drop_leadership();
+        _leadership_transition = stop_leadership();
     }
 }
 
@@ -426,7 +426,7 @@ future<> server::make_me_leader() {
 
     _fsm.become_leader();
 
-    co_return become_leader();
+    co_return start_leadership();
 }
 
 } // end of namespace raft
