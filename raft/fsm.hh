@@ -89,6 +89,11 @@ struct fsm {
     term_t _current_term = term_t(0);
     // candidateId that received vote in current term (or nil if none)
     server_id _voted_for;
+    // commit_index && last_applied are volatile state
+    // index of highest log entry known to be committed
+    index_t _commit_index = index_t(0);
+    // index of highest log entry applied to the state machine
+    index_t _last_applied = index_t(0);
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for);
 
