@@ -108,7 +108,7 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
                 .leader_id = _fsm._my_id,
                 .prev_log_index = prev_index,
                 .prev_log_term = prev_term,
-                .leader_commit = _commit_index
+                .leader_commit = _fsm._commit_index
             },
             // TODO: send only one entry for now, but we should batch in the future
             std::vector<log_entry_cref>(1, std::cref(entry))
@@ -161,12 +161,12 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
 }
 
 void server::check_committed() {
-    index_t commit_index = _commit_index;
+    index_t commit_index = _fsm._commit_index;
     while (true) {
         size_t count = 0;
         for (const auto& p : _leader_state->_progress) {
-            logger.trace("check committed {}: {} {}", p.first, p.second.match_idx, _commit_index);
-            if (p.second.match_idx > _commit_index) {
+            logger.trace("check committed {}: {} {}", p.first, p.second.match_idx, _fsm._commit_index);
+            if (p.second.match_idx > _fsm._commit_index) {
                 count++;
             }
         }
@@ -192,16 +192,17 @@ void server::check_committed() {
 }
 
 void server::commit_entries(index_t new_commit_idx) {
-    assert(_commit_index <= new_commit_idx);
-    if (new_commit_idx == _commit_index) {
+    assert(_fsm._commit_index <= new_commit_idx);
+    if (new_commit_idx == _fsm._commit_index) {
         return;
     }
-    _commit_index = new_commit_idx;
-    logger.trace("commit_entries {}: signal apply thread: committed: {} applied: {}", _fsm._my_id, _commit_index, _last_applied);
+    _fsm._commit_index = new_commit_idx;
+    logger.trace("commit_entries {}: signal apply thread: committed: {} applied: {}", _fsm._my_id,
+        _fsm._commit_index, _fsm._last_applied);
     _apply_entries.signal();
     while (_awaited_commits.size() != 0) {
         auto it = _awaited_commits.begin();
-        if (it->first > _commit_index) {
+        if (it->first > _fsm._commit_index) {
             break;
         }
         auto [entry_idx, status] = std::move(*it);
@@ -349,20 +350,21 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
 future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
-        while(true) {
-            co_await _apply_entries.wait([this] { return _commit_index > _last_applied && _log.last_idx() > _last_applied; });
-            logger.trace("applier_fiber {} commit index: {} last applied: {}", _fsm._my_id, _commit_index, _last_applied);
+        while (true) {
+            co_await _apply_entries.wait([this] { return _fsm._commit_index > _fsm._last_applied && _log.last_idx() > _fsm._last_applied; });
+            logger.trace("applier_fiber {} commit index: {} last applied: {}", _fsm._my_id,
+                _fsm._commit_index, _fsm._last_applied);
             std::vector<command_cref> commands;
-            commands.reserve(_commit_index - _last_applied);
-            auto last_applied = _last_applied;
-            while(last_applied < _commit_index && _log.last_idx() > last_applied) {
+            commands.reserve(_fsm._commit_index - _fsm._last_applied);
+            auto last_applied = _fsm._last_applied;
+            while (last_applied < _fsm._commit_index && _log.last_idx() > last_applied) {
                 const auto& entry = _log[++last_applied];
                 if (std::holds_alternative<command>(entry.data)) {
                     commands.push_back(std::cref(std::get<command>(entry.data)));
                 }
             }
             co_await _state_machine->apply(std::move(commands));
-            _last_applied = last_applied; // has to be updated after apply succeeds, to not be snapshoted to early
+            _fsm._last_applied = last_applied; // has to be updated after apply succeeds, to not be snapshoted to early
         }
     } catch(seastar::broken_condition_variable&) {
         // replication fiber is stopped explicitly.
@@ -384,7 +386,7 @@ future<> server::keepalive_fiber() {
         keep_alive ka {
             .current_term = _fsm._current_term,
             .leader_id = _fsm._current_leader,
-            .leader_commit = _commit_index
+            .leader_commit = _fsm._commit_index
         };
 
         for (auto server : _current_config.servers) {

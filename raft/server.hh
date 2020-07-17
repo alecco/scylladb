@@ -85,12 +85,6 @@ private:
     // currently used configuration, may be different from committed during configuration change
     configuration _current_config;
 
-    // commit_index && last_applied are volatile state
-    // index of highest log entry known to be committed
-    index_t _commit_index = index_t(0);
-    // index of highest log entry applied to the state machine
-    index_t _last_applied =index_t(0);
-
     // log entries; each entry contains command for state machine,
     // and term when entry was received by leader
     log _log;
