@@ -108,6 +108,11 @@ struct fsm {
 
     // A state for each follower, maintained only on the leader.
     std::unordered_map<server_id, follower_progress> _progress;
+
+    // currently committed configuration
+    configuration _commited_config;
+    // currently used configuration, may be different from committed during configuration change
+    configuration _current_config;
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
@@ -140,6 +145,10 @@ public:
         assert(_current_term < current_term);
         _current_term = current_term;
         _voted_for = server_id{};
+    }
+    // Set cluster configuration, in real app should be taken from log
+    void set_configuration(const configuration& config) {
+        _current_config = _commited_config = config;
     }
 };
 
