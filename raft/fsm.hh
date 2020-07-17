@@ -45,11 +45,17 @@ class log {
     // the index of the first entry in the log (index starts from 1)
     // will be increased by log gc
     index_t _start_idx = index_t(1);
+    // Index of the first unstable (not persisted) entry in the
+    // log.
+    index_t _unstable_idx = index_t(0);
 public:
     log_entry& operator[](size_t i);
     // reserve n additional entries
     void ensure_capacity(size_t n);
     void emplace_back(log_entry&& e);
+    // Mark all entries up to this index
+    // as stable.
+    void stable_to(index_t idx);
     // return true if in memory log is empty
     bool empty() const;
     index_t next_idx() const;

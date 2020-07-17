@@ -58,6 +58,13 @@ index_t log::start_idx() const {
     return _start_idx;
 }
 
+void log::stable_to(index_t idx) {
+    logger.trace("{} {}", _unstable_idx, idx);
+    assert(_unstable_idx < idx);
+    assert(idx <= last_idx());
+    _unstable_idx = idx;
+}
+
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)) {
