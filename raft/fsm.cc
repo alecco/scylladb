@@ -22,6 +22,42 @@
 
 namespace raft {
 
+log_entry& log::operator[](size_t i) {
+    assert(index_t(i) >= _log_starting_index);
+    return _log[i - _log_starting_index];
+}
+
+// reserve n additional entries
+void log::ensure_capacity(size_t n) {
+     // there is not reserver for std::deque!
+     //_log.reserve(_log.size() + n);
+}
+
+void log::emplace_back(log_entry&& e) {
+    _log.emplace_back(std::move(e));
+}
+
+bool log::empty() const {
+    return _log.empty();
+}
+
+index_t log::last_idx() const {
+    return index_t(_log.size()) + _log_starting_index - index_t(1);
+}
+
+index_t log::next_idx() const {
+    return last_idx() + index_t(1);
+}
+
+void log::truncate_head(size_t i) {
+    auto it = _log.begin() + (i - _log_starting_index);
+    _log.erase(it, _log.end());
+}
+
+index_t log::start_index() const {
+    return _log_starting_index;
+}
+
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)) {

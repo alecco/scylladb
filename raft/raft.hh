@@ -144,31 +144,6 @@ struct log_entry {
     std::variant<command, configuration> data;
 };
 
-// this class represents raft log in memory
-// note that first value index is 1
-// new entries are added at the back
-// entries may be dropped form the beginning by snapshotting
-// and from the end by new leader replacing stale entries
-class log {
-    // we need something that can be truncated form both sides.
-    // std::deque move constructor is not nothrow hence cannot be used
-    boost::container::deque<log_entry> _log;
-    // the index of the first entry in the log (index starts from 1)
-    // will be increased by log gc
-    index_t _log_starting_index = index_t(1);
-public:
-    log_entry& operator[](size_t i);
-    // reserve n additional entries
-    void ensure_capacity(size_t n);
-    void emplace_back(log_entry&& e);
-    // return true if in memory log is empty
-    bool empty() const;
-    index_t next_idx() const;
-    index_t last_idx() const;
-    void truncate_head(size_t i);
-    index_t start_index() const;
-};
-
 struct error : public std::runtime_error {
     error(std::string error) : std::runtime_error(error) {}
 };
