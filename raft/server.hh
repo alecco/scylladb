@@ -151,8 +151,6 @@ private:
     // a future resolves when all the leader background work is stopped
     future<> stop_leadership();
 
-    void become_follower();
-
     // this fibers run in a background and applies commited entries
     future<> applier_fiber();
     // signaled when there is an entry to apply

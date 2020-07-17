@@ -128,7 +128,8 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
 
         if (reply.current_term > _fsm._current_term) {
             // receiver knows something about newer leader, so this server has to convert to a follower
-            become_follower();
+            _fsm.become_follower(server_id{});
+            _leadership_transition = stop_leadership();
             break;
         }
 
@@ -236,6 +237,7 @@ future<> server::start_leadership() {
 }
 
 future<> server::stop_leadership() {
+    assert(_leadership_transition.available());
     _leader_state->_log_entry_added.broken();
 
     // FIXME: waiting for https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95895 to be fixed
@@ -252,15 +254,6 @@ future<> server::stop_leadership() {
           });
 }
 
-void server::become_follower() {
-    bool was_leader = _fsm.is_leader();
-    _fsm.become_follower(server_id{});
-    if (was_leader) {
-        assert(_leadership_transition.available());
-        _leadership_transition = stop_leadership();
-    }
-}
-
 future<append_reply> server::append_entries(server_id from, append_request_recv&& append_request) {
 
     if (append_request.current_term < _fsm._current_term) {
@@ -272,7 +265,11 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
     assert(!_fsm.is_leader() || _fsm._current_term > append_request.current_term);
 
     if (!_fsm.is_follower()) {
-        become_follower();
+        bool was_leader = _fsm.is_leader();
+        _fsm.become_follower(server_id{});
+        if (was_leader) {
+            _leadership_transition = stop_leadership();
+        }
     }
 
     if (_fsm._current_term < append_request.current_term) {
@@ -403,8 +400,9 @@ future<> server::keepalive_fiber() {
 
 future<> server::stop() {
     logger.trace("stop() called");
-    if (!_fsm.is_follower()) {
-        become_follower();
+    if (_fsm.is_leader()) {
+        _fsm.become_follower(server_id{});
+        _leadership_transition = stop_leadership();
     }
     _apply_entries.broken();
     for (auto& ac: _awaited_commits) {
