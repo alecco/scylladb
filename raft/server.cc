@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "server.hh"
-#include <seastar/util/log.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
@@ -27,8 +26,6 @@
 using namespace std::chrono_literals;
 
 namespace raft {
-
-static seastar::logger logger("raft");
 
 server::server(
     fsm fsm, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
