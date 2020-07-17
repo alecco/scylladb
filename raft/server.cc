@@ -56,12 +56,14 @@ future<> server::add_entry(command command) {
 
     _fsm._log.ensure_capacity(1); // ensure we have enough memory to insert an entry
     log_entry e{_fsm._current_term, _fsm._progress[_fsm._my_id].next_idx, std::move(command)};
+
+    _fsm._log.emplace_back(std::move(e));
+
     co_await _storage->store_log_entry(e);
 
     logger.trace("Log entry is persisted locally");
 
-    // put into the log after persisting, so that if persisting fails the entry will not end up in a log
-    _fsm._log.emplace_back(std::move(e));
+    _fsm._log.stable_to(_fsm._progress[_fsm._my_id].next_idx);
     // update this server's state
     _fsm._progress[_fsm._my_id].match_idx = _fsm._progress[_fsm._my_id].next_idx++;
 
@@ -336,6 +338,7 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
         for (auto&& e : to_add) {
             // put into the log after persisting, so that if persisting fails the entry will not end up in a log
             _fsm._log.emplace_back(std::move(e));
+            _fsm._log.stable_to(_fsm._log.last_idx());
         }
     }
 
