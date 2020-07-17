@@ -88,19 +88,10 @@ private:
     // currently used configuration, may be different from committed during configuration change
     configuration _current_config;
 
-    struct follower_progress {
-        // index of the next log entry to send to that serve
-        index_t next_idx;
-        // index of highest log entry known to be replicated on the node
-        index_t match_idx;
-    };
-
     // the sate that is valid only on leader
     struct leader_state {
         // signaled on a leader each time an entry is added to the log
         seastar::condition_variable _log_entry_added;
-        // a state for each follower
-        std::unordered_map<server_id, follower_progress> _progress;
         // on a leader holds futures of all replication fibers
         std::vector<future<>> _replicatoin_fibers;
         // status of a keepalive fiber
@@ -119,7 +110,7 @@ private:
 
     // constantly replicate the log to a given node.
     // Started when a server becomes a leader
-    // Stopped when a server stopped been a leader
+    // Stopped when a server stopped being a leader
     future<> replication_fiber(server_id id, follower_progress& state);
 
     // called when one of the replicas advanced its match index
