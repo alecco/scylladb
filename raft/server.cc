@@ -79,7 +79,7 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
             // everything is replicated already, wait for the next entry to be added
             try {
                 co_await _leader_state->_log_entry_added.wait();
-            } catch(...) {
+            } catch (...) {
                 continue; // if waiting for cv failed continue
             }
         }
@@ -107,7 +107,7 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
 
         try {
             reply = co_await _rpc->send_append_entries(server, req);
-        } catch(...) {
+        } catch (...) {
             continue; // if there was an error sending try again
         }
 
@@ -360,9 +360,9 @@ future<> server::applier_fiber() {
             co_await _state_machine->apply(std::move(commands));
             _fsm._last_applied = last_applied; // has to be updated after apply succeeds, to not be snapshoted to early
         }
-    } catch(seastar::broken_condition_variable&) {
+    } catch (seastar::broken_condition_variable&) {
         // replication fiber is stopped explicitly.
-    } catch(...) {
+    } catch (...) {
         logger.error("replication fiber {} stopped because of the error: {}", _fsm._my_id, std::current_exception());
     }
     co_return;
