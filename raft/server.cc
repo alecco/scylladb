@@ -173,8 +173,7 @@ void server::check_committed() {
 }
 
 void server::commit_entries(index_t new_commit_idx) {
-    assert(_fsm._commit_idx <= new_commit_idx);
-    if (new_commit_idx == _fsm._commit_idx) {
+    if (new_commit_idx <= _fsm._commit_idx) {
         return;
     }
     _fsm._commit_idx = new_commit_idx;
