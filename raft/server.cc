@@ -277,6 +277,9 @@ void server::become_follower() {
 }
 
 future<append_reply> server::append_entries(server_id from, append_request_recv&& append_request) {
+    // lock access to the raft log while it is been updated
+    seastar::semaphore_units<> units = co_await _log.lock();
+
     if (append_request.current_term < _current_term) {
         co_return append_reply{_current_term, false, term_t(0), index_t(0)};
     }
