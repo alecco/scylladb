@@ -107,6 +107,10 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
     for (auto&& e : state.log) {
         log.emplace_back(std::move(e));
     }
+    if (state.log.size()) {
+        log.stable_to(raft::index_t(state.log.size()));
+    }
+
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
@@ -326,7 +330,9 @@ int main(int argc, char* argv[]) {
     };
 
     return app.run(argc, argv, [&tests] () -> future<> {
+        int i = 0;
         for (auto& t : tests) {
+            tlogger.debug("test: {}", i++);
             co_await t();
         }
     });
