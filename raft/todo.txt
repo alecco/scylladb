@@ -1,0 +1,5 @@
+1. log_finer() races with append_entries(), need to find a solution
+2. stable_to() does not support truncation
+3. stable_to() updates leader's state but called on non leader as well
+4. make leader state optional so the error above will be obvious
+5. low prio: drop _my_id from fsm, it should be a server property.
