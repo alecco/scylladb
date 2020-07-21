@@ -44,12 +44,12 @@ class storage : public raft::storage {
 public:
     storage(initial_state conf) : _conf(std::move(conf)) {}
     storage() {}
-    virtual future<> store_term(raft::term_t term) { co_return seastar::sleep(1ms); }
+    virtual future<> store_term(raft::term_t term) { co_return seastar::sleep(1us); }
     virtual future<> store_vote(raft::server_id vote) { return make_ready_future<>(); }
     virtual future<> store_snapshot(raft::snapshot snap, size_t preserve_log_entries) { return make_ready_future<>(); }
     virtual future<raft::snapshot> load_snapshot() { return make_ready_future<raft::snapshot>(raft::snapshot()); }
-    virtual future<> store_log_entries(const std::vector<raft::log_entry>& entries) { co_return seastar::sleep(1ms); };
-    virtual future<> store_log_entry(const raft::log_entry& entry) { co_return seastar::sleep(1ms); }
+    virtual future<> store_log_entries(const std::vector<raft::log_entry>& entries) { co_return seastar::sleep(1us); };
+    virtual future<> store_log_entry(const raft::log_entry& entry) { co_return seastar::sleep(1us); }
     virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
     virtual future<> stop() { return make_ready_future<>(); }
 };
