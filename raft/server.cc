@@ -49,8 +49,6 @@ future<> server::add_entry(command command) {
     logger.trace("An entry is submitted on a leader");
 
     // lock access to the raft log while it is been updated
-//    seastar::semaphore_units<> units = co_await seastar::get_units(*_log_lock, 1);
-    logger.trace("Log lock acquired");
 
     // @todo: ensure the reference to the entry is stable between
     // yields, before removing _log_lock.
@@ -61,8 +59,7 @@ future<> server::add_entry(command command) {
     // This will track the commit status of the entry
     auto [it, inserted] = _awaited_commits.emplace(e.idx, commit_status{_fsm._current_term, promise<>()});
     assert(inserted);
-    future<> f = it->second.committed.get_future();
-    co_return std::move(f);
+    return it->second.committed.get_future();
 }
 
 future<> server::replication_fiber(server_id server, follower_progress& state) {
@@ -236,7 +233,6 @@ future<> server::stop_leadership() {
 }
 
 future<append_reply> server::append_entries(server_id from, append_request_recv&& append_request) {
-
     if (append_request.current_term < _fsm._current_term) {
         co_return append_reply{_fsm._current_term, false, term_t(0), index_t(0)};
     }
@@ -309,57 +305,69 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
                     _fsm._my_id, e.idx, e.term, _fsm._log[e.idx].term);
                 // If an existing entry conflicts with a new one (same index but different terms), delete the existing
                 // entry and all that follow it (§5.3)
-                co_await _storage->truncate_log(e.idx);
                 _fsm._log.truncate_head(e.idx);
                 append = true; // append after we truncated
             }
             to_add.emplace_back(std::move(e));
         }
 
-        _fsm._log.ensure_capacity(to_add.size()); // ensure that we have enough memory before trying IO
-        co_await _storage->store_log_entries(to_add);
-
         for (auto&& e : to_add) {
             // put into the log after persisting, so that if persisting fails the entry will not end up in a log
             _fsm._log.emplace_back(std::move(e));
-            _fsm._log.stable_to(_fsm._log.last_idx());
         }
+        _log_entries.broadcast(); // signal to log_fiber
     }
 
     logger.trace("append_entries[{}]: leader_commit_idx={}", _fsm._my_id, append_request.leader_commit_idx);
     commit_entries(append_request.leader_commit_idx);
 
+    // FIXME: we should return successful apply only after log_fiber persists it
+    // it lets us know by calling stable_to();
     co_return append_reply{_fsm._current_term, true};
 }
 
 future<> server::log_fiber() {
     logger.trace("log_fiber start");
     try {
+        index_t last_stable = _fsm._log.stable_idx();
         while (true) {
             co_await _log_entries.wait([this] { return _fsm._log.stable_idx() < _fsm._log.last_idx(); });
             logger.trace("log_fiber {} stable index: {} last index: {}", _fsm._my_id,
                 _fsm._log.stable_idx(), _fsm._log.last_idx());
 
+            auto diff = _fsm._log.last_idx() - _fsm._log.stable_idx();
 
-            auto stable_idx = _fsm._log.stable_idx();
-            while (stable_idx < _fsm._log.last_idx()) {
-                // @todo: remove _log_lock, it requires making entry
-                // reference stable and possibly adjusting stable_to() for
-                // out-of-order updates.
-                seastar::semaphore_units<> units = co_await seastar::get_units(*_log_lock, 1);
-                const log_entry& entry = _fsm._log[++stable_idx];
-                assert(entry.idx == stable_idx);
-                // @todo: switch to batched store_log_entry API
-                co_await _storage->store_log_entry(entry);
-                logger.trace("{} Log entry {} is persisted locally", _fsm._my_id, stable_idx);
-                _fsm.stable_to(entry.term, entry.idx);
-
-                if (_fsm._current_config.servers.size() == 1) { // special case for one node cluster
-                    check_committed();
-                } else if (_fsm.is_leader()) {
-                    _leader_state->_log_entry_added.broadcast();
-                }
+            if (!diff) { // may happen if the log was truncated between the vn check and continuation been ran
+                continue;
             }
+
+            std::vector<log_entry> entries;
+            entries.reserve(diff);
+            for (auto i = _fsm._log.stable_idx() + 1; i <= _fsm._log.last_idx(); i++) {
+                // copy before saving to storage to prevent races with log updates
+                // TODO: make it better!
+                entries.emplace_back(_fsm._log[i]);
+            }
+
+            if (last_stable > entries[0].idx) {
+                co_await _storage->truncate_log(entries[0].idx);
+            }
+            // Combine saving and truncating into one call?
+            // will requre storage to keep track of last idx
+            co_await _storage->store_log_entries(entries);
+
+            // advance stable position
+            _fsm.stable_to(entries.crbegin()->term, entries.crbegin()->idx);
+            // make apply fiber to re-check if anything should be applied
+            _apply_entries.signal();
+
+            if (_fsm._current_config.servers.size() == 1) { // special case for one node cluster
+                check_committed();
+            } else if (_fsm.is_leader()) {
+                _leader_state->_log_entry_added.broadcast();
+            }
+
+            last_stable = entries.crbegin()->idx;
         }
     } catch (seastar::broken_condition_variable&) {
         // log fiber is stopped explicitly.
@@ -380,7 +388,7 @@ future<> server::applier_fiber() {
             std::vector<command_cref> commands;
             commands.reserve(_fsm._commit_idx - _fsm._last_applied);
             auto last_applied = _fsm._last_applied;
-            while (last_applied < _fsm._commit_idx && _fsm._log.stable_idx() > last_applied) {
+            while (last_applied < _fsm._commit_idx && _fsm._log.stable_idx() > last_applied ) {
                 const auto& entry = _fsm._log[++last_applied];
                 if (std::holds_alternative<command>(entry.data)) {
                     commands.push_back(std::cref(std::get<command>(entry.data)));
