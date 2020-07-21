@@ -51,7 +51,6 @@ class log {
 public:
     log_entry& operator[](size_t i);
     // reserve n additional entries
-    void ensure_capacity(size_t n);
     void emplace_back(log_entry&& e);
     // Mark all entries up to this index
     // as stable.

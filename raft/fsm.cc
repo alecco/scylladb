@@ -27,12 +27,6 @@ log_entry& log::operator[](size_t i) {
     return _log[i - _start_idx];
 }
 
-// reserve n additional entries
-void log::ensure_capacity(size_t n) {
-     // there is not reserver for std::deque!
-     //_log.reserve(_log.size() + n);
-}
-
 void log::emplace_back(log_entry&& e) {
     _log.emplace_back(std::move(e));
 }
@@ -59,7 +53,6 @@ index_t log::start_idx() const {
 }
 
 void log::stable_to(index_t idx) {
-    assert(_stable_idx < idx);
     assert(idx <= last_idx());
     _stable_idx = idx;
 }
@@ -76,30 +69,22 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
 const log_entry& fsm::add_entry(command command) {
     check_is_leader(); // it's only possible to add entries on a leader
 
-    _log.ensure_capacity(1); // ensure we have enough memory to insert an entry
-    log_entry e{_current_term, _log.next_idx(), std::move(command)};
-
-    _log.emplace_back(std::move(e));
+    _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
 
     return _log[_log.last_idx()];
 }
 
-
 void fsm::stable_to(term_t term, index_t idx) {
+    if (_log.last_idx() < idx) { // log was truncated while persisted
+        return;
+    }
 
-    // It's OK if we get notifications about persisting
-    // entries out of order: we can simply skip outdated
-    // ones.
-    // @todo If we get a notification after a term has
-    // changed, we need to handle it by updating truncate
-    // offset.
-    if (term == _current_term && idx > _log.stable_idx()) {
+    if (_log[idx].term == term) { // it terms do not much it means log was truncated
         _log.stable_to(idx);
-        // update this server's state
-        _progress[_my_id].match_idx = idx;
-        _progress[_my_id].next_idx = index_t{idx + 1};
+        if (is_leader()) {
+            _progress[_my_id].match_idx = idx;
+            _progress[_my_id].next_idx = index_t{idx + 1};
+        }
     }
 }
-
-
 } // end of namespace raft
