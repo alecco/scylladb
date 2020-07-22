@@ -57,7 +57,7 @@ future<> server::add_entry(command command) {
     _log_entries.broadcast();
 
     // This will track the commit status of the entry
-    auto [it, inserted] = _awaited_commits.emplace(e.idx, commit_status{_fsm._current_term, promise<>()});
+    auto [it, inserted] = _awaited_commits.emplace(e.idx, commit_status{e.term, promise<>()});
     assert(inserted);
     return it->second.committed.get_future();
 }
