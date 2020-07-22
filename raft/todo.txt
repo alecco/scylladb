@@ -16,3 +16,5 @@
   fibers stopped second.
   The safest bet would be to resolve _leadership_transition
   future *before* state machine state change, not after.
+* add a test case when we can't commit even though followers
+  have made progress, but the term has changed.
