@@ -67,7 +67,8 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
 }
 
 const log_entry& fsm::add_entry(command command) {
-    check_is_leader(); // it's only possible to add entries on a leader
+    // It's only possible to add entries on a leader
+    check_is_leader();
 
     _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
 
@@ -92,11 +93,13 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::stable_to(term_t term, index_t idx) {
-    if (_log.last_idx() < idx) { // log was truncated while persisted
+    if (_log.last_idx() < idx) {
+        // The log was truncated while being persisted
         return;
     }
 
-    if (_log[idx].term == term) { // it terms do not much it means log was truncated
+    if (_log[idx].term == term) {
+        // If the terms do not match it means the log was truncated.
         _log.stable_to(idx);
         if (is_leader()) {
             (*_progress)[_my_id].match_idx = idx;
@@ -104,4 +107,5 @@ void fsm::stable_to(term_t term, index_t idx) {
         }
     }
 }
+
 } // end of namespace raft
