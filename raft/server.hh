@@ -103,12 +103,13 @@ private:
     // Stopped when a server stopped being a leader
     future<> replication_fiber(server_id id, follower_progress& state);
 
-    // called when one of the replicas advanced its match index
-    // so it may be the case that some entries are committed now
-    void check_committed();
+    // Called when one of the replicas advanced its match index
+    // so it may be the case that some entries are committed now.
+    // @return true if there are entries that should be committed.
+    bool check_committed();
 
-    // called when next entry is committed (on a leader or otherwise)
-    void commit_entries(index_t);
+    // Called to commit entries (on a leader or otherwise).
+    void commit_entries();
 
     // each leadership transition is serialized by this future
     future<> _leadership_transition = make_ready_future();
