@@ -176,6 +176,10 @@ public:
     // Set cluster configuration, in real app should be taken from log
     void set_configuration(const configuration& config) {
         _current_config = _commited_config = config;
+        // We use quorum() - 1 as an index in
+        // a sorted array of follower positions to
+        // identify which entries are committed.
+        assert(quorum() > 0);
     }
     // Calculates current quorum
     size_t quorum() const {
