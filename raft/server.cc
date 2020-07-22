@@ -204,10 +204,9 @@ future<> server::start_leadership() {
     // start sending keepalives to maintain leadership
     _leader_state->keepalive_status = keepalive_fiber();
 
-    for (auto s : _fsm._current_config.servers) {
-        auto e = _fsm._progress->emplace(s.id, follower_progress{_fsm._log.next_idx(), index_t(0)});
-        if (s.id != _fsm._my_id) {
-            _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(s.id, e.first->second));
+    for (auto& p : *(_fsm._progress)) {
+        if (p.first != _fsm._my_id) {
+            _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(p.first, p.second));
         }
     }
 

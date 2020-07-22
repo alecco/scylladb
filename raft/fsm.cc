@@ -82,6 +82,9 @@ void fsm::become_leader() {
     _state = server_state::LEADER;
     _current_leader = _my_id;
     _progress.emplace();
+    for (auto s : _current_config.servers) {
+        _progress->emplace(s.id, follower_progress{_log.next_idx(), index_t(0)});
+    }
 }
 
 void fsm::become_follower(server_id leader) {
