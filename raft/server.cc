@@ -132,48 +132,12 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
             state.match_idx = state.next_idx++;
 
             // check if any new entry can be committed
-            if (check_committed()) {
+            if (_fsm.check_committed()) {
                 commit_entries();
             }
         }
     }
     co_return;
-}
-
-bool server::check_committed() {
-
-    std::vector<index_t> match;
-    size_t count = 0;
-
-    for (const auto& p : *(_fsm._progress)) {
-        logger.trace("check committed {}: {} {}", p.first, p.second.match_idx, _fsm._commit_idx);
-        if (p.second.match_idx > _fsm._commit_idx) {
-            count++;
-        }
-        match.push_back(p.second.match_idx);
-    }
-    logger.trace("check committed count {} quorum {}", count, _fsm.quorum());
-    if (count < _fsm.quorum()) {
-        return false;
-    }
-    std::nth_element(match.begin(), match.begin() + _fsm.quorum() - 1, match.end());
-    index_t commit_idx = match[_fsm.quorum() - 1];
-
-    assert(commit_idx > _fsm._commit_idx);
-
-    if (_fsm._log[commit_idx].term != _fsm._current_term) {
-        // Only entries from the current term can be committed
-        // based on vote counting, so if current log entry has
-        // different term lets move to the next one in hope it
-        // is committed already and has current term
-        logger.trace("check committed: cannot commit because of term {} != {}", _fsm._log[commit_idx].term, _fsm._current_term);
-        return false;
-    }
-    logger.trace("check committed commit {}", commit_idx);
-    _fsm._commit_idx = commit_idx;
-    // We have quorum of servers with match_idx greater than current commit.
-    // It means we can commit the next entry.
-    return true;
 }
 
 void server::commit_entries() {
@@ -367,7 +331,7 @@ future<> server::log_fiber() {
             _apply_entries.signal();
 
             if (_fsm._current_config.servers.size() == 1) { // special case for one node cluster
-                if (check_committed()) {
+                if (_fsm.check_committed()) {
                     commit_entries();
                 }
             } else if (_fsm.is_leader()) {

@@ -191,6 +191,11 @@ public:
     // Called after an added entry is persisted on disk,
     // is called on the leader.
     void stable_to(term_t term, index_t idx);
+
+    // Called when one of the replicas advanced its match index
+    // so it may be the case that some entries are committed now.
+    // @return true if there are entries that should be committed.
+    bool check_committed();
 };
 
 } // namespace raft
