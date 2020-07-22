@@ -74,6 +74,23 @@ const log_entry& fsm::add_entry(command command) {
     return _log[_log.last_idx()];
 }
 
+void fsm::become_leader() {
+
+    assert(_state != server_state::LEADER);
+    assert(!_progress);
+    _state = server_state::LEADER;
+    _current_leader = _my_id;
+    _progress.emplace();
+}
+
+void fsm::become_follower(server_id leader) {
+
+    assert(_state != server_state::FOLLOWER);
+    _current_leader = leader;
+    _state = server_state::FOLLOWER;
+    _progress = std::nullopt;
+}
+
 void fsm::stable_to(term_t term, index_t idx) {
     if (_log.last_idx() < idx) { // log was truncated while persisted
         return;
