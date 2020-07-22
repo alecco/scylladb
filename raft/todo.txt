@@ -3,3 +3,6 @@
 * stable_to() updates leader's state but called on non leader as well
 * low prio: drop _my_id from fsm, it should be a server property.
 * Put back load_vote() and load_term()
+* when switching to leader state, we currently assume each follower
+  is at the current term and match_idx is 0. We need to extend AppendEntries
+  RPC  to efficiently inform the leader about the follower position.
