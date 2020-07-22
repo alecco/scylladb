@@ -82,8 +82,8 @@ void fsm::stable_to(term_t term, index_t idx) {
     if (_log[idx].term == term) { // it terms do not much it means log was truncated
         _log.stable_to(idx);
         if (is_leader()) {
-            _progress[_my_id].match_idx = idx;
-            _progress[_my_id].next_idx = index_t{idx + 1};
+            (*_progress)[_my_id].match_idx = idx;
+            (*_progress)[_my_id].next_idx = index_t{idx + 1};
         }
     }
 }

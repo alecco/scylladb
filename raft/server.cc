@@ -142,7 +142,7 @@ void server::check_committed() {
     index_t commit_idx = _fsm._commit_idx;
     while (true) {
         size_t count = 0;
-        for (const auto& p : _fsm._progress) {
+        for (const auto& p : *(_fsm._progress)) {
             logger.trace("check committed {}: {} {}", p.first, p.second.match_idx, _fsm._commit_idx);
             if (p.second.match_idx > _fsm._commit_idx) {
                 count++;
@@ -205,7 +205,7 @@ future<> server::start_leadership() {
     _leader_state->keepalive_status = keepalive_fiber();
 
     for (auto s : _fsm._current_config.servers) {
-        auto e = _fsm._progress.emplace(s.id, follower_progress{_fsm._log.next_idx(), index_t(0)});
+        auto e = _fsm._progress->emplace(s.id, follower_progress{_fsm._log.next_idx(), index_t(0)});
         if (s.id != _fsm._my_id) {
             _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(s.id, e.first->second));
         }

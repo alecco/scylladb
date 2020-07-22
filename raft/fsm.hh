@@ -141,7 +141,7 @@ struct fsm {
     log _log;
 
     // A state for each follower, maintained only on the leader.
-    std::unordered_map<server_id, follower_progress> _progress;
+    std::optional<std::unordered_map<server_id, follower_progress>> _progress;
 
     // currently committed configuration
     configuration _commited_config;
@@ -164,15 +164,16 @@ public:
     }
     void become_leader() {
         assert(_state != server_state::LEADER);
-        assert(_progress.empty());
+        assert(!_progress);
         _state = server_state::LEADER;
         _current_leader = _my_id;
+        _progress.emplace();
     }
     void become_follower(server_id leader) {
         assert(_state != server_state::FOLLOWER);
         _current_leader = leader;
         _state = server_state::FOLLOWER;
-        _progress.clear();
+        _progress = std::nullopt;
     }
     void update_current_term(term_t current_term) {
         assert(_state == server_state::FOLLOWER);
