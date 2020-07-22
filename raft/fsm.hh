@@ -162,19 +162,11 @@ public:
             throw not_leader(_current_leader);
         }
     }
-    void become_leader() {
-        assert(_state != server_state::LEADER);
-        assert(!_progress);
-        _state = server_state::LEADER;
-        _current_leader = _my_id;
-        _progress.emplace();
-    }
-    void become_follower(server_id leader) {
-        assert(_state != server_state::FOLLOWER);
-        _current_leader = leader;
-        _state = server_state::FOLLOWER;
-        _progress = std::nullopt;
-    }
+
+    void become_leader();
+
+    void become_follower(server_id leader);
+
     void update_current_term(term_t current_term) {
         assert(_state == server_state::FOLLOWER);
         assert(_current_term < current_term);
