@@ -132,13 +132,15 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
             state.match_idx = state.next_idx++;
 
             // check if any new entry can be committed
-            check_committed();
+            if (check_committed()) {
+                commit_entries();
+            }
         }
     }
     co_return;
 }
 
-void server::check_committed() {
+bool server::check_committed() {
 
     std::vector<index_t> match;
     size_t count = 0;
@@ -152,7 +154,7 @@ void server::check_committed() {
     }
     logger.trace("check committed count {} quorum {}", count, _fsm.quorum());
     if (count < _fsm.quorum()) {
-        return;
+        return false;
     }
     std::nth_element(match.begin(), match.begin() + _fsm.quorum() - 1, match.end());
     index_t commit_idx = match[_fsm.quorum() - 1];
@@ -165,19 +167,16 @@ void server::check_committed() {
         // different term lets move to the next one in hope it
         // is committed already and has current term
         logger.trace("check committed: cannot commit because of term {} != {}", _fsm._log[commit_idx].term, _fsm._current_term);
-        return;
+        return false;
     }
     logger.trace("check committed commit {}", commit_idx);
-    // we have quorum of servers with match_idx greater than current commit
-    // it means we can commit next entry
-    commit_entries(commit_idx);
+    _fsm._commit_idx = commit_idx;
+    // We have quorum of servers with match_idx greater than current commit.
+    // It means we can commit the next entry.
+    return true;
 }
 
-void server::commit_entries(index_t new_commit_idx) {
-    if (new_commit_idx <= _fsm._commit_idx) {
-        return;
-    }
-    _fsm._commit_idx = new_commit_idx;
+void server::commit_entries() {
     logger.trace("commit_entries {}: signal apply thread: committed: {} applied: {}", _fsm._my_id,
         _fsm._commit_idx, _fsm._last_applied);
     _apply_entries.signal();
@@ -322,7 +321,10 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
     }
 
     logger.trace("append_entries[{}]: leader_commit_idx={}", _fsm._my_id, append_request.leader_commit_idx);
-    commit_entries(append_request.leader_commit_idx);
+    if (append_request.leader_commit_idx > _fsm._commit_idx) {
+        _fsm._commit_idx = append_request.leader_commit_idx;
+        commit_entries();
+    }
 
     // FIXME: we should return successful apply only after log_fiber persists it
     // it lets us know by calling stable_to();
@@ -365,7 +367,9 @@ future<> server::log_fiber() {
             _apply_entries.signal();
 
             if (_fsm._current_config.servers.size() == 1) { // special case for one node cluster
-                check_committed();
+                if (check_committed()) {
+                    commit_entries();
+                }
             } else if (_fsm.is_leader()) {
                 _leader_state->_log_entry_added.broadcast();
             }
