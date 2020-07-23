@@ -46,6 +46,7 @@ index_t log::next_idx() const {
 void log::truncate_head(size_t i) {
     auto it = _log.begin() + (i - _start_idx);
     _log.erase(it, _log.end());
+    stable_to(last_idx());
 }
 
 index_t log::start_idx() const {

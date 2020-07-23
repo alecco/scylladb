@@ -78,6 +78,10 @@ private:
     // Protocol deterministic finite-state machine
     fsm _fsm;
 
+    // holds all the replies to append_entry rpc for not yet persisted log entries
+    // FIXME: should be part of a follower state
+    std::vector<promise<>> _append_replies;
+
     // the sate that is valid only on leader
     struct leader_state {
         // signaled on a leader each time an entry is added to the log

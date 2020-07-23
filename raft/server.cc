@@ -223,6 +223,8 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
 
     // TODO: need to handle keep alive management here
 
+    auto reply = make_ready_future<append_reply>(append_reply{_fsm._current_term, true});
+
     if (append_request.entries.size()) {
         // empty request is just a heartbeat, only leader_commit_idx is interesting
         logger.trace("append_entries[{}]: my log length {}, received prev_log_idx {}\n",
@@ -281,7 +283,14 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
             // put into the log after persisting, so that if persisting fails the entry will not end up in a log
             _fsm._log.emplace_back(std::move(e));
         }
+
         _log_entries.broadcast(); // signal to log_fiber
+
+        // add a future to a bag of replies that need to be send after current log is persisted
+        _append_replies.push_back(promise<>());
+        reply = _append_replies.back().get_future().then([ar = append_reply{_fsm._current_term, true}] { return ar; });
+        // cap commit index by entries we received
+        append_request.leader_commit_idx = std::min(append_request.leader_commit_idx, _fsm._log.last_idx());
     }
 
     logger.trace("append_entries[{}]: leader_commit_idx={}", _fsm._my_id, append_request.leader_commit_idx);
@@ -290,9 +299,7 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
         commit_entries();
     }
 
-    // FIXME: we should return successful apply only after log_fiber persists it
-    // it lets us know by calling stable_to();
-    co_return append_reply{_fsm._current_term, true};
+    co_return std::move(reply);
 }
 
 future<> server::log_fiber() {
@@ -306,7 +313,7 @@ future<> server::log_fiber() {
 
             auto diff = _fsm._log.last_idx() - _fsm._log.stable_idx();
 
-            if (!diff) { // may happen if the log was truncated between the vn check and continuation been ran
+            if (!diff) { // may happen if the log was truncated between the cv check and continuation been ran
                 continue;
             }
 
@@ -318,12 +325,21 @@ future<> server::log_fiber() {
                 entries.emplace_back(_fsm._log[i]);
             }
 
+            // get a snapshot of all unsent reply as well
+            std::vector<promise<>> append_replies;
+            std::swap(append_replies, _append_replies);
+
             if (last_stable > entries[0].idx) {
                 co_await _storage->truncate_log(entries[0].idx);
             }
             // Combine saving and truncating into one call?
             // will requre storage to keep track of last idx
             co_await _storage->store_log_entries(entries);
+
+            // after entries are persisted we can send replies
+            for (auto&& p : append_replies) {
+                p.set_value();
+            }
 
             // advance stable position
             _fsm.stable_to(entries.crbegin()->term, entries.crbegin()->idx);
@@ -354,8 +370,8 @@ future<> server::applier_fiber() {
     try {
         while (true) {
             co_await _apply_entries.wait([this] { return _fsm._commit_idx > _fsm._last_applied && _fsm._log.stable_idx() > _fsm._last_applied; });
-            logger.trace("applier_fiber {} commit index: {} last applied: {}", _fsm._my_id,
-                _fsm._commit_idx, _fsm._last_applied);
+            logger.trace("applier_fiber {} commit index: {} last applied: {} stable_idx: {} last_idx: {}", _fsm._my_id,
+                _fsm._commit_idx, _fsm._last_applied, _fsm._log.stable_idx(), _fsm._log.last_idx());
             std::vector<command_cref> commands;
             commands.reserve(_fsm._commit_idx - _fsm._last_applied);
             auto last_applied = _fsm._last_applied;
@@ -393,6 +409,8 @@ future<> server::keepalive_fiber() {
 
         for (auto server : _fsm._current_config.servers) {
             if (server.id != _fsm._my_id) {
+                // cap committed index by math_idx otherwise a follower may commit unmatched entries
+                ka.leader_commit_idx = std::min(_fsm._commit_idx, (*_fsm._progress)[server.id].match_idx);
                 _rpc->send_keepalive(server.id, ka);
             }
         }
