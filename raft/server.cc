@@ -364,26 +364,22 @@ future<> server::log_fiber() {
     co_return;
 }
 
-
 future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while (true) {
-            co_await _apply_entries.wait([this] { return _fsm._commit_idx > _fsm._last_applied && _fsm._log.stable_idx() > _fsm._last_applied; });
-            logger.trace("applier_fiber {} commit index: {} last applied: {} stable_idx: {} last_idx: {}", _fsm._my_id,
-                _fsm._commit_idx, _fsm._last_applied, _fsm._log.stable_idx(), _fsm._log.last_idx());
-            std::vector<command_cref> commands;
-            commands.reserve(_fsm._commit_idx - _fsm._last_applied);
-            auto last_applied = _fsm._last_applied;
-            while (last_applied < _fsm._commit_idx && _fsm._log.stable_idx() > last_applied ) {
-                const auto& entry = _fsm._log[++last_applied];
-                if (std::holds_alternative<command>(entry.data)) {
-                    commands.push_back(std::cref(std::get<command>(entry.data)));
+            co_await _apply_entries.wait().then([this] {
+
+                std::optional<apply_batch> batch =  _fsm.apply_entries();
+                if (batch) {
+                    logger.trace("applier_fiber {} applying up to {}", _fsm._my_id, batch->idx);
+                    return _state_machine->apply(std::move(batch->commands)).then([this, batch = std::move(batch)] {
+                        // Has to be updated after apply succeeds, to not snapshot too early
+                        _fsm.applied_to(batch->idx);
+                    });
                 }
-            }
-            co_await _state_machine->apply(std::move(commands));
-            // Has to be updated after apply succeeds, to not snapshot too early
-            _fsm.applied_to(last_applied);
+                return make_ready_future<>();
+            });
         }
     } catch (seastar::broken_condition_variable&) {
         // applier fiber is stopped explicitly.
