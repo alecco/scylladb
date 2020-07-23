@@ -192,6 +192,15 @@ public:
     // is called on the leader.
     void stable_to(term_t term, index_t idx);
 
+    // Update _last_applied index with the index of
+    // last applied entry.
+    void applied_to(index_t idx) {
+        assert(idx > _last_applied);
+        assert(idx <= _commit_idx);
+        assert(idx <= _log.stable_idx());
+        _last_applied = idx;
+    }
+
     // Called when one of the replicas advanced its match index
     // so it may be the case that some entries are committed now.
     // @return true if there are entries that should be committed.
