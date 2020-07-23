@@ -382,7 +382,8 @@ future<> server::applier_fiber() {
                 }
             }
             co_await _state_machine->apply(std::move(commands));
-            _fsm._last_applied = last_applied; // has to be updated after apply succeeds, to not be snapshoted to early
+            // Has to be updated after apply succeeds, to not snapshot too early
+            _fsm.applied_to(last_applied);
         }
     } catch (seastar::broken_condition_variable&) {
         // applier fiber is stopped explicitly.
