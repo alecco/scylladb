@@ -32,6 +32,14 @@ struct follower_progress {
     index_t match_idx;
 };
 
+// A batch of entries to apply to the state machine.
+struct apply_batch {
+    // Commands to apply.
+    std::vector<command_cref> commands;
+    // index of the last command in the batch
+    index_t idx;
+};
+
 // This class represents the Raft log in memory.
 // The value of the first index is 1.
 // New entries are added at the back.
@@ -191,6 +199,10 @@ public:
     // Called after an added entry is persisted on disk,
     // is called on the leader.
     void stable_to(term_t term, index_t idx);
+
+    // Return entries ready to be applied to the state machine,
+    // or an empty optional if there are no such entries.
+    std::optional<apply_batch> apply_entries();
 
     // Update _last_applied index with the index of
     // last applied entry.

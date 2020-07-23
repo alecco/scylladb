@@ -149,5 +149,24 @@ bool fsm::check_committed() {
     return true;
 }
 
+std::optional<apply_batch> fsm::apply_entries() {
+
+    std::optional<apply_batch> batch;
+    auto diff = std::min(_commit_idx, _log.stable_idx()) - _last_applied;
+
+    if (diff > 0) {
+        batch.emplace();
+        batch->idx = _last_applied + diff;
+        batch->commands.reserve(diff);
+
+        for (auto idx = _last_applied + 1; idx <= batch->idx; ++idx) {
+            const auto& entry = _log[idx];
+            if (std::holds_alternative<command>(entry.data)) {
+                batch->commands.push_back(std::cref(std::get<command>(entry.data)));
+            }
+        }
+    }
+    return batch;
+}
 
 } // end of namespace raft
