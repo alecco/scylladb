@@ -73,6 +73,32 @@ public:
     }
     void truncate_head(size_t i);
     index_t start_idx() const;
+
+    // Find the first index with the same term
+    // as the term of the index given in the hint, or the first
+    // known log index, if all entries from the hint to the start
+    // of the index have the same term..
+    //
+    // Uses linear search from 'hint' back to start of the log.
+    //
+    // Is used to find the first index of a term on a follower
+    // when follower's term for an index position does not
+    // match one the leader has at this position.
+    //
+    // 3.5:
+    // When rejecting an AppendEntries request, the
+    // follower can include the term of the
+    // conflicting entry and the first index it stores for that
+    // term. With this information, the leader can
+    // decrement nextIndex to bypass all of the conflicting
+    // entries in that term; one AppendEntries RPC
+    // will be required for each term with conflicting entries,
+    // rather than one RPC per entry. Alternatively,
+    // the leader can use a binary search approach to find the
+    // first entry where the follower’s log differs
+    // from its own; this has better worst-case behavior.
+    //
+    index_t find_first_idx_of_term(index_t hint) const;
 };
 
 // Raft protocol finite state machine
