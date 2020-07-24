@@ -18,3 +18,15 @@
   future *before* state machine state change, not after.
 * add a test case when we can't commit even though followers
   have made progress, but the term has changed.
+* change typed_uint64 to typed_int64
+* the algorithm for finding the first matching index
+  that uses linear search is both costly, cumbersome and most likely inefficient
+  in practice. etcd raft uses lastIndex() of the follower as a RejectHint, and
+  if it doesn't work, resets matchIndex to 0. We could try the same strategy
+  and use LastIndex() or CommitIndex(). The follower's commit index is
+  guaranteed to have the same term as the leader. This will
+  cover the two most common use cases: there is a gap between the
+  follower and the leader, so the leader simply sends this gap,
+  or, if there were multiple elections and multiple terms have passed,
+  the new leader simply resends all entries starting from the committed
+  one.
