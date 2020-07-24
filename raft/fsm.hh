@@ -24,8 +24,9 @@
 
 namespace raft {
 
+// Leader's view of each follower, including self.
 struct follower_progress {
-    // Index of the next log entry to send to that server
+    // Index of the next log entry to send to this server.
     index_t next_idx;
     // Index of the highest log entry known to be replicated to this
     // server.
