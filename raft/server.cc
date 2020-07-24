@@ -225,33 +225,21 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
 
     auto reply = make_ready_future<append_reply>(append_reply{_fsm._current_term, true});
 
+    // Ensure log matching property, even if we append no entries.
+    // 3.5
+    // Until the leader has discovered where it and the
+    // follower’s logs match, the leader can send
+    // AppendEntries with no entries (like heartbeats) to save
+    // bandwidth.
+    if (! _fsm._log.match_term(append_request.prev_log_idx, append_request.prev_log_term)) {
+        auto [i, t] = _fsm._log.find_first_idx_of_term(append_request.prev_log_idx);
+        logger.trace("append_entries[{}]: no for term {} at position {}: found {}, reject hint {}",
+            _fsm._my_id, append_request.prev_log_term, append_request.prev_log_idx, t, i);
+        // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+        co_return append_reply{_fsm._current_term, false, t, i};
+    }
+
     if (append_request.entries.size()) {
-        // empty request is just a heartbeat, only leader_commit_idx is interesting
-        logger.trace("append_entries[{}]: my log length {}, received prev_log_idx {}\n",
-            _fsm._my_id, _fsm._log.last_idx(), append_request.prev_log_idx);
-        if (append_request.prev_log_idx != 0) {
-            if (_fsm._log.last_idx() >= append_request.prev_log_idx) {
-                // the follower has prev_log_idx, so we need to check that it matches
-                const log_entry& entry = _fsm._log[append_request.prev_log_idx];
-                // we should really get rid of keeping the index in the entry, but for now check that it is correct
-                assert(entry.idx == append_request.prev_log_idx);
-                if (entry.term != append_request.prev_log_term) {
-                    logger.trace("append_entries[{}]: no match", _fsm._my_id);
-                    // search for a first entry in the log with non matching term
-                    index_t i = _fsm._log.find_first_idx_of_term(entry.idx);
-                    logger.trace("append_entries[{}]: reply with term {} index {}", _fsm._my_id, entry.term, i);
-                    // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-                    co_return append_reply{_fsm._current_term, false, entry.term, i};
-
-                } else {
-                    logger.trace("append_entries[{}]: match", _fsm._my_id);
-                }
-            } else {
-                // leader's log is longer, the follower does not have an entry to check
-                co_return append_reply{_fsm._current_term, false, term_t(0), _fsm._log.last_idx()};
-            }
-        }
-
         bool append = _fsm._log.last_idx() < append_request.entries[0].idx;
         std::vector<log_entry> to_add;
         to_add.reserve(append_request.entries.size());

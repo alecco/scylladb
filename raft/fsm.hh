@@ -74,6 +74,29 @@ public:
     void truncate_head(size_t i);
     index_t start_idx() const;
 
+    // 3.5
+    // Raft maintains the following properties, which
+    // together constitute the Log Matching Property:
+    // * If two entries in different logs have the same index and
+    // term, then they store the same command.
+    // * If two entries in different logs have the same index and
+    // term, then the logs are identical in all preceding entries.
+    //
+    // The first property follows from the fact that a leader
+    // creates at most one entry with a given log index in a given
+    // term, and log entries never change their position in the
+    // log. The second property is guaranteed by a consistency
+    // check performed by AppendEntries. When sending an
+    // AppendEntries RPC, the leader includes the index and term
+    // of the entry in its log that immediately precedes the new
+    // entries. If the follower does not find an entry in its log
+    // with the same index and term, then it refuses the new
+    // entries.
+    //
+    // @retval true  there is a match
+    // @retval false log matching property is violated
+    bool match_term(index_t idx, term_t term) const;
+
     // Find the first index with the same term
     // as the term of the index given in the hint, or the first
     // known log index, if all entries from the hint to the start
@@ -97,8 +120,7 @@ public:
     // the leader can use a binary search approach to find the
     // first entry where the follower’s log differs
     // from its own; this has better worst-case behavior.
-    //
-    index_t find_first_idx_of_term(index_t hint) const;
+    std::pair<index_t, term_t> find_first_idx_of_term(index_t hint) const;
 };
 
 // Raft protocol finite state machine
