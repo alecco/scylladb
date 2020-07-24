@@ -58,11 +58,43 @@ void log::stable_to(index_t idx) {
     _stable_idx = idx;
 }
 
-index_t log::find_first_idx_of_term(index_t hint) const {
+bool log::match_term(index_t idx, term_t term) const {
+    if (idx == 0) {
+        // Special case of empty log on leader,
+        // TLA+ line 324.
+        return true;
+    }
+    // @todo idx can be legally < _start_idx if all entries
+    // are committed and all logs are snapshotted away.
+    // Revise when we implement log snapshots.
+    assert(idx >= _start_idx);
+
+    auto i = idx - _start_idx;
+
+    if (i >= _log.size()) {
+        // We have a gap between the follower and the leader.
+        return false;
+    }
+    return _log[i].term == term;
+}
+
+std::pair<index_t, term_t> log::find_first_idx_of_term(index_t hint) const {
 
     assert(hint >= _start_idx);
 
+    // @todo if _log.size() == 0 use snapshot index and term
+    if (hint == 0 || _log.size() == 0) {
+        // A special case of an empty log.
+        return {last_idx(), term_t{0}};
+    }
+
     auto i = hint - _start_idx;
+
+    if (i >= _log.size()) {
+        // We have a log gap between the follower and the leader.
+        return {_log.back().idx, _log.back().term};
+    }
+
     term_t term = _log[i].term;
 
     while (i > 0) {
@@ -70,7 +102,7 @@ index_t log::find_first_idx_of_term(index_t hint) const {
             break;
         i--;
     }
-    return _start_idx + i;
+    return {_start_idx + i, term};
 }
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
