@@ -58,6 +58,21 @@ void log::stable_to(index_t idx) {
     _stable_idx = idx;
 }
 
+index_t log::find_first_idx_of_term(index_t hint) const {
+
+    assert(hint >= _start_idx);
+
+    auto i = hint - _start_idx;
+    term_t term = _log[i].term;
+
+    while (i > 0) {
+        if (_log[i-1].term != term)
+            break;
+        i--;
+    }
+    return _start_idx + i;
+}
+
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)) {

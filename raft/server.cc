@@ -238,15 +238,10 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
                 if (entry.term != append_request.prev_log_term) {
                     logger.trace("append_entries[{}]: no match", _fsm._my_id);
                     // search for a first entry in the log with non matching term
-                    term_t t = _fsm._log[append_request.prev_log_idx].term;
-                    index_t i = append_request.prev_log_idx;
-                    while (i >= _fsm._log.start_idx() && _fsm._log[i].term == _fsm._log[append_request.prev_log_idx].term) {
-                        i--;
-                    }
-                    i++; // point to first entry that contains term t
-                    logger.trace("append_entries[{}]: reply with term {} index {}", _fsm._my_id, t, i);
+                    index_t i = _fsm._log.find_first_idx_of_term(entry.idx);
+                    logger.trace("append_entries[{}]: reply with term {} index {}", _fsm._my_id, entry.term, i);
                     // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-                    co_return append_reply{_fsm._current_term, false, t, i};
+                    co_return append_reply{_fsm._current_term, false, entry.term, i};
 
                 } else {
                     logger.trace("append_entries[{}]: match", _fsm._my_id);
