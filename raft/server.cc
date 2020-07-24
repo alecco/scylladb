@@ -239,46 +239,15 @@ future<append_reply> server::append_entries(server_id from, append_request_recv&
         co_return append_reply{_fsm._current_term, false, t, i};
     }
 
-    if (append_request.entries.size()) {
-        bool append = _fsm._log.last_idx() < append_request.entries[0].idx;
-        std::vector<log_entry> to_add;
-        to_add.reserve(append_request.entries.size());
-
-        for (auto& e : append_request.entries) {
-            if (!append) {
-                if (_fsm._log[e.idx].term == e.term) {
-                    logger.trace("append_entries[{}]: entries with index {} has matching terms {}",
-                        _fsm._my_id, e.idx, e.term);
-                    // already have this one, skip to the next;
-                    continue;
-                }
-                logger.trace("append_entries[{}]: entries with index {} has non matching terms {} != {}",
-                    _fsm._my_id, e.idx, e.term, _fsm._log[e.idx].term);
-                // If an existing entry conflicts with a new one (same index but different terms), delete the existing
-                // entry and all that follow it (§5.3)
-                _fsm._log.truncate_head(e.idx);
-                append = true; // append after we truncated
-            }
-            to_add.emplace_back(std::move(e));
-        }
-
-        for (auto&& e : to_add) {
-            // put into the log after persisting, so that if persisting fails the entry will not end up in a log
-            _fsm._log.emplace_back(std::move(e));
-        }
-
+    if (_fsm._log.maybe_append(append_request.entries)) {
         _log_entries.broadcast(); // signal to log_fiber
 
         // add a future to a bag of replies that need to be send after current log is persisted
         _append_replies.push_back(promise<>());
         reply = _append_replies.back().get_future().then([ar = append_reply{_fsm._current_term, true}] { return ar; });
-        // cap commit index by entries we received
-        append_request.leader_commit_idx = std::min(append_request.leader_commit_idx, _fsm._log.last_idx());
     }
 
-    logger.trace("append_entries[{}]: leader_commit_idx={}", _fsm._my_id, append_request.leader_commit_idx);
-    if (append_request.leader_commit_idx > _fsm._commit_idx) {
-        _fsm._commit_idx = append_request.leader_commit_idx;
+    if (_fsm.commit_to(append_request.leader_commit_idx)) {
         commit_entries();
     }
 
@@ -313,6 +282,8 @@ future<> server::log_fiber() {
             std::swap(append_replies, _append_replies);
 
             if (last_stable > entries[0].idx) {
+                // We should never truncate committed entries.
+                assert(_fsm._commit_idx < entries[0].idx);
                 co_await _storage->truncate_log(entries[0].idx);
             }
             // Combine saving and truncating into one call?

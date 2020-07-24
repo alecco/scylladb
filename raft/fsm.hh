@@ -57,6 +57,9 @@ class log {
     // Index of the first stable (persisted) entry in the
     // log.
     index_t _stable_idx = index_t(0);
+
+private:
+    void truncate_head(index_t i);
 public:
     log_entry& operator[](size_t i);
     // reserve n additional entries
@@ -71,7 +74,6 @@ public:
     index_t stable_idx() const {
         return _stable_idx;
     }
-    void truncate_head(size_t i);
     index_t start_idx() const;
 
     // 3.5
@@ -121,6 +123,11 @@ public:
     // first entry where the follower’s log differs
     // from its own; this has better worst-case behavior.
     std::pair<index_t, term_t> find_first_idx_of_term(index_t hint) const;
+
+    // Called on a follower to append entries from a leader.
+    // @retval true if any entries were appended to the unstable
+    // Raft log, so we need to persist the log.
+    bool maybe_append(const std::vector<log_entry>& entries);
 };
 
 // Raft protocol finite state machine
@@ -245,8 +252,8 @@ public:
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
     const log_entry& add_entry(command command);
-    // Called after an added entry is persisted on disk,
-    // is called on the leader.
+
+    // Called after an added entry is persisted on disk.
     void stable_to(term_t term, index_t idx);
 
     // Return entries ready to be applied to the state machine,
@@ -266,6 +273,12 @@ public:
     // so it may be the case that some entries are committed now.
     // @return true if there are entries that should be committed.
     bool check_committed();
+
+    // Called on a follower with a new known leader commit index.
+    // Advances the follower's commit index up to all log-stable
+    // entries, known to be committed.
+    // @retval true _commit_idx was advanced
+    bool commit_to(index_t leader_commit_idx);
 };
 
 } // namespace raft

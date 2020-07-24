@@ -43,8 +43,9 @@ index_t log::next_idx() const {
     return last_idx() + index_t(1);
 }
 
-void log::truncate_head(size_t i) {
-    auto it = _log.begin() + (i - _start_idx);
+void log::truncate_head(index_t idx) {
+    assert(idx >= _start_idx);
+    auto it = _log.begin() + (idx - _start_idx);
     _log.erase(it, _log.end());
     stable_to(last_idx());
 }
@@ -105,6 +106,46 @@ std::pair<index_t, term_t> log::find_first_idx_of_term(index_t hint) const {
     return {_start_idx + i, term};
 }
 
+bool log::maybe_append(const std::vector<log_entry>& entries) {
+
+    if (entries.size() == 0) {
+        return false;
+    }
+
+    // Track if the log got new entries, log size is not
+    // an indicator since the log may get truncated.
+    auto has_new_entries = false;
+
+    // We must scan through all entries if the log already
+    // contains them to ensure the terms match.
+    for (auto& e : entries) {
+        if (e.idx <= last_idx()) {
+            if (e.idx < _start_idx) {
+                logger.trace("append_entries: skipping entry with idx {} less than log start {}",
+                    e.idx, _start_idx);
+                continue;
+            }
+            if (e.term == _log[e.idx - _start_idx].term) {
+                logger.trace("append_entries: entries with index {} has matching terms {}",
+                    e.idx, e.term);
+                continue;
+            }
+            logger.trace("append_entries: entries with index {} has non matching terms {} != {}",
+                e.idx, e.term, _log[e.idx - _start_idx].term);
+            // If an existing entry conflicts with a new one (same
+            // index but different terms), delete the existing
+            // entry and all that follow it (§5.3).
+            truncate_head(e.idx);
+        }
+        // Assert log monotonicity
+        assert(e.idx == next_idx());
+        _log.emplace_back(std::move(e));
+        has_new_entries = true;
+    }
+    return has_new_entries;
+}
+
+
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)) {
@@ -122,6 +163,22 @@ const log_entry& fsm::add_entry(command command) {
 
     return _log[_log.last_idx()];
 }
+
+
+bool fsm::commit_to(index_t leader_commit_idx) {
+
+    auto new_commit_idx = std::min(leader_commit_idx, _log.stable_idx());
+
+    logger.trace("commit_to[{}]: leader_commit_idx={}, new_commit_idx={}",
+        _my_id, leader_commit_idx, new_commit_idx);
+
+    if (new_commit_idx > _commit_idx) {
+        _commit_idx = new_commit_idx;
+        return true;
+    }
+    return false;
+}
+
 
 void fsm::become_leader() {
 
