@@ -30,3 +30,4 @@
   or, if there were multiple elections and multiple terms have passed,
   the new leader simply resends all entries starting from the committed
   one.
+* implement log snapshotting
