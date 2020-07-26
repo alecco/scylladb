@@ -47,7 +47,7 @@ void log::truncate_head(index_t idx) {
     assert(idx >= _start_idx);
     auto it = _log.begin() + (idx - _start_idx);
     _log.erase(it, _log.end());
-    stable_to(last_idx());
+    stable_to(std::min(_stable_idx, last_idx()));
 }
 
 index_t log::start_idx() const {
