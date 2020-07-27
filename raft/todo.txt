@@ -1,5 +1,4 @@
 * log_fiber() races with append_entries(), need to find a solution
-* stable_to() does not support truncation
 * stable_to() updates leader's state but called on non leader as well
 * low prio: drop _my_id from fsm, it should be a server property.
 * Put back load_vote() and load_term()
@@ -31,3 +30,8 @@
   the new leader simply resends all entries starting from the committed
   one.
 * implement log snapshotting
+* implement flow control and batching in replication_fiber
+  currently it send out the first non matching entry in a loop,
+  so it will send the same entry again and again until reply is received
+  and match_idx is adjusted. The logic should be fixed to send several batched
+  requests and do not resend before certain time passes.

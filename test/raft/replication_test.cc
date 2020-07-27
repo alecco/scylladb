@@ -62,10 +62,7 @@ public:
         net[_id] = this;
     }
     virtual future<> send_snapshot(raft::server_id server_id, raft::snapshot snap) { return make_ready_future<>(); }
-    virtual future<raft::append_reply> send_append_entries(
-        raft::server_id id,
-        const raft::append_request_send& append_request) {
-
+    virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
@@ -75,12 +72,14 @@ public:
         for (auto&& e: append_request.entries) {
             req.entries.push_back(e);
         }
-        co_return net[id]->_server->append_entries(_id, std::move(req));
+        (void)net[id]->_server->append_entries(_id, std::move(req));
+        co_return seastar::sleep(1us);
     }
-    virtual future<raft::vote_reply> send_request_vote(
-        raft::server_id id,
-        const raft::vote_request& avote_request) {
-
+    virtual future<> send_append_entries_reply(raft::server_id id, raft::append_reply reply) {
+        net[id]->_server->append_entries_reply(_id, std::move(reply));
+        return make_ready_future<>();
+    }
+    virtual future<raft::vote_reply> send_request_vote(raft::server_id id, const raft::vote_request& avote_request) {
         return make_ready_future<raft::vote_reply>(raft::vote_reply());
     }
     virtual void send_keepalive(raft::server_id id, const raft::keep_alive& keep_alive) {

@@ -195,16 +195,19 @@ struct append_request_recv : public append_request_base {
     std::vector<log_entry> entries;
 };
 struct append_reply {
+    struct rejected {
+        index_t index; // rejected index
+        // term of the conflicting entry
+        term_t non_matching_term;
+        // first index for the conflicting term
+        index_t first_idx_for_non_matching_term;
+    };
+    struct accepted {
+        index_t last_log_index;
+    };
     // current term, for leader to update itself
     term_t current_term;
-    // 'true' if all entries were successfully appended
-    // 'false' if a receivers term is larger or there was a mismatch in index/term
-    bool appended;
-    // the following is valid only if appended == false
-    // term of the conflicting entry
-    term_t non_matching_term;
-    // first index for the conflicting term
-    index_t first_idx_for_non_matching_term;
+    std::variant<rejected, accepted> result;
 };
 
 // this is an extension of Raft used for keepalive aggregation between multiple groups
@@ -303,8 +306,13 @@ public:
     // by a receiver
     virtual future<> send_snapshot(server_id server_id, snapshot snap) = 0;
 
-    // Sends provided append_request to the supplied server and waits for a reply
-    virtual future<append_reply> send_append_entries(server_id id, const append_request_send& append_request) = 0;
+    // Sends provided append_request to the supplied server, does not wait for reply.
+    // The returned future resolves when message is sent. It does not mean it was received
+    virtual future<> send_append_entries(server_id id, const append_request_send& append_request) = 0;
+
+    // Sends reply to an append_request
+    // The returned future resolves when message is sent. It does not mean it was received
+    virtual future<> send_append_entries_reply(server_id id, append_reply reply) = 0;
 
     // Sends vote requests and returns vote reply
     virtual future<vote_reply> send_request_vote(server_id id, const vote_request& vote_request) = 0;
@@ -371,7 +379,7 @@ public:
     // Persist given log entry
     virtual future<> store_log_entry(const log_entry& entry) = 0;
 
-    // Truncate all entries with index greater that index in the log
+    // Truncate all entries with an index greater or equal that the index in the log
     // and persist the truncation. Can be called in parallel with store_log_entries()
     // but internally should be linearized vs store_log_entries(): store_log_entries()
     // called after truncate_log() should wait for truncation to complete internally before

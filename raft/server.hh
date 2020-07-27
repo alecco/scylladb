@@ -39,9 +39,12 @@ public:
     // by another leader
     future<> add_entry(command command);
 
-    // This function is called by append_entries RPC and a reply is forwarded to a remote server
-    // Returned future is resolved when either request is rejected or data is persisted
-    future<append_reply> append_entries(server_id from, append_request_recv&& append_request);
+    // This function is called by append_entries RPC
+    // FIXME: should return void, but can't until co_await is removed from it
+    future<> append_entries(server_id from, append_request_recv&& append_request);
+
+    // This function is called by append_entries_reply RPC
+    void append_entries_reply(server_id from, append_reply&& reply);
 
     // This function is called by request vote RPC and a reply is forwarded to a remote server
     future<vote_reply> request_vote(server_id from, vote_request&& vote_request);
@@ -80,7 +83,11 @@ private:
 
     // holds all the replies to append_entry rpc for not yet persisted log entries
     // FIXME: should be part of a follower state
-    std::vector<promise<>> _append_replies;
+    std::vector<std::pair<server_id, append_reply>> _append_replies;
+
+    void send_append_reply(server_id to, append_reply reply) {
+        _append_replies.push_back(std::make_pair(to, std::move(reply)));
+    }
 
     // the sate that is valid only on leader
     struct leader_state {
