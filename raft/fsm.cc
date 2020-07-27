@@ -107,7 +107,6 @@ std::pair<index_t, term_t> log::find_first_idx_of_term(index_t hint) const {
 }
 
 bool log::maybe_append(const std::vector<log_entry>& entries) {
-
     if (entries.size() == 0) {
         return false;
     }
@@ -181,7 +180,6 @@ bool fsm::commit_to(index_t leader_commit_idx) {
 
 
 void fsm::become_leader() {
-
     assert(_state != server_state::LEADER);
     assert(!_progress);
     _state = server_state::LEADER;
@@ -193,7 +191,6 @@ void fsm::become_leader() {
 }
 
 void fsm::become_follower(server_id leader) {
-
     assert(_state != server_state::FOLLOWER);
     _current_leader = leader;
     _state = server_state::FOLLOWER;
