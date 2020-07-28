@@ -92,6 +92,11 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
             std::vector<log_entry_cref>(1, std::cref(entry))
         };
 
+        logger.trace("replication_fiber[{}->{}]: send entry idx={}", _fsm._my_id, server, entry.idx);
+
+        // optimistically update next send index. In case a message is lost
+        // there will be negative reply that will resend idx
+        state.next_idx++;
         try {
             co_await _rpc->send_append_entries(server, req);
         } catch (...) {
@@ -124,7 +129,6 @@ void server::append_entries_reply(server_id from, append_reply&& reply) {
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}", _fsm._my_id, from, progress.match_idx, last_idx);
 
         progress.match_idx = std::max(progress.match_idx, last_idx);
-        progress.next_idx = std::max(progress.next_idx, ++last_idx);
 
         // check if any new entry can be committed
         if (_fsm.check_committed()) {
@@ -154,6 +158,7 @@ void server::append_entries_reply(server_id from, append_reply&& reply) {
         progress.next_idx = n;
         logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _fsm._my_id, from, progress.next_idx, progress.match_idx);
         assert(progress.next_idx != progress.match_idx); // we should not fail to apply an entry next after a matched one
+        _leader_state->_log_entry_added.broadcast(); // signal next_idx change
     }
 }
 
@@ -216,6 +221,9 @@ future<> server::stop_leadership() {
 }
 
 future<> server::append_entries(server_id from, append_request_recv&& append_request) {
+    logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={}", _fsm._my_id,
+            append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
+            append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
     if (append_request.current_term < _fsm._current_term) {
         send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, term_t(0), index_t(0)}});
         _log_entries.broadcast(); // signal to log_fiber to send the reply
@@ -275,7 +283,9 @@ future<> server::log_fiber() {
     try {
         index_t last_stable = _fsm._log.stable_idx();
         while (true) {
-            co_await _log_entries.wait();
+            if (_fsm._log.last_idx() == _fsm._log.stable_idx() && _append_replies.size() == 0) {
+                co_await _log_entries.wait();
+            }
             logger.trace("log_fiber {} stable index: {} last index: {}", _fsm._my_id,
                 _fsm._log.stable_idx(), _fsm._log.last_idx());
 
@@ -337,14 +347,22 @@ future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while (true) {
-            co_await _apply_entries.wait().then([this] {
+            std::optional<apply_batch> batch = _fsm.apply_entries();
+            future<> f = make_ready_future<>();
 
-                std::optional<apply_batch> batch =  _fsm.apply_entries();
+            if (!batch) {
+                f = _apply_entries.wait();
+            }
+
+            co_await f.then([this, batch = std::move(batch)] () mutable {
+                if (!batch) {
+                    batch = _fsm.apply_entries();
+                }
                 if (batch) {
                     logger.trace("applier_fiber {} applying up to {}", _fsm._my_id, batch->idx);
-                    return _state_machine->apply(std::move(batch->commands)).then([this, batch = std::move(batch)] {
+                    return _state_machine->apply(std::move(batch->commands)).then([this, idx = batch->idx] {
                         // Has to be updated after apply succeeds, to not snapshot too early
-                        _fsm.applied_to(batch->idx);
+                        _fsm.applied_to(idx);
                     });
                 }
                 return make_ready_future<>();
