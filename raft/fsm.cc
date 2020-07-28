@@ -129,7 +129,7 @@ bool log::maybe_append(const std::vector<log_entry>& entries) {
                     e.idx, e.term);
                 continue;
             }
-            logger.trace("append_entries: entries with index {} has non matching terms {} != {}",
+            logger.trace("append_entries: entries with index {} has non matching terms e.term={}, _log[i].term = {}",
                 e.idx, e.term, _log[e.idx - _start_idx].term);
             // If an existing entry conflicts with a new one (same
             // index but different terms), delete the existing

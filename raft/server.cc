@@ -92,7 +92,8 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
             std::vector<log_entry_cref>(1, std::cref(entry))
         };
 
-        logger.trace("replication_fiber[{}->{}]: send entry idx={}", _fsm._my_id, server, entry.idx);
+        logger.trace("replication_fiber[{}->{}]: send entry idx={}, term={}",
+            _fsm._my_id, server, entry.idx, entry.term);
 
         // optimistically update next send index. In case a message is lost
         // there will be negative reply that will resend idx
@@ -220,7 +221,7 @@ future<> server::stop_leadership() {
           });
 }
 
-future<> server::append_entries(server_id from, append_request_recv&& append_request) {
+future<> server::append_entries(server_id from, append_request_recv append_request) {
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={}", _fsm._my_id,
             append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
             append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
@@ -258,8 +259,8 @@ future<> server::append_entries(server_id from, append_request_recv&& append_req
     // bandwidth.
     if (! _fsm._log.match_term(append_request.prev_log_idx, append_request.prev_log_term)) {
         auto [i, t] = _fsm._log.find_first_idx_of_term(append_request.prev_log_idx);
-        logger.trace("append_entries[{}]: no for term {} at position {}: found {}, reject hint {}",
-            _fsm._my_id, append_request.prev_log_term, append_request.prev_log_idx, t, i);
+        logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}, reject hint {}",
+            _fsm._my_id, append_request.prev_log_idx, append_request.prev_log_term, t, i);
         // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
         send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, t, i}});
         _log_entries.broadcast(); // signal to log_fiber to send the reply
