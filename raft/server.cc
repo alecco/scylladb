@@ -284,7 +284,7 @@ future<> server::log_fiber() {
     try {
         index_t last_stable = _fsm._log.stable_idx();
         while (true) {
-            if (_fsm._log.last_idx() == _fsm._log.stable_idx() && _append_replies.size() == 0) {
+            if (_fsm._log.last_idx() == _fsm._log.stable_idx() && _fsm._append_replies.size() == 0) {
                 co_await _log_entries.wait();
             }
             logger.trace("log_fiber {} stable index: {} last index: {}", _fsm._my_id,
@@ -294,7 +294,7 @@ future<> server::log_fiber() {
 
             // get a snapshot of all unsent replies
             std::vector<std::pair<server_id, append_reply>> append_replies;
-            std::swap(append_replies, _append_replies);
+            std::swap(append_replies, _fsm._append_replies);
 
             if (diff) {
                 std::vector<log_entry> entries;

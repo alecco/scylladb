@@ -171,7 +171,7 @@ public:
 //   which encapsulates a list of actions that must be
 //   performed until the next Step() call can be made.
 // - the time is represented with a logical timer. The client
-//   is responsible for periodically involving Tick() method, which
+//   is responsible for periodically involving tick() method, which
 //   advances the state machine time and allows it to track
 //   such events as election or heartbeat timeouts.
 // - step() uses "template method" design pattern to
@@ -180,7 +180,7 @@ public:
 //   are function pointers, updated whenever the FSM
 //   transitions to the respective role.
 //
-// The active agent of the protocol is called instance, and
+// The active agent of the protocol is called server, and
 // provides a facade to the state machine, running send and
 // receive fibers, handling I/O and timer events.
 struct fsm {
@@ -206,6 +206,18 @@ struct fsm {
 
     // A state for each follower, maintained only on the leader.
     std::optional<std::unordered_map<server_id, follower_progress>> _progress;
+    // Holds all replies to AppendEntries RPC which are not
+    // yet sent out. If AppendEntries request is accepted, we must
+    // withhold a reply until the respective entry is persisted in
+    // the log. Otherwise, e.g. when we receive AppendEntries with
+    // an older term, we may reject it immediately.
+    // Either way all entries are appended to this queue first.
+    //
+    // 3.3 Raft Basics
+    // If a server receives a request with a stale term number, it
+    // rejects the request.
+    // TLA+ line 328
+    std::vector<std::pair<server_id, append_reply>> _append_replies;
 
     // currently committed configuration
     configuration _commited_config;

@@ -81,21 +81,8 @@ private:
     // Protocol deterministic finite-state machine
     fsm _fsm;
 
-    // Holds all replies to AppendEntries RPC which are not
-    // yet sent out. If AppendEntries request is accepted, we must
-    // withhold a reply until the respective entry is persisted in
-    // the log. Otherwise, e.g. when we receive AppendEntries with
-    // an older term, we may reject it immediately.
-    // Either way all entries are appended to this queue first.
-    //
-    // 3.3 Raft Basics
-    // If a server receives a request with a stale term number, it
-    // rejects the request.
-    // TLA+ line 328
-    std::vector<std::pair<server_id, append_reply>> _append_replies;
-
     void send_append_reply(server_id to, append_reply reply) {
-        _append_replies.push_back(std::make_pair(to, std::move(reply)));
+        _fsm._append_replies.push_back(std::make_pair(to, std::move(reply)));
     }
 
     // the sate that is valid only on leader
