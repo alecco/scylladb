@@ -1226,6 +1226,8 @@ args.user_cflags += ' -Wno-error=stack-usage='
 
 args.user_cflags += f"-ffile-prefix-map={curdir}=."
 
+args.user_cflags += " -fcoroutines"
+
 seastar_cflags = args.user_cflags
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
