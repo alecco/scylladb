@@ -284,39 +284,25 @@ future<> server::log_fiber() {
     try {
         index_t last_stable = _fsm._log.stable_idx();
         while (true) {
-            if (_fsm._log.last_idx() == _fsm._log.stable_idx() && _fsm._append_replies.size() == 0) {
+            auto batch = _fsm.log_entries();
+
+            if (!batch) {
                 co_await _log_entries.wait();
+                continue;
             }
-            logger.trace("log_fiber {} stable index: {} last index: {}", _fsm._my_id,
-                _fsm._log.stable_idx(), _fsm._log.last_idx());
 
-            auto diff = _fsm._log.last_idx() - _fsm._log.stable_idx();
-
-            // get a snapshot of all unsent replies
-            std::vector<std::pair<server_id, append_reply>> append_replies;
-            std::swap(append_replies, _fsm._append_replies);
-
-            if (diff) {
-                std::vector<log_entry> entries;
-                entries.reserve(diff);
-
-                for (auto i = _fsm._log.stable_idx() + 1; i <= _fsm._log.last_idx(); i++) {
-                    // copy before saving to storage to prevent races with log updates
-                    // TODO: make it better!
-                    entries.emplace_back(_fsm._log[i]);
-                }
-
-                if (last_stable > entries[0].idx) {
+            if (batch->log_entries.size()) {
+                if (last_stable > batch->log_entries[0].idx) {
                     // We should never truncate committed entries.
-                    assert(_fsm._commit_idx < entries[0].idx);
-                    co_await _storage->truncate_log(entries[0].idx);
+                    assert(_fsm._commit_idx < batch->log_entries[0].idx);
+                    co_await _storage->truncate_log(batch->log_entries[0].idx);
                 }
+
                 // Combine saving and truncating into one call?
                 // will require storage to keep track of last idx
-                co_await _storage->store_log_entries(entries);
+                co_await _storage->store_log_entries(batch->log_entries);
 
-                // advance stable position
-                _fsm.stable_to(entries.crbegin()->term, entries.crbegin()->idx);
+                _fsm.stable_to(batch->log_entries.crbegin()->term, batch->log_entries.crbegin()->idx);
                 // make apply fiber to re-check if anything should be applied
                 _apply_entries.signal();
 
@@ -327,14 +313,14 @@ future<> server::log_fiber() {
                 } else if (_fsm.is_leader()) {
                     _leader_state->_log_entry_added.broadcast();
                 }
-
-                last_stable = entries.crbegin()->idx;
+                last_stable = batch->log_entries.crbegin()->idx;
             }
-
-            // after entries are persisted we can send replies
-            co_await seastar::parallel_for_each(std::move(append_replies), [this] (std::pair<server_id, append_reply>& reply) {
-                return _rpc->send_append_entries_reply(reply.first, std::move(reply.second));
-            });
+            if (batch->append_replies.size()) {
+                // after entries are persisted we can send replies
+                co_await seastar::parallel_for_each(std::move(batch->append_replies), [this] (std::pair<server_id, append_reply>& reply) {
+                    return _rpc->send_append_entries_reply(reply.first, std::move(reply.second));
+                });
+            }
         }
     } catch (seastar::broken_condition_variable&) {
         // log fiber is stopped explicitly.
