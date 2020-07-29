@@ -197,6 +197,33 @@ void fsm::become_follower(server_id leader) {
     _progress = std::nullopt;
 }
 
+std::optional<log_batch> fsm::log_entries() {
+    logger.trace("fsm::log_entries() {} stable index: {} last index: {}",
+        _my_id, _log.stable_idx(), _log.last_idx());
+
+    auto diff = _log.last_idx() - _log.stable_idx();
+
+    if (diff == 0 && _append_replies.empty()) {
+        return {};
+    }
+
+    log_batch batch;
+
+    // get a snapshot of all unsent replies
+    std::swap(batch.append_replies, _append_replies);
+    batch.log_entries.reserve(diff);
+
+    for (auto i = _log.stable_idx() + 1; i <= _log.last_idx(); i++) {
+        // Copy before saving to storage to prevent races with log updates,
+        // e.g. truncation of the log.
+        // TODO: avoid copies by making sure log truncate is
+        // copy-on-write.
+        batch.log_entries.emplace_back(_log[i]);
+    }
+
+    return batch;
+}
+
 void fsm::stable_to(term_t term, index_t idx) {
     if (_log.last_idx() < idx) {
         // The log was truncated while being persisted

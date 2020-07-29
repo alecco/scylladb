@@ -33,6 +33,12 @@ struct follower_progress {
     index_t match_idx;
 };
 
+// State of the FSM that needs logging & sending.
+struct log_batch {
+    std::vector<log_entry> log_entries;
+    std::vector<std::pair<server_id, append_reply>> append_replies;
+};
+
 // A batch of entries to apply to the state machine.
 struct apply_batch {
     // Commands to apply.
@@ -264,6 +270,13 @@ public:
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
     const log_entry& add_entry(command command);
+
+    // Return a copy of the entries that need
+    // to be logged. When these entries are logged,
+    // stable_to() must be called with the last logged
+    // term/index. The logged entries are eventually
+    // discarded from the state machine after snapshotting.
+    std::optional<log_batch> log_entries();
 
     // Called after an added entry is persisted on disk.
     void stable_to(term_t term, index_t idx);
