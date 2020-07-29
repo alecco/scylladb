@@ -324,16 +324,16 @@ int main(int argc, char* argv[]) {
     using test_fn = std::function<future<>()>;
 
     test_fn tests[] =  {
-        std::bind(test_simple_replication, 1),
-        std::bind(test_simple_replication, 2),
-        test_replicate_non_empty_leader_log,
-        test_replace_log_leaders_log_empty,
-        test_replace_log_leaders_log_not_empty,
-        test_replace_log_leaders_log_not_empty_2,
-        test_replace_log_leaders_log_not_empty_3,
+        // std::bind(test_simple_replication, 1),
+        // std::bind(test_simple_replication, 2),
+        // test_replicate_non_empty_leader_log,
+        // test_replace_log_leaders_log_empty,
+        // test_replace_log_leaders_log_not_empty,
+        // test_replace_log_leaders_log_not_empty_2,
+        // test_replace_log_leaders_log_not_empty_3,
         test_replace_no_common_entries,
-        test_replace_one_common_entry,
-        test_replace_two_common_entry_different_terms
+        // test_replace_one_common_entry,
+        // test_replace_two_common_entry_different_terms
     };
 
     return app.run(argc, argv, [&tests] () -> future<> {
