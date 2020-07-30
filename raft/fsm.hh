@@ -234,6 +234,10 @@ struct fsm {
     configuration _commited_config;
     // currently used configuration, may be different from committed during configuration change
     configuration _current_config;
+
+    // Signaled when there are IO event to process
+    seastar::condition_variable _sm_events;
+
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
@@ -316,6 +320,7 @@ public:
     // send reply to an append message
     void send_append_reply(server_id to, append_reply reply) {
         _append_replies.push_back(std::make_pair(to, std::move(reply)));
+        _sm_events.signal();
     }
 
     // Called to advance virtual clock of the state machine
