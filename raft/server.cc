@@ -226,7 +226,7 @@ future<> server::append_entries(server_id from, append_request_recv append_reque
             append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
             append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
     if (append_request.current_term < _fsm._current_term) {
-        send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, term_t(0), index_t(0)}});
+        _fsm.send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, term_t(0), index_t(0)}});
         _log_entries.broadcast(); // signal to log_fiber to send the reply
         co_return;
     }
@@ -260,13 +260,13 @@ future<> server::append_entries(server_id from, append_request_recv append_reque
         logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}, reject hint {}",
             _fsm._my_id, append_request.prev_log_idx, append_request.prev_log_term, t, i);
         // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-        send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, t, i}});
+        _fsm.send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, t, i}});
         _log_entries.broadcast(); // signal to log_fiber to send the reply
         co_return;
     }
 
     if (_fsm._log.maybe_append(append_request.entries)) {
-        send_append_reply(from, append_reply{_fsm._current_term, append_reply::accepted{_fsm._log.last_idx()}});
+        _fsm.send_append_reply(from, append_reply{_fsm._current_term, append_reply::accepted{_fsm._log.last_idx()}});
         _log_entries.broadcast(); // signal to log_fiber
     }
 

@@ -81,10 +81,6 @@ private:
     // Protocol deterministic finite-state machine
     fsm _fsm;
 
-    void send_append_reply(server_id to, append_reply reply) {
-        _fsm._append_replies.push_back(std::make_pair(to, std::move(reply)));
-    }
-
     // the sate that is valid only on leader
     struct leader_state {
         // signaled on a leader each time an entry is added to the log
