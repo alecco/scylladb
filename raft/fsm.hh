@@ -317,6 +317,9 @@ public:
     void send_append_reply(server_id to, append_reply reply) {
         _append_replies.push_back(std::make_pair(to, std::move(reply)));
     }
+
+    // Called to advance virtual clock of the state machine
+    void tick();
 };
 
 } // namespace raft

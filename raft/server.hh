@@ -20,6 +20,7 @@
  */
 #pragma once
 
+#include <seastar/core/abort_source.hh>
 #include "fsm.hh"
 
 namespace raft {
@@ -79,6 +80,8 @@ private:
     std::unique_ptr<storage> _storage;
     // Protocol deterministic finite-state machine
     fsm _fsm;
+    // abort source to abort various bg tasks
+    seastar::abort_source _as;
 
     // the sate that is valid only on leader
     struct leader_state {
@@ -132,6 +135,12 @@ private:
     future<> _log_status = make_ready_future<>();
 
     future<> keepalive_fiber();
+
+    // result of a tick fiber;
+    future<> _ticker_status = make_ready_future<>();
+
+    // this thread drives fsm clock
+    future<> ticker_fiber();
 };
 
 } // namespace raft
