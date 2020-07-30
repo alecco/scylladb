@@ -159,6 +159,7 @@ const log_entry& fsm::add_entry(command command) {
     check_is_leader();
 
     _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
+    _sm_events.signal();
 
     return _log[_log.last_idx()];
 }

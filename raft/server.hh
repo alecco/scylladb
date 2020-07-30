@@ -127,8 +127,6 @@ private:
     // This fiber runs in the background and applies committed entries.
     future<> applier_fiber();
 
-    // Signaled when there is an entry to persist in the log
-    seastar::condition_variable _log_entries;
     // signaled when there is an entry to apply
     seastar::condition_variable _apply_entries;
     future<> _applier_status = make_ready_future<>();
