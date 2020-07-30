@@ -349,25 +349,15 @@ future<> server::applier_fiber() {
     try {
         while (true) {
             std::optional<apply_batch> batch = _fsm.apply_entries();
-            future<> f = make_ready_future<>();
 
             if (!batch) {
-                f = _apply_entries.wait();
+                co_await _apply_entries.wait();
+                continue;
             }
 
-            co_await f.then([this, batch = std::move(batch)] () mutable {
-                if (!batch) {
-                    batch = _fsm.apply_entries();
-                }
-                if (batch) {
-                    logger.trace("applier_fiber {} applying up to {}", _fsm._my_id, batch->idx);
-                    return _state_machine->apply(std::move(batch->commands)).then([this, idx = batch->idx] {
-                        // Has to be updated after apply succeeds, to not snapshot too early
-                        _fsm.applied_to(idx);
-                    });
-                }
-                return make_ready_future<>();
-            });
+            logger.trace("applier_fiber {} applying up to {}", _fsm._my_id, batch->idx);
+            co_await _state_machine->apply(std::move(batch->commands));
+            _fsm.applied_to(batch->idx);
         }
     } catch (seastar::broken_condition_variable&) {
         // applier fiber is stopped explicitly.
