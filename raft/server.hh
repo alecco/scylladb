@@ -40,8 +40,7 @@ public:
     future<> add_entry(command command);
 
     // This function is called by append_entries RPC
-    // FIXME: should return void, but can't until co_await is removed from it
-    future<> append_entries(server_id from, append_request_recv append_request);
+    void append_entries(server_id from, append_request_recv append_request);
 
     // This function is called by append_entries_reply RPC
     void append_entries_reply(server_id from, append_reply&& reply);

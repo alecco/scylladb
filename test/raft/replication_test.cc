@@ -72,7 +72,7 @@ public:
         for (auto&& e: append_request.entries) {
             req.entries.push_back(e);
         }
-        (void) net[id]->_server->append_entries(_id, std::move(req));
+        net[id]->_server->append_entries(_id, std::move(req));
         co_return seastar::sleep(1us);
     }
     virtual future<> send_append_entries_reply(raft::server_id id, raft::append_reply reply) {
@@ -89,7 +89,7 @@ public:
         req.prev_log_idx = raft::index_t(0);
         req.prev_log_term = raft::term_t(0);
         req.leader_commit_idx = keep_alive.leader_commit_idx;
-        (void) net[id]->_server->append_entries(_id, std::move(req));
+        net[id]->_server->append_entries(_id, std::move(req));
     }
     virtual void add_server(raft::server_id id, bytes node_info) {}
     virtual void remove_server(raft::server_id id) {}
