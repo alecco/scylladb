@@ -191,8 +191,6 @@ future<> server::start_leadership() {
     _leadership_transition = make_ready_future<>(); // prepare to next transition
 
     _leader_state.emplace(); // recreate leader's state
-    // start sending keepalives to maintain leadership
-    _leader_state->keepalive_status = keepalive_fiber();
 
     for (auto& p : *(_fsm._progress)) {
         if (p.first != _fsm._my_id) {
@@ -207,18 +205,8 @@ future<> server::stop_leadership() {
     assert(_leadership_transition.available());
     _leader_state->_log_entry_added.broken();
 
-    // FIXME: waiting for https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95895 to be fixed
-    // to wrote like that:
-    // co_await seastar::when_all_succeed();
-    // co_await std::move(_leader_state->keepalive_status);
-    // _leader_state = std::nullopt;
-    // co_return;
-    co_return seastar::when_all_succeed(_leader_state->_replicatoin_fibers.begin(), _leader_state->_replicatoin_fibers.end())
-          .finally([this] {
-               return std::move(_leader_state->keepalive_status);
-          }).finally([this] {
-            _leader_state = std::nullopt;
-          });
+    co_await seastar::when_all_succeed(_leader_state->_replicatoin_fibers.begin(), _leader_state->_replicatoin_fibers.end());
+    _leader_state = std::nullopt;
 }
 
 void server::append_entries(server_id from, append_request_recv append_request) {
@@ -317,10 +305,21 @@ future<> server::log_fiber() {
                 }
                 last_stable = batch->log_entries.crbegin()->idx;
             }
-            if (batch->append_replies.size()) {
-                // after entries are persisted we can send replies
-                co_await seastar::parallel_for_each(std::move(batch->append_replies), [this] (std::pair<server_id, append_reply>& reply) {
-                    return _rpc->send_append_entries_reply(reply.first, std::move(reply.second));
+            if (batch->messages.size()) {
+                // after entries are persisted we can send messages
+                co_await seastar::parallel_for_each(std::move(batch->messages), [this] (std::pair<server_id, rpc_message>& message) {
+                    return std::visit([this, id = message.first] (auto&& m) {
+                        using T = std::decay_t<decltype(m)>;
+                        if constexpr (std::is_same_v<T, append_reply>) {
+                            return _rpc->send_append_entries_reply(id, std::move(m));
+                        } else if constexpr (std::is_same_v<T, keep_alive>) {
+                            _rpc->send_keepalive(id, std::move(m));
+                            return make_ready_future<>();
+                        }
+                        logger.error("log fiber {} tried to send unknown message type", _fsm._my_id);
+                        return make_ready_future<>();
+                    }, std::move(message.second));
+
                 });
             }
         }
@@ -352,33 +351,6 @@ future<> server::applier_fiber() {
     } catch (...) {
         logger.error("applier fiber {} stopped because of the error: {}", _fsm._my_id, std::current_exception());
     }
-    co_return;
-}
-
-future<> server::keepalive_fiber() {
-    logger.trace("keepalive_fiber starts");
-    while (_fsm.is_leader()) {
-        co_await sleep(100ms);
-
-        if (!_fsm.is_leader()) { // may have lost leadership while sleeping
-            break;
-        }
-
-        keep_alive ka {
-            .current_term = _fsm._current_term,
-            .leader_id = _fsm._current_leader,
-            .leader_commit_idx = _fsm._commit_idx,
-        };
-
-        for (auto server : _fsm._current_config.servers) {
-            if (server.id != _fsm._my_id) {
-                // cap committed index by math_idx otherwise a follower may commit unmatched entries
-                ka.leader_commit_idx = std::min(_fsm._commit_idx, (*_fsm._progress)[server.id].match_idx);
-                _rpc->send_keepalive(server.id, ka);
-            }
-        }
-    }
-    logger.trace("keepalive_fiber stops");
     co_return;
 }
 

@@ -204,14 +204,14 @@ std::optional<log_batch> fsm::log_entries() {
 
     auto diff = _log.last_idx() - _log.stable_idx();
 
-    if (diff == 0 && _append_replies.empty() && _current_term_dirty == false && _voted_for_dirty == false) {
+    if (diff == 0 && _messages.empty() && _current_term_dirty == false && _voted_for_dirty == false) {
         return {};
     }
 
     log_batch batch;
 
     // get a snapshot of all unsent replies
-    std::swap(batch.append_replies, _append_replies);
+    std::swap(batch.messages, _messages);
     batch.log_entries.reserve(diff);
 
     for (auto i = _log.stable_idx() + 1; i <= _log.last_idx(); i++) {
@@ -309,6 +309,21 @@ std::optional<apply_batch> fsm::apply_entries() {
 }
 
 void fsm::tick() {
+    if (is_leader()) {
+        keep_alive ka {
+            .current_term = _current_term,
+            .leader_id = _current_leader,
+            .leader_commit_idx = _commit_idx,
+        };
+
+        for (auto server : _current_config.servers) {
+            if (server.id != _my_id) {
+                // cap committed index by math_idx otherwise a follower may commit unmatched entries
+                ka.leader_commit_idx = std::min(_commit_idx, (*_progress)[server.id].match_idx);
+                send_keepalive(server.id, ka);
+            }
+        }
+    }
 
 }
 } // end of namespace raft

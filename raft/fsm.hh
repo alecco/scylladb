@@ -38,7 +38,7 @@ struct log_batch {
     std::optional<term_t> term;
     std::optional<server_id> vote;
     std::vector<log_entry> log_entries;
-    std::vector<std::pair<server_id, append_reply>> append_replies;
+    std::vector<std::pair<server_id, rpc_message>> messages;
 };
 
 // A batch of entries to apply to the state machine.
@@ -228,7 +228,7 @@ struct fsm {
     // If a server receives a request with a stale term number, it
     // rejects the request.
     // TLA+ line 328
-    std::vector<std::pair<server_id, append_reply>> _append_replies;
+    std::vector<std::pair<server_id, rpc_message>> _messages;
 
     // currently committed configuration
     configuration _commited_config;
@@ -319,7 +319,13 @@ public:
 
     // send reply to an append message
     void send_append_reply(server_id to, append_reply reply) {
-        _append_replies.push_back(std::make_pair(to, std::move(reply)));
+        _messages.push_back(std::make_pair(to, std::move(reply)));
+        _sm_events.signal();
+    }
+
+    // send keepalive
+    void send_keepalive(server_id to, keep_alive keep_alive) {
+        _messages.push_back(std::make_pair(to, keep_alive));
         _sm_events.signal();
     }
 

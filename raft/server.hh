@@ -89,8 +89,6 @@ private:
         seastar::condition_variable _log_entry_added;
         // on a leader holds futures of all replication fibers
         std::vector<future<>> _replicatoin_fibers;
-        // status of a keepalive fiber
-        future<> keepalive_status = make_ready_future<>();
     };
 
     std::optional<leader_state> _leader_state;
@@ -131,8 +129,6 @@ private:
     seastar::condition_variable _apply_entries;
     future<> _applier_status = make_ready_future<>();
     future<> _log_status = make_ready_future<>();
-
-    future<> keepalive_fiber();
 
     // result of a tick fiber;
     future<> _ticker_status = make_ready_future<>();
