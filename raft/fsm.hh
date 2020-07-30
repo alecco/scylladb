@@ -312,6 +312,11 @@ public:
     // entries, known to be committed.
     // @retval true _commit_idx was advanced
     bool commit_to(index_t leader_commit_idx);
+
+    // send reply to an append message
+    void send_append_reply(server_id to, append_reply reply) {
+        _append_replies.push_back(std::make_pair(to, std::move(reply)));
+    }
 };
 
 } // namespace raft
