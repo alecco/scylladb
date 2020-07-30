@@ -35,6 +35,8 @@ struct follower_progress {
 
 // State of the FSM that needs logging & sending.
 struct log_batch {
+    std::optional<term_t> term;
+    std::optional<server_id> vote;
     std::vector<log_entry> log_entries;
     std::vector<std::pair<server_id, append_reply>> append_replies;
 };
@@ -210,6 +212,9 @@ struct fsm {
     // and term when entry was received by leader
     log _log;
 
+    bool _current_term_dirty = false;
+    bool _voted_for_dirty = false;
+
     // A state for each follower, maintained only on the leader.
     std::optional<std::unordered_map<server_id, follower_progress>> _progress;
     // Holds all replies to AppendEntries RPC which are not
@@ -254,6 +259,9 @@ public:
         assert(_current_term < current_term);
         _current_term = current_term;
         _voted_for = server_id{};
+        _current_term_dirty = true;
+        // no need to mark voted_for as dirty since
+        // persisting current_term resets it
     }
     // Set cluster configuration, in real app should be taken from log
     void set_configuration(const configuration& config) {

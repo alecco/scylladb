@@ -245,8 +245,6 @@ future<> server::append_entries(server_id from, append_request_recv append_reque
 
     if (_fsm._current_term < append_request.current_term) {
         _fsm.update_current_term(append_request.current_term);
-        // this resets voted_for in persistent storage as well
-        co_await _storage->store_term(append_request.current_term);
     }
 
     // TODO: need to handle keep alive management here
@@ -289,6 +287,15 @@ future<> server::log_fiber() {
             if (!batch) {
                 co_await _log_entries.wait();
                 continue;
+            }
+
+            if (batch->term) {
+                // this resets voted_for in persistent storage as well
+                co_await _storage->store_term(*batch->term);
+            }
+
+            if (batch->vote) {
+                co_await _storage->store_vote(*batch->vote);
             }
 
             if (batch->log_entries.size()) {
