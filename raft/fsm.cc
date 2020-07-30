@@ -203,7 +203,7 @@ std::optional<log_batch> fsm::log_entries() {
 
     auto diff = _log.last_idx() - _log.stable_idx();
 
-    if (diff == 0 && _append_replies.empty()) {
+    if (diff == 0 && _append_replies.empty() && _current_term_dirty == false && _voted_for_dirty == false) {
         return {};
     }
 
@@ -220,6 +220,16 @@ std::optional<log_batch> fsm::log_entries() {
         // copy-on-write.
         batch.log_entries.emplace_back(_log[i]);
     }
+
+    if (_current_term_dirty) {
+        batch.term = _current_term;
+    }
+
+    if (_voted_for_dirty) {
+        batch.vote = _voted_for;
+    }
+
+    _current_term_dirty = _voted_for_dirty = false;
 
     return batch;
 }
