@@ -40,8 +40,10 @@ future<> server::start() {
     _log_status = log_fiber();
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
+    // start tick fiber
+    _ticker_status = ticker_fiber();
 
-    co_return;
+    return make_ready_future<>();
 }
 
 future<> server::add_entry(command command) {
@@ -385,6 +387,20 @@ future<> server::keepalive_fiber() {
     co_return;
 }
 
+future<> server::ticker_fiber() {
+    logger.trace("ticker_fiber starts");
+    try {
+        while (true) {
+            co_await sleep_abortable(100ms, _as);
+
+            _fsm.tick();
+        }
+    } catch(...) {
+        logger.trace("tiker_fiber stops: {}", std::current_exception());
+    }
+    co_return;
+}
+
 future<> server::stop() {
     logger.trace("stop() called");
     if (_fsm.is_leader()) {
@@ -397,9 +413,10 @@ future<> server::stop() {
         ac.second.committed.set_exception(stopped_error());
     }
     _awaited_commits.clear();
+    _as.request_abort();
     return seastar::when_all_succeed(std::move(_leadership_transition),
             std::move(_log_status), std::move(_applier_status),
-            _rpc->stop(), _state_machine->stop(), _storage->stop()).discard_result();
+            _rpc->stop(), _state_machine->stop(), _storage->stop(), std::move(_ticker_status)).discard_result();
 }
 
 future<> server::make_me_leader() {

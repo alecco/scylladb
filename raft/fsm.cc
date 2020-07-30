@@ -307,4 +307,7 @@ std::optional<apply_batch> fsm::apply_entries() {
     return batch;
 }
 
+void fsm::tick() {
+
+}
 } // end of namespace raft
