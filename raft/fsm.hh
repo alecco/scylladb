@@ -212,8 +212,8 @@ struct fsm {
     // and term when entry was received by leader
     log _log;
 
-    bool _current_term_dirty = false;
-    bool _voted_for_dirty = false;
+    bool _current_term_is_dirty = false;
+    bool _voted_for_is_dirty = false;
 
     // A state for each follower, maintained only on the leader.
     std::optional<std::unordered_map<server_id, follower_progress>> _progress;
@@ -263,7 +263,7 @@ public:
         assert(_current_term < current_term);
         _current_term = current_term;
         _voted_for = server_id{};
-        _current_term_dirty = true;
+        _current_term_is_dirty = true;
         // no need to mark voted_for as dirty since
         // persisting current_term resets it
     }

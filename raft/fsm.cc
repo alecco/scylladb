@@ -204,7 +204,9 @@ std::optional<log_batch> fsm::log_entries() {
 
     auto diff = _log.last_idx() - _log.stable_idx();
 
-    if (diff == 0 && _messages.empty() && _current_term_dirty == false && _voted_for_dirty == false) {
+    if (diff == 0 && _messages.empty() &&
+        _current_term_is_dirty == false && _voted_for_is_dirty == false) {
+
         return {};
     }
 
@@ -222,15 +224,15 @@ std::optional<log_batch> fsm::log_entries() {
         batch.log_entries.emplace_back(_log[i]);
     }
 
-    if (_current_term_dirty) {
+    if (_current_term_is_dirty) {
         batch.term = _current_term;
     }
 
-    if (_voted_for_dirty) {
+    if (_voted_for_is_dirty) {
         batch.vote = _voted_for;
     }
 
-    _current_term_dirty = _voted_for_dirty = false;
+    _current_term_is_dirty = _voted_for_is_dirty = false;
 
     return batch;
 }
