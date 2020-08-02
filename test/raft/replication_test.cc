@@ -34,7 +34,7 @@ public:
 };
 
 struct initial_state {
-    raft::term_t term;
+    raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
 };

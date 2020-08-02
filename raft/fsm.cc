@@ -93,7 +93,8 @@ std::pair<index_t, term_t> log::find_first_idx_of_term(index_t hint) const {
 
     if (i >= _log.size()) {
         // We have a log gap between the follower and the leader.
-        return {_log.back().idx, _log.back().term};
+        // Disable optimization
+        return {index_t(0), term_t(0)};
     }
 
     term_t term = _log[i].term;
@@ -453,14 +454,23 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
 
         index_t n = progress.next_idx;
 
-        // skip all the entries from next_idx to first_idx_for_non_matching_term that do not have non_matching_term
-        for (; n >= std::max(_log.start_idx(), rejected.first_idx_for_non_matching_term); n--) {
-            if (_log[n].term == rejected.non_matching_term) {
-                break;
+        if (rejected.non_matching_term) {
+            // we got a term mismatch, skip all the entries from next_idx to first_idx_for_non_matching_term
+            // that do not have non_matching_term
+            for (; n > std::max(_log.start_idx(), rejected.first_idx_for_non_matching_term); n--) {
+                if (_log[n].term == rejected.non_matching_term) {
+                    logger.trace("append_entries_reply[{}->{}]: first entry with different term {}", _my_id, from, n);
+                    n++; // we found a matching entry, now move to the next one
+                    break;
+                }
             }
+        } else {
+            // if there is no matching term it means there was a gap (as opposit to term missmatch)
+            // so start re-sending from last matched entry
+            // FIXME: make it more efficient?
+            n = index_t(progress.match_idx + 1);
         }
-        logger.trace("append_entries_reply[{}->{}]: n={}", _my_id, from, n);
-        n++; // we found a matching entry, now move to the next one
+
         progress.next_idx = n;
         logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _my_id, from, progress.next_idx, progress.match_idx);
         assert(progress.next_idx != progress.match_idx); // we should not fail to apply an entry next after a matched one
@@ -473,8 +483,11 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
 void fsm::replicate_to(server_id dst) {
     auto& progress = (*_progress)[dst];
 
+    logger.trace("replicate_to[{}->{}]: called next={} match={}", _my_id, dst, progress.next_idx, progress.match_idx);
+
     while(progress.next_idx - progress.match_idx < 10) {
         if (progress.next_idx > _log.stable_idx()) {
+            logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}", _my_id, dst, progress.next_idx, _log.stable_idx());
             // send out only persisted entries
             return;
         }
