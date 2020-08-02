@@ -185,6 +185,7 @@ void fsm::become_leader() {
     assert(!_progress);
     _state = server_state::LEADER;
     _current_leader = _my_id;
+    _votes = std::nullopt;
     _progress.emplace();
     for (auto s : _current_config.servers) {
         _progress->emplace(s.id, follower_progress{_log.next_idx(), index_t(0)});
@@ -196,7 +197,17 @@ void fsm::become_follower(server_id leader) {
     _current_leader = leader;
     _state = server_state::FOLLOWER;
     _progress = std::nullopt;
+    _votes = std::nullopt;
 }
+
+void fsm::become_candidate() {
+    update_current_term(term_t{_current_term + 1});
+    _state = server_state::CANDIDATE;
+    _votes.emplace();
+    _voted_for = _my_id;
+    _voted_for_is_dirty = true;
+}
+
 
 std::optional<log_batch> fsm::log_entries() {
     logger.trace("fsm::log_entries() {} stable index: {} last index: {}",
@@ -311,6 +322,8 @@ std::optional<apply_batch> fsm::apply_entries() {
 }
 
 void fsm::tick() {
+    _election_elapsed++;
+
     if (is_leader()) {
         keep_alive ka {
             .current_term = _current_term,
@@ -326,6 +339,17 @@ void fsm::tick() {
             }
         }
     }
-
+    if (is_past_election_timeout()) {
+        if (is_follower()) {
+            become_candidate();
+        } else {
+            // restart_election();
+        }
+    }
 }
+
+void fsm::step() {
+    _election_elapsed = 0;
+}
+
 } // end of namespace raft
