@@ -65,106 +65,9 @@ future<> server::add_entry(command command) {
     return it->second.committed.get_future();
 }
 
-future<> server::replication_fiber(server_id server, follower_progress& state) {
-    while (_fsm.is_leader()) {
-        while (_fsm._log.empty() || state.next_idx > _fsm._log.stable_idx()) {
-            // everything is replicated already, wait for the next entry to be added
-            try {
-                co_await _leader_state->_log_entry_added.wait();
-            } catch (...) {
-                co_return;
-            }
-        }
-        assert(!_fsm._log.empty() && state.next_idx <= _fsm._log.stable_idx());
-        const log_entry& entry = _fsm._log[state.next_idx];
-        index_t prev_idx = index_t(0);
-        term_t prev_term = _fsm._current_term;
-        if (state.next_idx != 1) {
-            prev_idx = index_t(state.next_idx - 1);
-            prev_term = _fsm._log[state.next_idx - 1].term;
-        }
-
-        append_request_send req = {{
-                .current_term = _fsm._current_term,
-                .leader_id = _fsm._my_id,
-                .prev_log_idx = prev_idx,
-                .prev_log_term = prev_term,
-                .leader_commit_idx = _fsm._commit_idx
-            },
-            // TODO: send only one entry for now, but we should batch in the future
-            std::vector<log_entry_cref>(1, std::cref(entry))
-        };
-
-        logger.trace("replication_fiber[{}->{}]: send entry idx={}, term={}",
-            _fsm._my_id, server, entry.idx, entry.term);
-
-        // optimistically update next send index. In case a message is lost
-        // there will be negative reply that will resend idx
-        state.next_idx++;
-        try {
-            co_await _rpc->send_append_entries(server, req);
-        } catch (...) {
-            continue; // if there was an error sending try again
-        }
-    }
-    co_return;
-}
-
 void server::append_entries_reply(server_id from, append_reply&& reply) {
-
-    _fsm.step();
-    if (!_fsm.is_leader() || reply.current_term < _fsm._current_term) {
-        // drop stray reply if we are no longer a leader or the term is too old
-        return;
-    }
-
-    if (reply.current_term > _fsm._current_term) {
-        // receiver knows something about newer leader, so this server has to convert to a follower
-        _fsm.become_follower(server_id{});
-        _leadership_transition = stop_leadership();
-        return;
-    }
-
-    follower_progress& progress = (*_fsm._progress)[from];
-
-    if (std::holds_alternative<append_reply::accepted>(reply.result)) {
-        // accepted
-        // a follower may have longer log, so cap it with our own log length
-        index_t last_idx = std::min(std::get<append_reply::accepted>(reply.result).last_log_index, _fsm._log.last_idx());
-
-        logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}", _fsm._my_id, from, progress.match_idx, last_idx);
-
-        progress.match_idx = std::max(progress.match_idx, last_idx);
-
-        // check if any new entry can be committed
-        if (_fsm.check_committed()) {
-            commit_entries();
-        }
-    } else {
-        // rejected
-        append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
-
-        logger.trace("append_entries_reply[{}->{}]: rejected match={} index={} non matching term={}, idx for term={}", _fsm._my_id, from, progress.match_idx, rejected.index, rejected.non_matching_term, rejected.first_idx_for_non_matching_term);
-
-        if (rejected.index <= progress.match_idx) {
-            // if rejected index is smaller that matched it means this is a stray reply
-            return;
-        }
-
-        index_t n = progress.next_idx;
-
-        // skip all the entries from next_idx to first_idx_for_non_matching_term that do not have non_matching_term
-        for (; n >= std::max(_fsm._log.start_idx(), rejected.first_idx_for_non_matching_term); n--) {
-            if (_fsm._log[n].term == rejected.non_matching_term) {
-                break;
-            }
-        }
-        logger.trace("append_entries_reply[{}->{}]: n={}", _fsm._my_id, from, n);
-        n++; // we found a matching entry, now move to the next one
-        progress.next_idx = n;
-        logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _fsm._my_id, from, progress.next_idx, progress.match_idx);
-        assert(progress.next_idx != progress.match_idx); // we should not fail to apply an entry next after a matched one
-        _leader_state->_log_entry_added.broadcast(); // signal next_idx change
+    if (_fsm.append_entries_reply(from , reply)) {
+        commit_entries();
     }
 }
 
@@ -190,79 +93,8 @@ void server::commit_entries() {
     }
 }
 
-future<> server::start_leadership() {
-    assert(!_leader_state);
-
-    _leadership_transition = make_ready_future<>(); // prepare to next transition
-
-    _leader_state.emplace(); // recreate leader's state
-
-    for (auto& p : *(_fsm._progress)) {
-        if (p.first != _fsm._my_id) {
-            _leader_state->_replicatoin_fibers.emplace_back(replication_fiber(p.first, p.second));
-        }
-    }
-
-    co_return;
-}
-
-future<> server::stop_leadership() {
-    assert(_leadership_transition.available());
-    _leader_state->_log_entry_added.broken();
-
-    co_await seastar::when_all_succeed(_leader_state->_replicatoin_fibers.begin(), _leader_state->_replicatoin_fibers.end());
-    _leader_state = std::nullopt;
-}
-
 void server::append_entries(server_id from, append_request_recv append_request) {
-    logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={}", _fsm._my_id,
-            append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
-            append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
-
-    _fsm.step();
-    if (append_request.current_term < _fsm._current_term) {
-        _fsm.send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, term_t(0), index_t(0)}});
-        return;
-    }
-
-    // Can it happen that a leader gets append request with the same term?
-    // What should we do about it?
-    assert(!_fsm.is_leader() || _fsm._current_term > append_request.current_term);
-
-    if (!_fsm.is_follower()) {
-        bool was_leader = _fsm.is_leader();
-        _fsm.become_follower(server_id{});
-        if (was_leader) {
-            _leadership_transition = stop_leadership();
-        }
-    }
-
-    if (_fsm._current_term < append_request.current_term) {
-        _fsm.update_current_term(append_request.current_term);
-    }
-
-    // TODO: need to handle keep alive management here
-
-    // Ensure log matching property, even if we append no entries.
-    // 3.5
-    // Until the leader has discovered where it and the
-    // follower’s logs match, the leader can send
-    // AppendEntries with no entries (like heartbeats) to save
-    // bandwidth.
-    if (! _fsm._log.match_term(append_request.prev_log_idx, append_request.prev_log_term)) {
-        auto [i, t] = _fsm._log.find_first_idx_of_term(append_request.prev_log_idx);
-        logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}, reject hint {}",
-            _fsm._my_id, append_request.prev_log_idx, append_request.prev_log_term, t, i);
-        // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-        _fsm.send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, t, i}});
-        return;
-    }
-
-    if (_fsm._log.maybe_append(append_request.entries)) {
-        _fsm.send_append_reply(from, append_reply{_fsm._current_term, append_reply::accepted{_fsm._log.last_idx()}});
-    }
-
-    if (_fsm.commit_to(append_request.leader_commit_idx)) {
+    if (_fsm.append_entries(from, append_request)) {
         commit_entries();
     }
 }
@@ -307,9 +139,8 @@ future<> server::log_fiber() {
                     if (_fsm.check_committed()) {
                         commit_entries();
                     }
-                } else if (_fsm.is_leader()) {
-                    _leader_state->_log_entry_added.broadcast();
                 }
+
                 last_stable = batch->log_entries.crbegin()->idx;
             }
             if (batch->messages.size()) {
@@ -322,6 +153,8 @@ future<> server::log_fiber() {
                         } else if constexpr (std::is_same_v<T, keep_alive>) {
                             _rpc->send_keepalive(id, std::move(m));
                             return make_ready_future<>();
+                        } else if constexpr (std::is_same_v<T, append_request_send>) {
+                            return _rpc->send_append_entries(id, std::move(m));
                         }
                         logger.error("log fiber {} tried to send unknown message type", _fsm._my_id);
                         return make_ready_future<>();
@@ -365,7 +198,6 @@ future<> server::stop() {
     logger.trace("stop() called");
     if (_fsm.is_leader()) {
         _fsm.become_follower(server_id{});
-        _leadership_transition = stop_leadership();
     }
     _fsm._sm_events.broken();
     _apply_entries.broken();
@@ -380,13 +212,8 @@ future<> server::stop() {
             _rpc->stop(), _state_machine->stop(), _storage->stop()).discard_result();
 }
 
-future<> server::make_me_leader() {
-    // wait for previous transition to complete, it is done async
-    co_await std::move(_leadership_transition);
-
+void server::make_me_leader() {
     _fsm.become_leader();
-
-    co_return start_leadership();
 }
 
 } // end of namespace raft

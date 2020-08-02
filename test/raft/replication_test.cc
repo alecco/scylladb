@@ -182,7 +182,7 @@ future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
     auto rafts = co_await create_cluster(states, apply);
 
     auto& leader = *rafts[0].first;
-    co_await leader.make_me_leader();
+    leader.make_me_leader();
 
     co_await seastar::parallel_for_each(std::views::iota(start_itr, itr), [&] (int i) {
             tlogger.debug("Adding entry {} on a leader", i);

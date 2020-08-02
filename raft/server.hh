@@ -73,7 +73,7 @@ public:
 
     // Ad hoc functions for testing
 
-    future<> make_me_leader();
+    void make_me_leader();
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -82,16 +82,6 @@ private:
     fsm _fsm;
     seastar::timer<lowres_clock> _ticker;
 
-    // the sate that is valid only on leader
-    struct leader_state {
-        // signaled on a leader each time an entry is added to the log
-        seastar::condition_variable _log_entry_added;
-        // on a leader holds futures of all replication fibers
-        std::vector<future<>> _replicatoin_fibers;
-    };
-
-    std::optional<leader_state> _leader_state;
-
     struct commit_status {
         term_t term; // term the entry was added with
         promise<> committed; // notify commit even here
@@ -99,11 +89,6 @@ private:
 
     // entries that have a waiter that needs to be notified when committed
     std::map<index_t, commit_status> _awaited_commits;
-
-    // constantly replicate the log to a given node.
-    // Started when a server becomes a leader
-    // Stopped when a server stopped being a leader
-    future<> replication_fiber(server_id id, follower_progress& state);
 
     // Called to commit entries (on a leader or otherwise).
     void commit_entries();

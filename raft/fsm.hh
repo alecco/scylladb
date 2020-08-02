@@ -382,11 +382,25 @@ public:
         _sm_events.signal();
     }
 
+    // send append_entries
+    void send_append_entries(server_id to, append_request_send append) {
+        _messages.push_back(std::make_pair(to, append));
+        _sm_events.signal();
+    }
+
     // Called to advance virtual clock of the protocol state machine.
     void tick();
 
     // Common part of all transitions of the protocol state machine.
     void step();
+
+    // controls replication process
+    void replicate_to(server_id dst);
+    void replicate();
+
+    // returns true if new entries were committed
+    bool append_entries_reply(server_id from, append_reply& reply);
+    bool append_entries(server_id from, append_request_recv& append_request);
 };
 
 } // namespace raft

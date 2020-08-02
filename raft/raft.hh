@@ -242,7 +242,7 @@ struct vote_reply {
     bool vote_granted;
 };
 
-using rpc_message = std::variant<append_reply, keep_alive>;
+using rpc_message = std::variant<append_reply, keep_alive, append_request_send>;
 
 class rpc;
 class storage;
