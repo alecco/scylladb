@@ -80,8 +80,7 @@ private:
     std::unique_ptr<storage> _storage;
     // Protocol deterministic finite-state machine
     fsm _fsm;
-    // abort source to abort various bg tasks
-    seastar::abort_source _as;
+    seastar::timer<lowres_clock> _ticker;
 
     // the sate that is valid only on leader
     struct leader_state {
@@ -129,12 +128,6 @@ private:
     seastar::condition_variable _apply_entries;
     future<> _applier_status = make_ready_future<>();
     future<> _log_status = make_ready_future<>();
-
-    // result of a tick fiber;
-    future<> _ticker_status = make_ready_future<>();
-
-    // this thread drives fsm clock
-    future<> ticker_fiber();
 };
 
 } // namespace raft
