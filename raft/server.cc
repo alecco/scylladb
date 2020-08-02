@@ -36,6 +36,8 @@ server::server(
 }
 
 future<> server::start() {
+    assert(_fsm._current_term != term_t(0));
+
     // start fiber to persist entries added to in-memory log
     _log_status = log_fiber();
     // start fiber to apply committed entries
