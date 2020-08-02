@@ -33,6 +33,37 @@ struct follower_progress {
     index_t match_idx;
 };
 
+// Possible leader election outcomes.
+enum class vote_result {
+    // We haven't got enough responses yet, either because
+    // the servers haven't voted or responses failed to arrive.
+    VOTE_UNKNOWN,
+    // This candidate has won the election
+    VOTE_WON,
+    // The quorum of servers has voted against this candidate
+    VOTE_LOST,
+};
+
+// Candidate's state specific to election
+struct votes {
+    // Number of responses to RequestVote RPC.
+    // The candidate always votes for self.
+    size_t responded = 1;
+    // Number of granted votes.
+    // The candidate always votes for self.
+    size_t granted = 1;
+
+    vote_result tally_votes(size_t cluster_size) const {
+        auto quorum = cluster_size / 2 + 1;
+        if (granted >= quorum) {
+            return vote_result::VOTE_WON;
+        }
+        assert(responded <= cluster_size);
+        auto unknown = cluster_size - responded;
+        return granted + unknown >= quorum ? vote_result::VOTE_UNKNOWN : vote_result::VOTE_LOST;
+    }
+};
+
 // State of the FSM that needs logging & sending.
 struct log_batch {
     std::optional<term_t> term;
@@ -215,6 +246,17 @@ struct fsm {
     bool _current_term_is_dirty = false;
     bool _voted_for_is_dirty = false;
 
+    int _election_elapsed = 0;
+    // 3.4 Leader election
+    // If a follower receives no communication over a period of
+    // time called the election timeout, then it assumes there is
+    // no viable leader and begins an election to choose a new
+    // leader
+    const int _election_timeout = 10;
+    // A random value in range [election_timeout, 2 * election_timeout)
+    int _randomized_election_timeout = 10;
+    std::optional<votes> _votes;
+
     // A state for each follower, maintained only on the leader.
     std::optional<std::unordered_map<server_id, follower_progress>> _progress;
     // Holds all replies to AppendEntries RPC which are not
@@ -238,6 +280,9 @@ struct fsm {
     // Signaled when there are IO event to process
     seastar::condition_variable _sm_events;
 
+    bool is_past_election_timeout() const {
+        return _election_elapsed > _randomized_election_timeout;
+    }
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
@@ -258,14 +303,22 @@ public:
 
     void become_follower(server_id leader);
 
+    void become_candidate();
+
     void update_current_term(term_t current_term) {
         assert(_state == server_state::FOLLOWER);
         assert(_current_term < current_term);
         _current_term = current_term;
         _voted_for = server_id{};
+        // No need to mark voted_for as dirty since
+        // persisting current_term resets it.
         _current_term_is_dirty = true;
-        // no need to mark voted_for as dirty since
-        // persisting current_term resets it
+
+        // Reset the randomized election timeout on each term
+        // change, even if we do not plan to campaign during this
+        // term: the main purpose of the timeout is to avoid
+        // starting our campaign simultaneously with other followers.
+        _randomized_election_timeout = _election_timeout + std::rand() % _election_timeout;
     }
     // Set cluster configuration, in real app should be taken from log
     void set_configuration(const configuration& config) {
@@ -329,8 +382,11 @@ public:
         _sm_events.signal();
     }
 
-    // Called to advance virtual clock of the state machine
+    // Called to advance virtual clock of the protocol state machine.
     void tick();
+
+    // Common part of all transitions of the protocol state machine.
+    void step();
 };
 
 } // namespace raft

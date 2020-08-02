@@ -111,6 +111,8 @@ future<> server::replication_fiber(server_id server, follower_progress& state) {
 }
 
 void server::append_entries_reply(server_id from, append_reply&& reply) {
+
+    _fsm.step();
     if (!_fsm.is_leader() || reply.current_term < _fsm._current_term) {
         // drop stray reply if we are no longer a leader or the term is too old
         return;
@@ -216,6 +218,8 @@ void server::append_entries(server_id from, append_request_recv append_request) 
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={}", _fsm._my_id,
             append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
             append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
+
+    _fsm.step();
     if (append_request.current_term < _fsm._current_term) {
         _fsm.send_append_reply(from, append_reply{_fsm._current_term, append_reply::rejected{append_request.prev_log_idx, term_t(0), index_t(0)}});
         return;
