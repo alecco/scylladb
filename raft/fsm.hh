@@ -164,9 +164,9 @@ public:
     std::pair<index_t, term_t> find_first_idx_of_term(index_t hint) const;
 
     // Called on a follower to append entries from a leader.
-    // @retval true if any entries were appended to the unstable
+    // @retval return an index of last appended entry
     // Raft log, so we need to persist the log.
-    bool maybe_append(const std::vector<log_entry>& entries);
+    index_t maybe_append(const std::vector<log_entry>& entries);
 };
 
 // Raft protocol finite state machine
