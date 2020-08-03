@@ -107,27 +107,23 @@ std::pair<index_t, term_t> log::find_first_idx_of_term(index_t hint) const {
     return {_start_idx + i, term};
 }
 
-bool log::maybe_append(const std::vector<log_entry>& entries) {
+index_t log::maybe_append(const std::vector<log_entry>& entries) {
     if (entries.size() == 0) {
-        return false;
+        return last_idx();
     }
 
-    // Track if the log got new entries, log size is not
-    // an indicator since the log may get truncated.
-    auto has_new_entries = false;
+    index_t last_new_idx = entries.back().idx;
 
     // We must scan through all entries if the log already
     // contains them to ensure the terms match.
     for (auto& e : entries) {
         if (e.idx <= last_idx()) {
             if (e.idx < _start_idx) {
-                logger.trace("append_entries: skipping entry with idx {} less than log start {}",
-                    e.idx, _start_idx);
+                logger.trace("append_entries: skipping entry with idx {} less than log start {}", e.idx, _start_idx);
                 continue;
             }
             if (e.term == _log[e.idx - _start_idx].term) {
-                logger.trace("append_entries: entries with index {} has matching terms {}",
-                    e.idx, e.term);
+                logger.trace("append_entries: entries with index {} has matching terms {}", e.idx, e.term);
                 continue;
             }
             logger.trace("append_entries: entries with index {} has non matching terms e.term={}, _log[i].term = {}",
@@ -140,9 +136,9 @@ bool log::maybe_append(const std::vector<log_entry>& entries) {
         // Assert log monotonicity
         assert(e.idx == next_idx());
         _log.emplace_back(std::move(e));
-        has_new_entries = true;
     }
-    return has_new_entries;
+
+    return last_new_idx;
 }
 
 
@@ -406,9 +402,7 @@ bool fsm::append_entries(server_id from, append_request_recv& append_request) {
         return false;
     }
 
-    if (_log.maybe_append(append_request.entries)) {
-        send_append_reply(from, append_reply{_current_term, append_reply::accepted{_log.last_idx()}});
-    }
+    send_append_reply(from, append_reply{_current_term, append_reply::accepted{_log.maybe_append(append_request.entries)}});
 
     return commit_to(append_request.leader_commit_idx);
 }
