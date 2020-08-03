@@ -282,8 +282,19 @@ bool fsm::check_committed() {
     if (count < quorum()) {
         return false;
     }
-    std::nth_element(match.begin(), match.begin() + quorum() - 1, match.end());
-    index_t new_commit_idx = match[quorum() - 1];
+    // The index of the pivot node is selected so that all nodes
+    // with a larger match index plus the pivot form a majority,
+    // for example:
+    // cluster size  pivot node     majority
+    // 1             0              1
+    // 2             0              2
+    // 3             1              2
+    // 4             1              3
+    // 5             2              3
+    //
+    auto pivot = (match.size() - 1) / 2;
+    std::nth_element(match.begin(), match.begin() + pivot, match.end());
+    index_t new_commit_idx = match[pivot];
 
     assert(new_commit_idx > _commit_idx);
 
