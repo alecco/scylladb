@@ -59,11 +59,11 @@ void log::stable_to(index_t idx) {
     _stable_idx = idx;
 }
 
-bool log::match_term(index_t idx, term_t term) const {
+std::optional<term_t> log::match_term(index_t idx, term_t term) const {
     if (idx == 0) {
         // Special case of empty log on leader,
         // TLA+ line 324.
-        return true;
+        return std::nullopt;
     }
     // @todo idx can be legally < _start_idx if all entries
     // are committed and all logs are snapshotted away.
@@ -74,37 +74,9 @@ bool log::match_term(index_t idx, term_t term) const {
 
     if (i >= _log.size()) {
         // We have a gap between the follower and the leader.
-        return false;
+        return term_t(0);
     }
-    return _log[i].term == term;
-}
-
-std::pair<index_t, term_t> log::find_first_idx_of_term(index_t hint) const {
-
-    assert(hint >= _start_idx);
-
-    // @todo if _log.size() == 0 use snapshot index and term
-    if (hint == 0 || _log.size() == 0) {
-        // A special case of an empty log.
-        return {last_idx(), term_t{0}};
-    }
-
-    auto i = hint - _start_idx;
-
-    if (i >= _log.size()) {
-        // We have a log gap between the follower and the leader.
-        // Disable optimization
-        return {index_t(0), term_t(0)};
-    }
-
-    term_t term = _log[i].term;
-
-    while (i > 0) {
-        if (_log[i-1].term != term)
-            break;
-        i--;
-    }
-    return {_start_idx + i, term};
+    return _log[i].term == term ? std::nullopt : std::optional<term_t>(_log[i].term);
 }
 
 index_t log::maybe_append(const std::vector<log_entry>& entries) {
@@ -369,7 +341,7 @@ bool fsm::append_entries(server_id from, append_request_recv& append_request) {
 
     step();
     if (append_request.current_term < _current_term) {
-        send_append_reply(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx, term_t(0), index_t(0)}});
+        send_append_reply(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
         return false;
     }
 
@@ -393,12 +365,12 @@ bool fsm::append_entries(server_id from, append_request_recv& append_request) {
     // follower’s logs match, the leader can send
     // AppendEntries with no entries (like heartbeats) to save
     // bandwidth.
-    if (!_log.match_term(append_request.prev_log_idx, append_request.prev_log_term)) {
-        auto [i, t] = _log.find_first_idx_of_term(append_request.prev_log_idx);
-        logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}, reject hint {}",
-            _my_id, append_request.prev_log_idx, append_request.prev_log_term, t, i);
+    std::optional<term_t> mismatch = _log.match_term(append_request.prev_log_idx, append_request.prev_log_term);
+    if (mismatch) {
+        logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
+            _my_id, append_request.prev_log_idx, append_request.prev_log_term, *mismatch);
         // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-        send_append_reply(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx, t, i}});
+        send_append_reply(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
         return false;
     }
 
@@ -426,7 +398,7 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
         // accepted
         // a follower may have longer log, so cap it with our own log length
-        index_t last_idx = std::min(std::get<append_reply::accepted>(reply.result).last_log_index, _log.last_idx());
+        index_t last_idx = std::min(std::get<append_reply::accepted>(reply.result).last_new_index, _log.last_idx());
 
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}", _my_id, from, progress.match_idx, last_idx);
 
@@ -438,37 +410,24 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
 
-        logger.trace("append_entries_reply[{}->{}]: rejected match={} index={} non matching term={}, idx for term={}",
-                _my_id, from, progress.match_idx, rejected.index, rejected.non_matching_term, rejected.first_idx_for_non_matching_term);
+        logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}", _my_id, from, progress.match_idx, rejected.non_matching_index);
 
-        if (rejected.index <= progress.match_idx) {
+        if (rejected.non_matching_index <= progress.match_idx) {
             // if rejected index is smaller that matched it means this is a stray reply
             return false;
         }
 
-        index_t n = progress.next_idx;
+        // we should always be able to successfully commit start index
+        assert(rejected.non_matching_index != _log.start_idx() - 1);
 
-        if (rejected.non_matching_term) {
-            // we got a term mismatch, skip all the entries from next_idx to first_idx_for_non_matching_term
-            // that do not have non_matching_term
-            for (; n > std::max(_log.start_idx(), rejected.first_idx_for_non_matching_term); n--) {
-                if (_log[n].term == rejected.non_matching_term) {
-                    logger.trace("append_entries_reply[{}->{}]: first entry with different term {}", _my_id, from, n);
-                    n++; // we found a matching entry, now move to the next one
-                    break;
-                }
-            }
-        } else {
-            // if there is no matching term it means there was a gap (as opposite to term mismatch)
-            // so start re-sending from last matched entry
-            // FIXME: make it more efficient?
-            n = index_t(progress.match_idx + 1);
-        }
+        // start re-sending from non matching
+        // FIXME: make it more efficient
+        progress.next_idx = index_t(rejected.non_matching_index);
 
-        progress.next_idx = n;
-        logger.trace("replication_fiber[{}->{}]: next_idx={}, match_idx={}", _my_id, from, progress.next_idx, progress.match_idx);
         assert(progress.next_idx != progress.match_idx); // we should not fail to apply an entry next after a matched one
     }
+
+    logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}", _my_id, from, progress.next_idx, progress.match_idx);
 
     replicate_to(from);
     return res;

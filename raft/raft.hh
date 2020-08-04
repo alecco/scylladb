@@ -196,14 +196,14 @@ struct append_request_recv : public append_request_base {
 };
 struct append_reply {
     struct rejected {
-        index_t index; // rejected index
-        // term of the conflicting entry
-        term_t non_matching_term;
-        // first index for the conflicting term
-        index_t first_idx_for_non_matching_term;
+        // index of non matching entry that caused the request
+        // to be rejected
+        index_t non_matching_index;
     };
     struct accepted {
-        index_t last_log_index;
+        // last entry that was appended (may be smaller than max log index
+        // in case follower's log is longer and appended entries match)
+        index_t last_new_index;
     };
     // current term, for leader to update itself
     term_t current_term;
