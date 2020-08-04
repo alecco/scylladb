@@ -459,7 +459,7 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
                 }
             }
         } else {
-            // if there is no matching term it means there was a gap (as opposit to term missmatch)
+            // if there is no matching term it means there was a gap (as opposite to term mismatch)
             // so start re-sending from last matched entry
             // FIXME: make it more efficient?
             n = index_t(progress.match_idx + 1);
