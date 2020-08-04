@@ -80,9 +80,7 @@ std::optional<term_t> log::match_term(index_t idx, term_t term) const {
 }
 
 index_t log::maybe_append(const std::vector<log_entry>& entries) {
-    if (entries.size() == 0) {
-        return last_idx();
-    }
+    assert(!entries.empty());
 
     index_t last_new_idx = entries.back().idx;
 
@@ -157,7 +155,7 @@ void fsm::become_leader() {
     _votes = std::nullopt;
     _progress.emplace();
     for (auto s : _current_config.servers) {
-        _progress->emplace(s.id, follower_progress{_log.next_idx(), index_t(0)});
+        _progress->emplace(s.id, follower_progress{_log.next_idx(), index_t(0), follower_progress::state::PROBE});
     }
     replicate();
 }
@@ -307,17 +305,32 @@ void fsm::tick() {
     _election_elapsed++;
 
     if (is_leader()) {
-        keep_alive ka {
-            .current_term = _current_term,
-            .leader_id = _current_leader,
-            .leader_commit_idx = _commit_idx,
-        };
-
         for (auto server : _current_config.servers) {
             if (server.id != _my_id) {
-                // cap committed index by math_idx otherwise a follower may commit unmatched entries
-                ka.leader_commit_idx = std::min(_commit_idx, (*_progress)[server.id].match_idx);
-                send_keepalive(server.id, ka);
+                auto& progress = progress_for(server.id);
+                if (progress.state == follower_progress::state::PROBE) {
+                    // allow one probe to be resent per follower per time tick
+                    progress.probe_sent = false;
+                } else {
+                    if (progress.in_flight == follower_progress::max_in_flight) {
+                        progress.in_flight--; // allow one more packet to be sent
+                    }
+                }
+                if (progress.match_idx < _log.stable_idx()) {
+                    logger.trace("tick[{}]: replicate to {} because match={} < stable={}", _my_id, server.id, progress.match_idx, _log.stable_idx());
+                    replicate_to(server.id, true);
+                }
+                if (!progress.activity) {
+                    keep_alive ka {
+                        .current_term = _current_term,
+                        .leader_id = _current_leader,
+                        // cap committed index by math_idx otherwise a follower
+                        .leader_commit_idx = std::min(_commit_idx, progress.match_idx),
+                    };
+                    logger.trace("tick[{}]: send keep aplive to {}", _my_id, server.id);
+                    send_keepalive(server.id, ka);
+                }
+                progress.activity = false;
             }
         }
     }
@@ -359,22 +372,36 @@ bool fsm::append_entries(server_id from, append_request_recv& append_request) {
 
     // TODO: need to handle keep alive management here
 
-    // Ensure log matching property, even if we append no entries.
-    // 3.5
-    // Until the leader has discovered where it and the
-    // follower’s logs match, the leader can send
-    // AppendEntries with no entries (like heartbeats) to save
-    // bandwidth.
-    std::optional<term_t> mismatch = _log.match_term(append_request.prev_log_idx, append_request.prev_log_term);
-    if (mismatch) {
-        logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
-            _my_id, append_request.prev_log_idx, append_request.prev_log_term, *mismatch);
-        // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-        send_append_reply(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
-        return false;
-    }
+    if (append_request.prev_log_term) {
+        // keep alive messages for not have prev_log_term/prev_log_idx and do not need a reply
+        // so skip log matching for them
+        // FIXME: introduce fsm::keep_aliev()?
 
-    send_append_reply(from, append_reply{_current_term, append_reply::accepted{_log.maybe_append(append_request.entries)}});
+        // Ensure log matching property, even if we append no entries.
+        // 3.5
+        // Until the leader has discovered where it and the
+        // follower’s logs match, the leader can send
+        // AppendEntries with no entries (like heartbeats) to save
+        // bandwidth.
+        std::optional<term_t> mismatch = _log.match_term(append_request.prev_log_idx, append_request.prev_log_term);
+        if (mismatch) {
+            logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
+                    _my_id, append_request.prev_log_idx, append_request.prev_log_term, *mismatch);
+            // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+            send_append_reply(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
+            return false;
+        }
+
+        // if there is no entries it means that leader wants to ensure forward progress
+        // reply with the last index that matches
+        index_t last_new_idx = append_request.prev_log_idx;
+
+        if (!append_request.entries.empty()) {
+            last_new_idx = _log.maybe_append(append_request.entries);
+        }
+
+        send_append_reply(from, append_reply{_current_term, append_reply::accepted{last_new_idx}});
+    }
 
     return commit_to(append_request.leader_commit_idx);
 }
@@ -392,7 +419,14 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
         return false;
     }
 
-    follower_progress& progress = (*_progress)[from];
+    follower_progress& progress = progress_for(from);
+
+    if (progress.state == follower_progress::state::PIPELINE) {
+        if (progress.in_flight) {
+            // in_flight is not precise, so do not let it underflow
+            progress.in_flight--;
+        }
+    }
 
     bool res = false;
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
@@ -403,6 +437,11 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}", _my_id, from, progress.match_idx, last_idx);
 
         progress.match_idx = std::max(progress.match_idx, last_idx);
+
+        // if a previous request was accepted move to pipeline state
+        // since we now know follwoer's log state
+        progress.state = follower_progress::state::PIPELINE;
+        progress.in_flight = 0;
 
         // check if any new entry can be committed
         res = check_committed();
@@ -424,28 +463,47 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
         // FIXME: make it more efficient
         progress.next_idx = index_t(rejected.non_matching_index);
 
+        progress.state = follower_progress::state::PROBE;
+        progress.probe_sent = false;
+
         assert(progress.next_idx != progress.match_idx); // we should not fail to apply an entry next after a matched one
     }
 
     logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}", _my_id, from, progress.next_idx, progress.match_idx);
 
-    replicate_to(from);
+    replicate_to(from, false);
     return res;
 }
 
-void fsm::replicate_to(server_id dst) {
-    auto& progress = (*_progress)[dst];
+bool fsm::can_send_to(const follower_progress& progress) {
+    if (progress.state == follower_progress::state::PROBE && progress.probe_sent) {
+        return false;
+    }
+
+    // allow 10 outstanding indexes
+    // FIXME: make it smarter
+    return progress.in_flight < follower_progress::max_in_flight;
+}
+
+void fsm::replicate_to(server_id dst, bool allow_empty) {
+    auto& progress = progress_for(dst);
 
     logger.trace("replicate_to[{}->{}]: called next={} match={}", _my_id, dst, progress.next_idx, progress.match_idx);
 
-    while(progress.next_idx - progress.match_idx < 10) {
+    while(fsm::can_send_to(progress)) {
+        index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.stable_idx()) {
-            logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}", _my_id, dst, progress.next_idx, _log.stable_idx());
-            // send out only persisted entries
-            return;
+            next_idx = index_t(0);
+            logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}",
+                    _my_id, dst, progress.next_idx, _log.stable_idx(), allow_empty);
+            if (!allow_empty) {
+                // send out only persisted entries
+                return;
+            }
         }
 
-        const log_entry& entry = _log[progress.next_idx];
+        allow_empty = false; // allow only one empty message
+
         index_t prev_idx = index_t(0);
         term_t prev_term = _current_term;
         if (progress.next_idx != 1) {
@@ -460,17 +518,29 @@ void fsm::replicate_to(server_id dst) {
                 .prev_log_term = prev_term,
                 .leader_commit_idx = _commit_idx
             },
-            // TODO: send only one entry for now, but we should batch in the future
-            std::vector<log_entry_cref>(1, std::cref(entry))
+            std::vector<log_entry_cref>()
         };
 
+        if (next_idx) {
+            const log_entry& entry = _log[next_idx];
+            // TODO: send only one entry for now, but we should batch in the future
+            req.entries.push_back(std::cref(entry));
+            logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}", _my_id, dst, entry.idx, entry.term);
+            // optimistically update next send index. In case a message is lost
+            // there will be negative reply that will re-send idx
+            progress.next_idx++;
+        } else {
+            logger.trace("replicate_to[{}->{}]: send empty", _my_id, dst);
+        }
 
-        logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}", _my_id, dst, entry.idx, entry.term);
-
-        // optimistically update next send index. In case a message is lost
-        // there will be negative reply that will resend idx
-        progress.next_idx++;
         send_append_entries(dst, req);
+
+        if (progress.state == follower_progress::state::PROBE) {
+            progress.probe_sent = true;
+        } else {
+            progress.in_flight++;
+        }
+        progress.activity = true;
     }
 }
 
@@ -478,7 +548,7 @@ void fsm::replicate() {
     assert(is_leader());
     for (auto server : _current_config.servers) {
         if (server.id != _my_id) {
-            replicate_to(server.id);
+            replicate_to(server.id, false);
         }
     }
 }
