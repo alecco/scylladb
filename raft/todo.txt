@@ -23,3 +23,6 @@
   so it will send the same entry again and again until reply is received
   and match_idx is adjusted. The logic should be fixed to send several batched
   requests and do not resend before certain time passes.
+* implement leader step down
+* implement pre-vote and sticky leadership
+* implement cluster configuration changes
