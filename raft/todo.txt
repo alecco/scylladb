@@ -26,3 +26,4 @@
 * implement leader step down
 * implement pre-vote and sticky leadership
 * implement cluster configuration changes
+* introduce class progress that instantiates match array
