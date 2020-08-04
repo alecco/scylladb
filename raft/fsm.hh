@@ -277,34 +277,33 @@ struct fsm {
     // currently used configuration, may be different from committed during configuration change
     configuration _current_config;
 
-    // Signaled when there are IO event to process
+    // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
 
     bool is_past_election_timeout() const {
         return _election_elapsed > _randomized_election_timeout;
     }
-public:
-    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
-    bool is_leader() const {
-        assert(_state != server_state::LEADER || _my_id == _current_leader);
-        return _state == server_state::LEADER;
-    }
-    bool is_follower() const {
-        return _state == server_state::FOLLOWER;
-    }
-    void check_is_leader() const {
-        if (!is_leader()) {
-            throw not_leader(_current_leader);
-        }
+private:
+    // A helper to send reply to an append message
+    void send_append_reply(server_id to, append_reply reply) {
+        _messages.push_back(std::make_pair(to, std::move(reply)));
+        _sm_events.signal();
     }
 
-    void become_leader();
+    // A helper to send keepalive
+    void send_keepalive(server_id to, keep_alive keep_alive) {
+        _messages.push_back(std::make_pair(to, keep_alive));
+        _sm_events.signal();
+    }
 
-    void become_follower(server_id leader);
+    // A helper to send AppendEntries message
+    void send_append_entries(server_id to, append_request_send append) {
+        _messages.push_back(std::make_pair(to, append));
+        _sm_events.signal();
+    }
 
-    void become_candidate();
-
+    // A helper to update FSM current term.
     void update_current_term(term_t current_term) {
         assert(_state == server_state::FOLLOWER);
         assert(_current_term < current_term);
@@ -320,6 +319,32 @@ public:
         // starting our campaign simultaneously with other followers.
         _randomized_election_timeout = _election_timeout + std::rand() % _election_timeout;
     }
+    // Calculates current quorum
+    size_t quorum() const {
+        return _current_config.servers.size() / 2 + 1;
+    }
+
+    void check_is_leader() const {
+        if (!is_leader()) {
+            throw not_leader(_current_leader);
+        }
+    }
+
+    void become_candidate();
+public:
+    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
+
+    bool is_leader() const {
+        assert(_state != server_state::LEADER || _my_id == _current_leader);
+        return _state == server_state::LEADER;
+    }
+    bool is_follower() const {
+        return _state == server_state::FOLLOWER;
+    }
+    void become_leader();
+
+    void become_follower(server_id leader);
+
     // Set cluster configuration, in real app should be taken from log
     void set_configuration(const configuration& config) {
         _current_config = _commited_config = config;
@@ -327,10 +352,6 @@ public:
         // a sorted array of follower positions to
         // identify which entries are committed.
         assert(quorum() > 0);
-    }
-    // Calculates current quorum
-    size_t quorum() const {
-        return _current_config.servers.size() / 2 + 1;
     }
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
@@ -369,24 +390,6 @@ public:
     // entries, known to be committed.
     // @retval true _commit_idx was advanced
     bool commit_to(index_t leader_commit_idx);
-
-    // send reply to an append message
-    void send_append_reply(server_id to, append_reply reply) {
-        _messages.push_back(std::make_pair(to, std::move(reply)));
-        _sm_events.signal();
-    }
-
-    // send keepalive
-    void send_keepalive(server_id to, keep_alive keep_alive) {
-        _messages.push_back(std::make_pair(to, keep_alive));
-        _sm_events.signal();
-    }
-
-    // send append_entries
-    void send_append_entries(server_id to, append_request_send append) {
-        _messages.push_back(std::make_pair(to, append));
-        _sm_events.signal();
-    }
 
     // Called to advance virtual clock of the protocol state machine.
     void tick();
