@@ -157,7 +157,6 @@ public:
 
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
-    // Raft log, so we need to persist the log.
     index_t maybe_append(const std::vector<log_entry>& entries);
 };
 
@@ -272,11 +271,16 @@ struct fsm {
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
 
+private:
+    // Called when one of the replicas advanced its match index
+    // so it may be the case that some entries are committed now.
+    // @return true if there are entries that should be committed.
+    bool check_committed();
+
     bool is_past_election_timeout() const {
         return _election_elapsed > _randomized_election_timeout;
     }
 
-private:
     // A helper to send reply to an append message
     void send_append_reply(server_id to, append_reply reply) {
         _messages.push_back(std::make_pair(to, std::move(reply)));
@@ -357,7 +361,8 @@ public:
     std::optional<log_batch> log_entries();
 
     // Called after an added entry is persisted on disk.
-    void stable_to(term_t term, index_t idx);
+    // @return true if there are entries that should be committed.
+    bool stable_to(term_t term, index_t idx);
 
     // Return entries ready to be applied to the state machine,
     // or an empty optional if there are no such entries.
@@ -371,11 +376,6 @@ public:
         assert(idx <= _log.stable_idx());
         _last_applied = idx;
     }
-
-    // Called when one of the replicas advanced its match index
-    // so it may be the case that some entries are committed now.
-    // @return true if there are entries that should be committed.
-    bool check_committed();
 
     // Called on a follower with a new known leader commit index.
     // Advances the follower's commit index up to all log-stable

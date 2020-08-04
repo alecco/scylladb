@@ -216,10 +216,10 @@ std::optional<log_batch> fsm::log_entries() {
     return batch;
 }
 
-void fsm::stable_to(term_t term, index_t idx) {
+bool fsm::stable_to(term_t term, index_t idx) {
     if (_log.last_idx() < idx) {
         // The log was truncated while being persisted
-        return;
+        return false;
     }
 
     if (_log[idx].term == term) {
@@ -229,8 +229,10 @@ void fsm::stable_to(term_t term, index_t idx) {
             (*_progress)[_my_id].match_idx = idx;
             (*_progress)[_my_id].next_idx = index_t{idx + 1};
             replicate();
+            return check_committed();
         }
     }
+    return false;
 }
 
 bool fsm::check_committed() {
@@ -490,7 +492,7 @@ void fsm::replicate_to(server_id dst, bool allow_empty) {
 
     logger.trace("replicate_to[{}->{}]: called next={} match={}", _my_id, dst, progress.next_idx, progress.match_idx);
 
-    while(fsm::can_send_to(progress)) {
+    while (fsm::can_send_to(progress)) {
         index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.stable_idx()) {
             next_idx = index_t(0);
