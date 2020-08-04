@@ -1,20 +1,8 @@
-* log_fiber() races with append_entries(), need to find a solution
-* stable_to() updates leader's state but called on non leader as well
 * low prio: drop _my_id from fsm, it should be a server property.
 * Put back load_vote() and load_term()
 * when switching to leader state, we currently assume each follower
   is at the current term and match_idx is 0. We need to extend AppendEntries
   RPC  to efficiently inform the leader about the follower position.
-* there is a tricky dependency between follower_state lifetime
-  and replication_fiber. We destroy leader_state inside the FSM
-  without regard to replication_fiber keeping a reference to it,
-  so unless replication_fiber is super-careful to not touch the
-  reference if !leader, we will get a crash. Another
-  possibility when the two can get out of sync is a ocnfiguration
-  change, which is applied to FSM first, and replication
-  fibers stopped second.
-  The safest bet would be to resolve _leadership_transition
-  future *before* state machine state change, not after.
 * add a test case when we can't commit even though followers
   have made progress, but the term has changed.
 * change typed_uint64 to typed_int64
