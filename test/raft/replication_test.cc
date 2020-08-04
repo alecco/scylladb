@@ -73,7 +73,8 @@ public:
             req.entries.push_back(e);
         }
         net[id]->_server->append_entries(_id, std::move(req));
-        co_return seastar::sleep(1us);
+        //co_return seastar::sleep(1us);
+        return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, raft::append_reply reply) {
         net[id]->_server->append_entries_reply(_id, std::move(reply));

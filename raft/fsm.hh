@@ -30,7 +30,24 @@ struct follower_progress {
     index_t next_idx;
     // Index of the highest log entry known to be replicated to this
     // server.
-    index_t match_idx;
+    index_t match_idx = index_t(0);
+
+    enum class state {
+        // In this state only one append entry is send until matching index is found
+        PROBE,
+        // In this state multiple append entries are sent optimistically
+        PIPELINE
+    };
+    state state = state::PROBE;
+    // true if a packet was sent already in a probe mode
+    bool probe_sent = false;
+    // number of in flight still un-acked append entries requests
+    size_t in_flight = 0;
+    static constexpr size_t max_in_flight = 10;
+
+    // Set when a message is sent to the follower
+    // reset on a tick. Used to decide if keep alive is needed.
+    bool activity = false;
 };
 
 // Possible leader election outcomes.
@@ -372,8 +389,15 @@ public:
     // Common part of all transitions of the protocol state machine.
     void step();
 
+    // return progress for a follower
+    follower_progress& progress_for(server_id dst) {
+        assert(is_leader());
+        return (*_progress)[dst];
+    }
+
     // controls replication process
-    void replicate_to(server_id dst);
+    bool can_send_to(const follower_progress& progress);
+    void replicate_to(server_id dst, bool allow_empty);
     void replicate();
 
     // returns true if new entries were committed
