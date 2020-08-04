@@ -93,9 +93,6 @@ private:
     // Called to commit entries (on a leader or otherwise).
     void commit_entries();
 
-    // each leadership transition is serialized by this future
-    future<> _leadership_transition = make_ready_future();
-
     // Called when a node wins an election
     future<> start_leadership();
 

@@ -198,9 +198,6 @@ future<> server::applier_fiber() {
 
 future<> server::stop() {
     logger.trace("stop() called");
-    if (_fsm.is_leader()) {
-        _fsm.become_follower(server_id{});
-    }
     _fsm._sm_events.broken();
     _apply_entries.broken();
     for (auto& ac: _awaited_commits) {
@@ -209,8 +206,7 @@ future<> server::stop() {
     _awaited_commits.clear();
     _ticker.cancel();
 
-    return seastar::when_all_succeed(std::move(_leadership_transition),
-            std::move(_log_status), std::move(_applier_status),
+    return seastar::when_all_succeed(std::move(_log_status), std::move(_applier_status),
             _rpc->stop(), _state_machine->stop(), _storage->stop()).discard_result();
 }
 

@@ -331,6 +331,8 @@ private:
     }
 
     void become_candidate();
+
+    void become_follower(server_id leader);
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
@@ -342,8 +344,6 @@ public:
         return _state == server_state::FOLLOWER;
     }
     void become_leader();
-
-    void become_follower(server_id leader);
 
     // Set cluster configuration, in real app should be taken from log
     void set_configuration(const configuration& config) {
