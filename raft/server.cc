@@ -69,14 +69,14 @@ future<> server::add_entry(command command) {
 
 void server::append_entries_reply(server_id from, append_reply&& reply) {
     if (_fsm.append_entries_reply(from , reply)) {
-        commit_entries();
+        logger.trace("append_entries_reply{}: signal apply thread: committed: {} applied: {}",
+            _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
+        _apply_entries.signal();
     }
 }
 
 void server::commit_entries() {
-    logger.trace("commit_entries {}: signal apply thread: committed: {} applied: {}", _fsm._my_id,
-        _fsm._commit_idx, _fsm._last_applied);
-    _apply_entries.signal();
+
     while (_awaited_commits.size() != 0) {
         auto it = _awaited_commits.begin();
         if (it->first > _fsm._commit_idx) {
@@ -97,7 +97,9 @@ void server::commit_entries() {
 
 void server::append_entries(server_id from, append_request_recv append_request) {
     if (_fsm.append_entries(from, append_request)) {
-        commit_entries();
+        logger.trace("append_entries{}: signal apply thread: committed: {} applied: {}",
+            _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
+        _apply_entries.signal();
     }
 }
 
@@ -133,14 +135,13 @@ future<> server::log_fiber() {
                 // will require storage to keep track of last idx
                 co_await _storage->store_log_entries(batch->log_entries);
 
-                _fsm.stable_to(batch->log_entries.crbegin()->term, batch->log_entries.crbegin()->idx);
-                // make apply fiber to re-check if anything should be applied
-                _apply_entries.signal();
+                if (_fsm.stable_to(batch->log_entries.crbegin()->term,
+                        batch->log_entries.crbegin()->idx)) {
 
-                if (_fsm._current_config.servers.size() == 1) { // special case for one node cluster
-                    if (_fsm.check_committed()) {
-                        commit_entries();
-                    }
+                    logger.trace("log_entries{}: signal apply thread: committed: {} applied: {}",
+                        _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
+                    // make apply fiber to re-check if anything should be applied
+                    _apply_entries.signal();
                 }
 
                 last_stable = batch->log_entries.crbegin()->idx;
@@ -177,6 +178,7 @@ future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while (true) {
+            commit_entries();
             std::optional<apply_batch> batch = _fsm.apply_entries();
 
             if (!batch) {
