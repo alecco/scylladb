@@ -27,3 +27,5 @@
 * implement pre-vote and sticky leadership
 * implement cluster configuration changes
 * introduce class progress that instantiates match array
+* revise/make uniform the calling convention for API functions
+  (pass-by-value vs pass-by-reference)

@@ -46,8 +46,10 @@ public:
     // This function is called by append_entries_reply RPC
     void append_entries_reply(server_id from, append_reply&& reply);
 
-    // This function is called by request vote RPC and a reply is forwarded to a remote server
-    future<vote_reply> request_vote(server_id from, vote_request&& vote_request);
+    // This function is called by request vote RPC.
+    void request_vote(server_id from, const vote_request& vote_request);
+
+    void reply_vote(server_id from, const vote_reply& vote_reply);
 
     // Adds new server to a cluster. If a node is already a member of the cluster does nothing
     // Provided node_info is passed to rpc::new_node() on each node in a cluster as it learns about

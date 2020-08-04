@@ -365,7 +365,7 @@ bool fsm::append_entries(server_id from, append_request_recv& append_request) {
     assert(!is_leader() || _current_term > append_request.current_term);
 
     if (!is_follower()) {
-        become_follower(server_id{});
+        become_follower(from);
     }
 
     if (_current_term < append_request.current_term) {
@@ -475,6 +475,21 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
 
     replicate_to(from, false);
     return res;
+}
+
+void fsm::request_vote(server_id from, const vote_request& vote_request) {
+    step();
+    (void) from;
+    (void) vote_request;
+}
+
+void fsm::reply_vote(server_id from, const vote_reply& vote_reply) {
+    step();
+    if (_state != server_state::CANDIDATE) {
+        return;
+    }
+    (void) from;
+    (void) vote_reply;
 }
 
 bool fsm::can_send_to(const follower_progress& progress) {

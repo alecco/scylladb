@@ -316,8 +316,11 @@ public:
     // The returned future resolves when message is sent. It does not mean it was received
     virtual future<> send_append_entries_reply(server_id id, append_reply reply) = 0;
 
-    // Sends vote requests and returns vote reply
-    virtual future<vote_reply> send_request_vote(server_id id, const vote_request& vote_request) = 0;
+    // Sends vote requests
+    virtual future<> send_vote_request(server_id id, const vote_request& vote_request) = 0;
+
+    // Sends vote reply
+    virtual future<> send_vote_reply(server_id id, const vote_reply& vote_reply) = 0;
 
     // This is an extension of Raft used for keepalive aggregation between multiple groups
     // This RPC does not return anything since it will be aggregated for many groups

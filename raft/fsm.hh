@@ -403,6 +403,9 @@ public:
     // returns true if new entries were committed
     bool append_entries_reply(server_id from, append_reply& reply);
     bool append_entries(server_id from, append_request_recv& append_request);
+
+    void request_vote(server_id from, const vote_request& vote_request);
+    void reply_vote(server_id from, const vote_reply& vote_reply);
 };
 
 } // namespace raft
