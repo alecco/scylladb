@@ -80,8 +80,13 @@ public:
         net[id]->_server->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
-    virtual future<raft::vote_reply> send_request_vote(raft::server_id id, const raft::vote_request& avote_request) {
-        return make_ready_future<raft::vote_reply>(raft::vote_reply());
+    virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+        net[id]->_server->request_vote(_id, vote_request);
+        return make_ready_future<>();
+    }
+    virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+        net[id]->_server->reply_vote(_id, vote_reply);
+        return make_ready_future<>();
     }
     void send_keepalive(raft::server_id id, const raft::keep_alive& keep_alive) {
         raft::append_request_recv req;

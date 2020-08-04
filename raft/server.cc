@@ -103,6 +103,14 @@ void server::append_entries(server_id from, append_request_recv append_request) 
     }
 }
 
+void server::request_vote(server_id from, const vote_request& vote_request) {
+    _fsm.request_vote(from, vote_request);
+}
+
+void server::reply_vote(server_id from, const vote_reply& vote_reply) {
+    _fsm.reply_vote(from, vote_reply);
+}
+
 future<> server::log_fiber() {
     logger.trace("log_fiber start");
     try {
@@ -158,7 +166,12 @@ future<> server::log_fiber() {
                             return make_ready_future<>();
                         } else if constexpr (std::is_same_v<T, append_request_send>) {
                             return _rpc->send_append_entries(id, std::move(m));
+                        } else if constexpr (std::is_same_v<T, vote_request>) {
+                            return _rpc->send_vote_request(id, m);
+                        } else if constexpr (std::is_same_v<T, vote_reply>) {
+                            return _rpc->send_vote_reply(id, m);
                         }
+
                         logger.error("log fiber {} tried to send unknown message type", _fsm._my_id);
                         return make_ready_future<>();
                     }, std::move(message.second));
