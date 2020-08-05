@@ -311,15 +311,18 @@ future<apply_batch> fsm::apply_entries() {
     }
 
     apply_batch batch;
-    batch.idx = _last_applied + diff;
-    batch.commands.reserve(diff);
+    batch.reserve(diff);
 
-    for (auto idx = _last_applied + 1; idx <= batch.idx; ++idx) {
+    auto new_last_applied = _last_applied + diff;
+
+    for (auto idx = _last_applied + 1; idx <= new_last_applied; ++idx) {
         const auto& entry = _log[idx];
         if (std::holds_alternative<command>(entry.data)) {
-            batch.commands.push_back(std::cref(std::get<command>(entry.data)));
+            batch.push_back(std::cref(std::get<command>(entry.data)));
         }
     }
+    logger.trace("apply_entries[{}] applying up to {}", _my_id, new_last_applied);
+    _last_applied = new_last_applied;
     co_return make_ready_future<apply_batch>(std::move(batch));
 }
 

@@ -91,12 +91,7 @@ struct log_batch {
 };
 
 // A batch of entries to apply to the state machine.
-struct apply_batch {
-    // Commands to apply.
-    std::vector<command_cref> commands;
-    // index of the last command in the batch
-    index_t idx;
-};
+using  apply_batch = std::vector<command_cref>;
 
 // This class represents the Raft log in memory.
 // The value of the first index is 1.
@@ -379,15 +374,6 @@ public:
     // Return entries ready to be applied to the state machine,
     // or an empty optional if there are no such entries.
     future<apply_batch> apply_entries();
-
-    // Update _last_applied index with the index of
-    // last applied entry.
-    void applied_to(index_t idx) {
-        assert(idx > _last_applied);
-        assert(idx <= _commit_idx);
-        assert(idx <= _log.stable_idx());
-        _last_applied = idx;
-    }
 
     // Called on a follower with a new known leader commit index.
     // Advances the follower's commit index up to all log-stable
