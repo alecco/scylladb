@@ -177,10 +177,7 @@ future<> server::applier_fiber() {
     try {
         while (true) {
             auto batch = co_await _fsm.apply_entries();
-
-            logger.trace("applier_fiber {} applying up to {}", _fsm._my_id, batch.idx);
-            co_await _state_machine->apply(std::move(batch.commands));
-            _fsm.applied_to(batch.idx);
+            co_await _state_machine->apply(std::move(batch));
         }
     } catch (seastar::broken_condition_variable&) {
         // applier fiber is stopped explicitly.
