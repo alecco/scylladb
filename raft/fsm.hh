@@ -157,7 +157,7 @@ public:
 
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
-    index_t maybe_append(const std::vector<log_entry>& entries);
+    index_t maybe_append(std::vector<log_entry>&& entries);
 };
 
 // Raft protocol finite state machine
@@ -282,20 +282,10 @@ private:
     }
 
     // A helper to send reply to an append message
-    void send_append_reply(server_id to, append_reply reply) {
-        _messages.push_back(std::make_pair(to, std::move(reply)));
-        _sm_events.signal();
-    }
-
-    // A helper to send keepalive
-    void send_keepalive(server_id to, keep_alive keep_alive) {
-        _messages.push_back(std::make_pair(to, keep_alive));
-        _sm_events.signal();
-    }
-
-    // A helper to send AppendEntries message
-    void send_append_entries(server_id to, append_request_send append) {
-        _messages.push_back(std::make_pair(to, append));
+    template <typename Message>
+    void send_to(server_id to, Message&& m) {
+        static_assert(std::is_rvalue_reference<decltype(m)>::value, "must be rvalue");
+        _messages.push_back(std::make_pair(to, std::move(m)));
         _sm_events.signal();
     }
 
@@ -401,11 +391,11 @@ public:
     void replicate();
 
     // returns true if new entries were committed
-    bool append_entries_reply(server_id from, append_reply& reply);
-    bool append_entries(server_id from, append_request_recv& append_request);
+    bool append_entries_reply(server_id from, append_reply&& reply);
+    bool append_entries(server_id from, append_request_recv&& append_request);
 
-    void request_vote(server_id from, const vote_request& vote_request);
-    void reply_vote(server_id from, const vote_reply& vote_reply);
+    void request_vote(server_id from, vote_request&& vote_request);
+    void reply_vote(server_id from, vote_reply&& vote_reply);
 };
 
 } // namespace raft

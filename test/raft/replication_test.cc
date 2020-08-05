@@ -46,7 +46,7 @@ public:
     storage() {}
     virtual future<> store_term(raft::term_t term) { co_return seastar::sleep(1us); }
     virtual future<> store_vote(raft::server_id vote) { return make_ready_future<>(); }
-    virtual future<> store_snapshot(raft::snapshot snap, size_t preserve_log_entries) { return make_ready_future<>(); }
+    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) { return make_ready_future<>(); }
     virtual future<raft::snapshot> load_snapshot() { return make_ready_future<raft::snapshot>(raft::snapshot()); }
     virtual future<> store_log_entries(const std::vector<raft::log_entry>& entries) { co_return seastar::sleep(1us); };
     virtual future<> store_log_entry(const raft::log_entry& entry) { co_return seastar::sleep(1us); }
@@ -61,7 +61,7 @@ public:
     rpc(raft::server_id id) : _id(id) {
         net[_id] = this;
     }
-    virtual future<> send_snapshot(raft::server_id server_id, raft::snapshot snap) { return make_ready_future<>(); }
+    virtual future<> send_snapshot(raft::server_id server_id, const raft::snapshot& snap) { return make_ready_future<>(); }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
@@ -76,16 +76,16 @@ public:
         //co_return seastar::sleep(1us);
         return make_ready_future<>();
     }
-    virtual future<> send_append_entries_reply(raft::server_id id, raft::append_reply reply) {
+    virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
         net[id]->_server->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-        net[id]->_server->request_vote(_id, vote_request);
+        net[id]->_server->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-        net[id]->_server->reply_vote(_id, vote_reply);
+        net[id]->_server->reply_vote(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
     void send_keepalive(raft::server_id id, const raft::keep_alive& keep_alive) {

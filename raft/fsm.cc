@@ -79,7 +79,7 @@ std::optional<term_t> log::match_term(index_t idx, term_t term) const {
     return _log[i].term == term ? std::nullopt : std::optional<term_t>(_log[i].term);
 }
 
-index_t log::maybe_append(const std::vector<log_entry>& entries) {
+index_t log::maybe_append(std::vector<log_entry>&& entries) {
     assert(!entries.empty());
 
     index_t last_new_idx = entries.back().idx;
@@ -330,7 +330,7 @@ void fsm::tick() {
                         .leader_commit_idx = std::min(_commit_idx, progress.match_idx),
                     };
                     logger.trace("tick[{}]: send keep aplive to {}", _my_id, server.id);
-                    send_keepalive(server.id, ka);
+                    send_to(server.id, std::move(ka));
                 }
                 progress.activity = false;
             }
@@ -349,14 +349,14 @@ void fsm::step() {
     _election_elapsed = 0;
 }
 
-bool fsm::append_entries(server_id from, append_request_recv& append_request) {
+bool fsm::append_entries(server_id from, append_request_recv&& append_request) {
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={}", _my_id,
             append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
             append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
 
     step();
     if (append_request.current_term < _current_term) {
-        send_append_reply(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
+        send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
         return false;
     }
 
@@ -390,7 +390,7 @@ bool fsm::append_entries(server_id from, append_request_recv& append_request) {
             logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
                     _my_id, append_request.prev_log_idx, append_request.prev_log_term, *mismatch);
             // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-            send_append_reply(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
+            send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
             return false;
         }
 
@@ -399,16 +399,16 @@ bool fsm::append_entries(server_id from, append_request_recv& append_request) {
         index_t last_new_idx = append_request.prev_log_idx;
 
         if (!append_request.entries.empty()) {
-            last_new_idx = _log.maybe_append(append_request.entries);
+            last_new_idx = _log.maybe_append(std::move(append_request.entries));
         }
 
-        send_append_reply(from, append_reply{_current_term, append_reply::accepted{last_new_idx}});
+        send_to(from, append_reply{_current_term, append_reply::accepted{last_new_idx}});
     }
 
     return commit_to(append_request.leader_commit_idx);
 }
 
-bool fsm::append_entries_reply(server_id from, append_reply& reply) {
+bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
     step();
     if (!is_leader() || reply.current_term < _current_term) {
         // drop stray reply if we are no longer a leader or the term is too old
@@ -477,13 +477,13 @@ bool fsm::append_entries_reply(server_id from, append_reply& reply) {
     return res;
 }
 
-void fsm::request_vote(server_id from, const vote_request& vote_request) {
+void fsm::request_vote(server_id from, vote_request&& vote_request) {
     step();
     (void) from;
     (void) vote_request;
 }
 
-void fsm::reply_vote(server_id from, const vote_reply& vote_reply) {
+void fsm::reply_vote(server_id from, vote_reply&& vote_reply) {
     step();
     if (_state != server_state::CANDIDATE) {
         return;
@@ -550,7 +550,7 @@ void fsm::replicate_to(server_id dst, bool allow_empty) {
             logger.trace("replicate_to[{}->{}]: send empty", _my_id, dst);
         }
 
-        send_append_entries(dst, req);
+        send_to(dst, std::move(req));
 
         if (progress.state == follower_progress::state::PROBE) {
             progress.probe_sent = true;

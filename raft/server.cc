@@ -67,8 +67,8 @@ future<> server::add_entry(command command) {
     return it->second.committed.get_future();
 }
 
-void server::append_entries_reply(server_id from, append_reply&& reply) {
-    if (_fsm.append_entries_reply(from , reply)) {
+void server::append_entries_reply(server_id from, append_reply reply) {
+    if (_fsm.append_entries_reply(from, std::move(reply))) {
         logger.trace("append_entries_reply{}: signal apply thread: committed: {} applied: {}",
             _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
         _apply_entries.signal();
@@ -96,19 +96,19 @@ void server::commit_entries() {
 }
 
 void server::append_entries(server_id from, append_request_recv append_request) {
-    if (_fsm.append_entries(from, append_request)) {
+    if (_fsm.append_entries(from, std::move(append_request))) {
         logger.trace("append_entries{}: signal apply thread: committed: {} applied: {}",
             _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
         _apply_entries.signal();
     }
 }
 
-void server::request_vote(server_id from, const vote_request& vote_request) {
-    _fsm.request_vote(from, vote_request);
+void server::request_vote(server_id from, vote_request vote_request) {
+    _fsm.request_vote(from, std::move(vote_request));
 }
 
-void server::reply_vote(server_id from, const vote_reply& vote_reply) {
-    _fsm.reply_vote(from, vote_reply);
+void server::reply_vote(server_id from, vote_reply vote_reply) {
+    _fsm.reply_vote(from, std::move(vote_reply));
 }
 
 future<> server::log_fiber() {
@@ -160,12 +160,12 @@ future<> server::log_fiber() {
                     return std::visit([this, id = message.first] (auto&& m) {
                         using T = std::decay_t<decltype(m)>;
                         if constexpr (std::is_same_v<T, append_reply>) {
-                            return _rpc->send_append_entries_reply(id, std::move(m));
+                            return _rpc->send_append_entries_reply(id, m);
                         } else if constexpr (std::is_same_v<T, keep_alive>) {
-                            _rpc->send_keepalive(id, std::move(m));
+                            _rpc->send_keepalive(id, m);
                             return make_ready_future<>();
                         } else if constexpr (std::is_same_v<T, append_request_send>) {
-                            return _rpc->send_append_entries(id, std::move(m));
+                            return _rpc->send_append_entries(id, m);
                         } else if constexpr (std::is_same_v<T, vote_request>) {
                             return _rpc->send_vote_request(id, m);
                         } else if constexpr (std::is_same_v<T, vote_reply>) {
