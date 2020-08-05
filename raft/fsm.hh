@@ -332,6 +332,18 @@ private:
     void become_candidate();
 
     void become_follower(server_id leader);
+
+    // return progress for a follower
+    follower_progress& progress_for(server_id dst) {
+        assert(is_leader());
+        return (*_progress)[dst];
+    }
+
+    // controls replication process
+    bool can_send_to(const follower_progress& progress);
+    void replicate_to(server_id dst, bool allow_empty);
+    void replicate();
+
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
@@ -392,23 +404,14 @@ public:
     // Common part of all transitions of the protocol state machine.
     void step();
 
-    // return progress for a follower
-    follower_progress& progress_for(server_id dst) {
-        assert(is_leader());
-        return (*_progress)[dst];
-    }
-
-    // controls replication process
-    bool can_send_to(const follower_progress& progress);
-    void replicate_to(server_id dst, bool allow_empty);
-    void replicate();
-
     // returns true if new entries were committed
     void append_entries_reply(server_id from, append_reply&& reply);
     void append_entries(server_id from, append_request_recv&& append_request);
 
     void request_vote(server_id from, vote_request&& vote_request);
     void reply_vote(server_id from, vote_reply&& vote_reply);
+
+    void stop();
 };
 
 } // namespace raft

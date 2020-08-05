@@ -599,4 +599,9 @@ void fsm::replicate() {
     }
 }
 
+void fsm::stop() {
+    _sm_events.broken();
+    _apply_entries.broken();
+}
+
 } // end of namespace raft

@@ -67,12 +67,23 @@ future<> server::add_entry(command command) {
     return it->second.committed.get_future();
 }
 
+void server::append_entries(server_id from, append_request_recv append_request) {
+    _fsm.append_entries(from, std::move(append_request));
+}
+
 void server::append_entries_reply(server_id from, append_reply reply) {
     _fsm.append_entries_reply(from, std::move(reply));
 }
 
-void server::commit_entries(index_t commit_idx) {
+void server::request_vote(server_id from, vote_request vote_request) {
+    _fsm.request_vote(from, std::move(vote_request));
+}
 
+void server::reply_vote(server_id from, vote_reply vote_reply) {
+    _fsm.reply_vote(from, std::move(vote_reply));
+}
+
+void server::commit_entries(index_t commit_idx) {
     while (_awaited_commits.size() != 0) {
         auto it = _awaited_commits.begin();
         if (it->first > commit_idx) {
@@ -89,18 +100,6 @@ void server::commit_entries(index_t commit_idx) {
             status.committed.set_exception(dropped_entry());
         }
     }
-}
-
-void server::append_entries(server_id from, append_request_recv append_request) {
-    _fsm.append_entries(from, std::move(append_request));
-}
-
-void server::request_vote(server_id from, vote_request vote_request) {
-    _fsm.request_vote(from, std::move(vote_request));
-}
-
-void server::reply_vote(server_id from, vote_reply vote_reply) {
-    _fsm.reply_vote(from, std::move(vote_reply));
 }
 
 future<> server::log_fiber() {
@@ -202,8 +201,7 @@ future<> server::applier_fiber() {
 
 future<> server::stop() {
     logger.trace("stop() called");
-    _fsm._sm_events.broken();
-    _fsm._apply_entries.broken();
+    _fsm.stop();
     for (auto& ac: _awaited_commits) {
         ac.second.committed.set_exception(stopped_error());
     }
