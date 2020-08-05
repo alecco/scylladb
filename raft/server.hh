@@ -93,7 +93,7 @@ private:
     std::map<index_t, commit_status> _awaited_commits;
 
     // Called to commit entries (on a leader or otherwise).
-    void commit_entries();
+    void commit_entries(index_t commit_idx);
 
     // Called when a node wins an election
     future<> start_leadership();
@@ -108,8 +108,6 @@ private:
     // This fiber runs in the background and applies committed entries.
     future<> applier_fiber();
 
-    // signaled when there is an entry to apply
-    seastar::condition_variable _apply_entries;
     future<> _applier_status = make_ready_future<>();
     future<> _log_status = make_ready_future<>();
 };

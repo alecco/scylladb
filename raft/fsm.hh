@@ -85,6 +85,7 @@ struct votes {
 struct log_batch {
     std::optional<term_t> term;
     std::optional<server_id> vote;
+    std::optional<index_t> commit_idx;
     std::vector<log_entry> log_entries;
     std::vector<std::pair<server_id, rpc_message>> messages;
 };
@@ -237,14 +238,17 @@ struct fsm {
     struct last_observed_state {
         term_t _current_term;
         server_id _voted_for;
+        index_t _commit_idx;
 
         bool is_equal(const fsm& fsm) {
-            return _current_term == fsm._current_term && _voted_for == fsm._voted_for;
+            return _current_term == fsm._current_term && _voted_for == fsm._voted_for &&
+                _commit_idx == fsm._commit_idx;
         }
 
         void advance(const fsm& fsm) {
             _current_term = fsm._current_term;
             _voted_for = fsm._voted_for;
+            _commit_idx = fsm._commit_idx;
         }
     } _observed;
 
@@ -281,12 +285,13 @@ struct fsm {
 
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
-
+    // Signaled when there is an entry to apply.
+    seastar::condition_variable _apply_entries;
 private:
     // Called when one of the replicas advanced its match index
     // so it may be the case that some entries are committed now.
-    // @return true if there are entries that should be committed.
-    bool check_committed();
+    // Signals relevant events.
+    void check_committed();
 
     bool is_past_election_timeout() const {
         return _election_elapsed > _randomized_election_timeout;
@@ -360,7 +365,7 @@ public:
 
     // Called after an added entry is persisted on disk.
     // @return true if there are entries that should be committed.
-    bool stable_to(term_t term, index_t idx);
+    void stable_to(term_t term, index_t idx);
 
     // Return entries ready to be applied to the state machine,
     // or an empty optional if there are no such entries.
@@ -379,7 +384,7 @@ public:
     // Advances the follower's commit index up to all log-stable
     // entries, known to be committed.
     // @retval true _commit_idx was advanced
-    bool commit_to(index_t leader_commit_idx);
+    void commit_to(index_t leader_commit_idx);
 
     // Called to advance virtual clock of the protocol state machine.
     void tick();
@@ -399,8 +404,8 @@ public:
     void replicate();
 
     // returns true if new entries were committed
-    bool append_entries_reply(server_id from, append_reply&& reply);
-    bool append_entries(server_id from, append_request_recv&& append_request);
+    void append_entries_reply(server_id from, append_reply&& reply);
+    void append_entries(server_id from, append_request_recv&& append_request);
 
     void request_vote(server_id from, vote_request&& vote_request);
     void reply_vote(server_id from, vote_reply&& vote_reply);
