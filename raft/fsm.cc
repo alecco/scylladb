@@ -116,6 +116,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)) {
 
+    _observed.advance(*this);
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
 
     assert(_current_leader.is_nil());
@@ -173,7 +174,6 @@ void fsm::become_candidate() {
     _state = server_state::CANDIDATE;
     _votes.emplace();
     _voted_for = _my_id;
-    _voted_for_is_dirty = true;
 }
 
 
@@ -183,8 +183,7 @@ std::optional<log_batch> fsm::log_entries() {
 
     auto diff = _log.last_idx() - _log.stable_idx();
 
-    if (diff == 0 && _messages.empty() &&
-        _current_term_is_dirty == false && _voted_for_is_dirty == false) {
+    if (diff == 0 && _messages.empty() && _observed.is_equal(*this)) {
 
         return {};
     }
@@ -203,15 +202,15 @@ std::optional<log_batch> fsm::log_entries() {
         batch.log_entries.emplace_back(_log[i]);
     }
 
-    if (_current_term_is_dirty) {
+    if (_observed._current_term != _current_term) {
         batch.term = _current_term;
     }
 
-    if (_voted_for_is_dirty) {
+    if (_observed._voted_for != _voted_for) {
         batch.vote = _voted_for;
     }
 
-    _current_term_is_dirty = _voted_for_is_dirty = false;
+    _observed.advance(*this);
 
     return batch;
 }
