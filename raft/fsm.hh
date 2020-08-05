@@ -343,10 +343,6 @@ private:
     bool can_send_to(const follower_progress& progress);
     void replicate_to(server_id dst, bool allow_empty);
     void replicate();
-
-public:
-    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
-
     bool is_leader() const {
         assert(_state != server_state::LEADER || _my_id == _current_leader);
         return _state == server_state::LEADER;
@@ -354,6 +350,9 @@ public:
     bool is_follower() const {
         return _state == server_state::FOLLOWER;
     }
+public:
+    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
+
     void become_leader();
 
     // Set cluster configuration, in real app should be taken from log
@@ -376,7 +375,6 @@ public:
     std::optional<log_batch> log_entries();
 
     // Called after an added entry is persisted on disk.
-    // @return true if there are entries that should be committed.
     void stable_to(term_t term, index_t idx);
 
     // Return entries ready to be applied to the state machine,
@@ -395,7 +393,6 @@ public:
     // Called on a follower with a new known leader commit index.
     // Advances the follower's commit index up to all log-stable
     // entries, known to be committed.
-    // @retval true _commit_idx was advanced
     void commit_to(index_t leader_commit_idx);
 
     // Called to advance virtual clock of the protocol state machine.
