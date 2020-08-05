@@ -306,7 +306,7 @@ public:
     // Send a snapshot snap to a server server_id.
     // A returned future is resolved when snapshot is sent and successfully applied
     // by a receiver
-    virtual future<> send_snapshot(server_id server_id, snapshot snap) = 0;
+    virtual future<> send_snapshot(server_id server_id, const snapshot& snap) = 0;
 
     // Sends provided append_request to the supplied server, does not wait for reply.
     // The returned future resolves when message is sent. It does not mean it was received
@@ -314,7 +314,7 @@ public:
 
     // Sends reply to an append_request
     // The returned future resolves when message is sent. It does not mean it was received
-    virtual future<> send_append_entries_reply(server_id id, append_reply reply) = 0;
+    virtual future<> send_append_entries_reply(server_id id, const append_reply& reply) = 0;
 
     // Sends vote requests
     virtual future<> send_vote_request(server_id id, const vote_request& vote_request) = 0;
@@ -367,7 +367,7 @@ public:
     // Should be called only after previous invocation completes
     // IOW a caller should serialize. Can be called in parallel with
     // store_log_entries() but snap.index should belong to already persisted entry
-    virtual future<> store_snapshot(snapshot snap, size_t preserve_log_entries) = 0;
+    virtual future<> store_snapshot(const snapshot& snap, size_t preserve_log_entries) = 0;
 
     // Load a saved snapshot
     // This only loads it into memory, but does not apply yet
