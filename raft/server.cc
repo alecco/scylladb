@@ -69,7 +69,7 @@ future<> server::add_entry(command command) {
 
 void server::append_entries_reply(server_id from, append_reply reply) {
     if (_fsm.append_entries_reply(from, std::move(reply))) {
-        logger.trace("append_entries_reply{}: signal apply thread: committed: {} applied: {}",
+        logger.trace("append_entries_reply[{}]: signal apply thread: committed: {} applied: {}",
             _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
         _apply_entries.signal();
     }

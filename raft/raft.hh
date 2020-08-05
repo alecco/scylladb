@@ -198,12 +198,15 @@ struct append_reply {
     struct rejected {
         // index of non matching entry that caused the request
         // to be rejected
-        index_t non_matching_index;
+        index_t non_matching_idx;
+        // last index in the follower's log, can be used to find next
+        // matching index more efficiently
+        index_t last_idx;
     };
     struct accepted {
         // last entry that was appended (may be smaller than max log index
         // in case follower's log is longer and appended entries match)
-        index_t last_new_index;
+        index_t last_new_idx;
     };
     // current term, for leader to update itself
     term_t current_term;
