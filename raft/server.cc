@@ -68,18 +68,14 @@ future<> server::add_entry(command command) {
 }
 
 void server::append_entries_reply(server_id from, append_reply reply) {
-    if (_fsm.append_entries_reply(from, std::move(reply))) {
-        logger.trace("append_entries_reply[{}]: signal apply thread: committed: {} applied: {}",
-            _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
-        _apply_entries.signal();
-    }
+    _fsm.append_entries_reply(from, std::move(reply));
 }
 
-void server::commit_entries() {
+void server::commit_entries(index_t commit_idx) {
 
     while (_awaited_commits.size() != 0) {
         auto it = _awaited_commits.begin();
-        if (it->first > _fsm._commit_idx) {
+        if (it->first > commit_idx) {
             break;
         }
         auto [entry_idx, status] = std::move(*it);
@@ -96,11 +92,7 @@ void server::commit_entries() {
 }
 
 void server::append_entries(server_id from, append_request_recv append_request) {
-    if (_fsm.append_entries(from, std::move(append_request))) {
-        logger.trace("append_entries{}: signal apply thread: committed: {} applied: {}",
-            _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
-        _apply_entries.signal();
-    }
+    _fsm.append_entries(from, std::move(append_request));
 }
 
 void server::request_vote(server_id from, vote_request vote_request) {
@@ -123,6 +115,10 @@ future<> server::log_fiber() {
                 continue;
             }
 
+            if (batch->commit_idx) {
+                commit_entries(*batch->commit_idx);
+            }
+
             if (batch->term) {
                 // this resets voted_for in persistent storage as well
                 co_await _storage->store_term(*batch->term);
@@ -143,14 +139,8 @@ future<> server::log_fiber() {
                 // will require storage to keep track of last idx
                 co_await _storage->store_log_entries(batch->log_entries);
 
-                if (_fsm.stable_to(batch->log_entries.crbegin()->term,
-                        batch->log_entries.crbegin()->idx)) {
-
-                    logger.trace("log_entries{}: signal apply thread: committed: {} applied: {}",
-                        _fsm._my_id, _fsm._commit_idx, _fsm._last_applied);
-                    // make apply fiber to re-check if anything should be applied
-                    _apply_entries.signal();
-                }
+                _fsm.stable_to(batch->log_entries.crbegin()->term,
+                        batch->log_entries.crbegin()->idx);
 
                 last_stable = batch->log_entries.crbegin()->idx;
             }
@@ -191,11 +181,10 @@ future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while (true) {
-            commit_entries();
             std::optional<apply_batch> batch = _fsm.apply_entries();
 
             if (!batch) {
-                co_await _apply_entries.wait();
+                co_await _fsm._apply_entries.wait();
                 continue;
             }
 
@@ -214,7 +203,7 @@ future<> server::applier_fiber() {
 future<> server::stop() {
     logger.trace("stop() called");
     _fsm._sm_events.broken();
-    _apply_entries.broken();
+    _fsm._apply_entries.broken();
     for (auto& ac: _awaited_commits) {
         ac.second.committed.set_exception(stopped_error());
     }

@@ -133,7 +133,7 @@ const log_entry& fsm::add_entry(command command) {
 }
 
 
-bool fsm::commit_to(index_t leader_commit_idx) {
+void fsm::commit_to(index_t leader_commit_idx) {
 
     auto new_commit_idx = std::min(leader_commit_idx, _log.stable_idx());
 
@@ -142,9 +142,12 @@ bool fsm::commit_to(index_t leader_commit_idx) {
 
     if (new_commit_idx > _commit_idx) {
         _commit_idx = new_commit_idx;
-        return true;
+        _sm_events.signal();
+        assert(_commit_idx > _last_applied);
+        logger.trace("commit_to[{}]: signal apply_entries: committed: {} applied: {}",
+            _my_id, _commit_idx, _last_applied);
+        _apply_entries.signal();
     }
-    return false;
 }
 
 
@@ -210,15 +213,18 @@ std::optional<log_batch> fsm::log_entries() {
         batch.vote = _voted_for;
     }
 
+    if (_observed._commit_idx != _commit_idx) {
+        batch.commit_idx = _commit_idx;
+    }
     _observed.advance(*this);
 
     return batch;
 }
 
-bool fsm::stable_to(term_t term, index_t idx) {
+void fsm::stable_to(term_t term, index_t idx) {
     if (_log.last_idx() < idx) {
         // The log was truncated while being persisted
-        return false;
+        return;
     }
 
     if (_log[idx].term == term) {
@@ -228,13 +234,12 @@ bool fsm::stable_to(term_t term, index_t idx) {
             (*_progress)[_my_id].match_idx = idx;
             (*_progress)[_my_id].next_idx = index_t{idx + 1};
             replicate();
-            return check_committed();
+            check_committed();
         }
     }
-    return false;
 }
 
-bool fsm::check_committed() {
+void fsm::check_committed() {
 
     std::vector<index_t> match;
     size_t count = 0;
@@ -248,7 +253,7 @@ bool fsm::check_committed() {
     }
     logger.trace("check committed count {} quorum {}", count, quorum());
     if (count < quorum()) {
-        return false;
+        return;
     }
     // The index of the pivot node is selected so that all nodes
     // with a larger match index plus the pivot form a majority,
@@ -273,13 +278,21 @@ bool fsm::check_committed() {
         // is committed already and has current term
         logger.trace("check committed: cannot commit because of term {} != {}",
             _log[new_commit_idx].term, _current_term);
-        return false;
+        return;
     }
     logger.trace("check committed commit {}", new_commit_idx);
     _commit_idx = new_commit_idx;
     // We have quorum of servers with match_idx greater than current commit.
-    // It means we can commit the next entry.
-    return true;
+    // It means we can commit && apply the next entry. Use two
+    // different events to be able to notify waiters on commit
+    // events and apply events to the local state machine in
+    // parallel.
+    _sm_events.signal();
+    if (std::min(_commit_idx, _log.stable_idx()) > _last_applied) {
+        logger.trace("check_committed[{}]: signal apply_entries: committed: {} applied: {}",
+            _my_id, _commit_idx, _last_applied);
+        _apply_entries.signal();
+    }
 }
 
 std::optional<apply_batch> fsm::apply_entries() {
@@ -348,7 +361,7 @@ void fsm::step() {
     _election_elapsed = 0;
 }
 
-bool fsm::append_entries(server_id from, append_request_recv&& append_request) {
+void fsm::append_entries(server_id from, append_request_recv&& append_request) {
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={}", _my_id,
             append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
             append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
@@ -356,7 +369,7 @@ bool fsm::append_entries(server_id from, append_request_recv&& append_request) {
     step();
     if (append_request.current_term < _current_term) {
         send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx, _log.last_idx()}});
-        return false;
+        return;
     }
 
     // Can it happen that a leader gets append request with the same term?
@@ -390,7 +403,7 @@ bool fsm::append_entries(server_id from, append_request_recv&& append_request) {
                     _my_id, append_request.prev_log_idx, append_request.prev_log_term, *mismatch);
             // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
             send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx, _log.last_idx()}});
-            return false;
+            return;
         }
 
         // if there is no entries it means that leader wants to ensure forward progress
@@ -404,20 +417,20 @@ bool fsm::append_entries(server_id from, append_request_recv&& append_request) {
         send_to(from, append_reply{_current_term, append_reply::accepted{last_new_idx}});
     }
 
-    return commit_to(append_request.leader_commit_idx);
+    commit_to(append_request.leader_commit_idx);
 }
 
-bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
+void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     step();
     if (!is_leader() || reply.current_term < _current_term) {
         // drop stray reply if we are no longer a leader or the term is too old
-        return false;
+        return;
     }
 
     if (reply.current_term > _current_term) {
         // receiver knows something about newer leader, so this server has to convert to a follower
         become_follower(server_id{});
-        return false;
+        return;
     }
 
     follower_progress& progress = progress_for(from);
@@ -429,7 +442,6 @@ bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
         }
     }
 
-    bool res = false;
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
         // accepted
         index_t last_idx = std::get<append_reply::accepted>(reply.result).last_new_idx;
@@ -448,7 +460,7 @@ bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
         }
 
         // check if any new entry can be committed
-        res = check_committed();
+        check_committed();
     } else {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
@@ -461,7 +473,7 @@ bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
             if (rejected.non_matching_idx <= progress.match_idx) {
                 // if rejected index is smaller that matched it means this is a stray reply
                 logger.trace("append_entries_reply[{}->{}]: drop reply because {} < {}", _my_id, from, rejected.non_matching_idx, progress.match_idx);
-                return false;
+                return;
             }
             break;
         case follower_progress::state::PROBE:
@@ -469,7 +481,7 @@ bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
             // one append request is outstanding.
             if (rejected.non_matching_idx != index_t(progress.next_idx - 1)) {
                 logger.trace("append_entries_reply[{}->{}]: drop reply because {} != {}", _my_id, from, rejected.non_matching_idx, index_t(progress.next_idx - 1));
-                return false;
+                return;
             }
             break;
         default:
@@ -492,7 +504,6 @@ bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
     logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}", _my_id, from, progress.next_idx, progress.match_idx);
 
     replicate_to(from, false);
-    return res;
 }
 
 void fsm::request_vote(server_id from, vote_request&& vote_request) {
