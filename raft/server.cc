@@ -107,45 +107,41 @@ future<> server::log_fiber() {
     try {
         index_t last_stable = _fsm._log.stable_idx();
         while (true) {
-            auto batch = _fsm.log_entries();
+            auto batch = co_await _fsm.log_entries();
 
-            if (!batch) {
-                co_await _fsm._sm_events.wait();
-                continue;
+            if (batch.commit_idx) {
+                commit_entries(*batch.commit_idx);
             }
 
-            if (batch->commit_idx) {
-                commit_entries(*batch->commit_idx);
-            }
-
-            if (batch->term) {
+            if (batch.term) {
                 // this resets voted_for in persistent storage as well
-                co_await _storage->store_term(*batch->term);
+                co_await _storage->store_term(*batch.term);
             }
 
-            if (batch->vote) {
-                co_await _storage->store_vote(*batch->vote);
+            if (batch.vote) {
+                co_await _storage->store_vote(*batch.vote);
             }
 
-            if (batch->log_entries.size()) {
-                if (last_stable > batch->log_entries[0].idx) {
+            if (batch.log_entries.size()) {
+                auto& entries = batch.log_entries;
+
+                if (last_stable > entries[0].idx) {
                     // We should never truncate committed entries.
-                    assert(_fsm._commit_idx < batch->log_entries[0].idx);
-                    co_await _storage->truncate_log(batch->log_entries[0].idx);
+                    assert(_fsm._commit_idx < entries[0].idx);
+                    co_await _storage->truncate_log(entries[0].idx);
                 }
 
                 // Combine saving and truncating into one call?
                 // will require storage to keep track of last idx
-                co_await _storage->store_log_entries(batch->log_entries);
+                co_await _storage->store_log_entries(entries);
 
-                _fsm.stable_to(batch->log_entries.crbegin()->term,
-                        batch->log_entries.crbegin()->idx);
+                _fsm.stable_to(entries.crbegin()->term, entries.crbegin()->idx);
 
-                last_stable = batch->log_entries.crbegin()->idx;
+                last_stable = entries.crbegin()->idx;
             }
-            if (batch->messages.size()) {
+            if (batch.messages.size()) {
                 // after entries are persisted we can send messages
-                co_await seastar::parallel_for_each(std::move(batch->messages), [this] (std::pair<server_id, rpc_message>& message) {
+                co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
                     return std::visit([this, id = message.first] (auto&& m) {
                         using T = std::decay_t<decltype(m)>;
                         if constexpr (std::is_same_v<T, append_reply>) {
@@ -180,16 +176,11 @@ future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while (true) {
-            std::optional<apply_batch> batch = _fsm.apply_entries();
+            auto batch = co_await _fsm.apply_entries();
 
-            if (!batch) {
-                co_await _fsm._apply_entries.wait();
-                continue;
-            }
-
-            logger.trace("applier_fiber {} applying up to {}", _fsm._my_id, batch->idx);
-            co_await _state_machine->apply(std::move(batch->commands));
-            _fsm.applied_to(batch->idx);
+            logger.trace("applier_fiber {} applying up to {}", _fsm._my_id, batch.idx);
+            co_await _state_machine->apply(std::move(batch.commands));
+            _fsm.applied_to(batch.idx);
         }
     } catch (seastar::broken_condition_variable&) {
         // applier fiber is stopped explicitly.

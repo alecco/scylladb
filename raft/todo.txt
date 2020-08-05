@@ -27,3 +27,4 @@
 * implement pre-vote and sticky leadership
 * implement cluster configuration changes
 * introduce class progress that instantiates match array
+* remove last_stable from log_fiber
