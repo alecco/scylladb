@@ -356,7 +356,7 @@ bool fsm::append_entries(server_id from, append_request_recv&& append_request) {
 
     step();
     if (append_request.current_term < _current_term) {
-        send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
+        send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx, _log.last_idx()}});
         return false;
     }
 
@@ -390,7 +390,7 @@ bool fsm::append_entries(server_id from, append_request_recv&& append_request) {
             logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
                     _my_id, append_request.prev_log_idx, append_request.prev_log_term, *mismatch);
             // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-            send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx}});
+            send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx, _log.last_idx()}});
             return false;
         }
 
@@ -433,17 +433,20 @@ bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
     bool res = false;
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
         // accepted
-        // a follower may have longer log, so cap it with our own log length
-        index_t last_idx = std::min(std::get<append_reply::accepted>(reply.result).last_new_index, _log.last_idx());
+        index_t last_idx = std::get<append_reply::accepted>(reply.result).last_new_idx;
 
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}", _my_id, from, progress.match_idx, last_idx);
 
         progress.match_idx = std::max(progress.match_idx, last_idx);
+        // out next_idx may be large because of optimistic increase in pipeline mode
+        progress.next_idx = std::max(progress.next_idx, index_t(last_idx + 1));
 
-        // if a previous request was accepted move to pipeline state
-        // since we now know follwoer's log state
-        progress.state = follower_progress::state::PIPELINE;
-        progress.in_flight = 0;
+        if (progress.state != follower_progress::state::PIPELINE) {
+            // if a previous request was accepted move to pipeline state
+            // since we now know follwoer's log state
+            progress.state = follower_progress::state::PIPELINE;
+            progress.in_flight = 0;
+        }
 
         // check if any new entry can be committed
         res = check_committed();
@@ -451,19 +454,35 @@ bool fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
 
-        logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}", _my_id, from, progress.match_idx, rejected.non_matching_index);
+        logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}", _my_id, from, progress.match_idx, rejected.non_matching_idx);
 
-        if (rejected.non_matching_index <= progress.match_idx) {
-            // if rejected index is smaller that matched it means this is a stray reply
-            return false;
+        // check reply validity
+        switch (progress.state) {
+        case follower_progress::state::PIPELINE:
+            if (rejected.non_matching_idx <= progress.match_idx) {
+                // if rejected index is smaller that matched it means this is a stray reply
+                logger.trace("append_entries_reply[{}->{}]: drop reply because {} < {}", _my_id, from, rejected.non_matching_idx, progress.match_idx);
+                return false;
+            }
+            break;
+        case follower_progress::state::PROBE:
+            // in the probe state the reply is only valid if it matches next_idx - 1 since only
+            // one append request is outstanding.
+            if (rejected.non_matching_idx != index_t(progress.next_idx - 1)) {
+                logger.trace("append_entries_reply[{}->{}]: drop reply because {} != {}", _my_id, from, rejected.non_matching_idx, index_t(progress.next_idx - 1));
+                return false;
+            }
+            break;
+        default:
+            assert(false);
         }
 
         // we should always be able to successfully commit start index
-        assert(rejected.non_matching_index != _log.start_idx() - 1);
+        assert(rejected.non_matching_idx != _log.start_idx() - 1);
 
-        // start re-sending from non matching
+        // start re-sending from non matching, but of from last index in the follower's log
         // FIXME: make it more efficient
-        progress.next_idx = index_t(rejected.non_matching_index);
+        progress.next_idx = std::min(rejected.non_matching_idx, index_t(rejected.last_idx + 1));
 
         progress.state = follower_progress::state::PROBE;
         progress.probe_sent = false;
@@ -543,9 +562,6 @@ void fsm::replicate_to(server_id dst, bool allow_empty) {
             // TODO: send only one entry for now, but we should batch in the future
             req.entries.push_back(std::cref(entry));
             logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}", _my_id, dst, entry.idx, entry.term);
-            // optimistically update next send index. In case a message is lost
-            // there will be negative reply that will re-send idx
-            progress.next_idx++;
         } else {
             logger.trace("replicate_to[{}->{}]: send empty", _my_id, dst);
         }
@@ -556,6 +572,9 @@ void fsm::replicate_to(server_id dst, bool allow_empty) {
             progress.probe_sent = true;
         } else {
             progress.in_flight++;
+            // optimistically update next send index. In case a message is lost
+            // there will be negative reply that will re-send idx
+            progress.next_idx++;
         }
         progress.activity = true;
     }
