@@ -282,12 +282,11 @@ struct fsm {
     configuration _commited_config;
     // currently used configuration, may be different from committed during configuration change
     configuration _current_config;
-
+private:
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
     // Signaled when there is an entry to apply.
     seastar::condition_variable _apply_entries;
-private:
     // Called when one of the replicas advanced its match index
     // so it may be the case that some entries are committed now.
     // Signals relevant events.
@@ -372,14 +371,14 @@ public:
     // stable_to() must be called with the last logged
     // term/index. The logged entries are eventually
     // discarded from the state machine after snapshotting.
-    std::optional<log_batch> log_entries();
+    future<log_batch> log_entries();
 
     // Called after an added entry is persisted on disk.
     void stable_to(term_t term, index_t idx);
 
     // Return entries ready to be applied to the state machine,
     // or an empty optional if there are no such entries.
-    std::optional<apply_batch> apply_entries();
+    future<apply_batch> apply_entries();
 
     // Update _last_applied index with the index of
     // last applied entry.

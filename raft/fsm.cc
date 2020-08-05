@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "fsm.hh"
+#include <seastar/core/coroutine.hh>
 
 namespace raft {
 
@@ -180,15 +181,18 @@ void fsm::become_candidate() {
 }
 
 
-std::optional<log_batch> fsm::log_entries() {
+future<log_batch> fsm::log_entries() {
     logger.trace("fsm::log_entries() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
 
-    auto diff = _log.last_idx() - _log.stable_idx();
+    index_t diff;
 
-    if (diff == 0 && _messages.empty() && _observed.is_equal(*this)) {
-
-        return {};
+    while (true) {
+        diff = _log.last_idx() - _log.stable_idx();;
+        if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this)) {
+            break;
+        }
+        co_await _sm_events.wait();
     }
 
     log_batch batch;
@@ -218,7 +222,7 @@ std::optional<log_batch> fsm::log_entries() {
     }
     _observed.advance(*this);
 
-    return batch;
+    co_return make_ready_future<log_batch>(std::move(batch));
 }
 
 void fsm::stable_to(term_t term, index_t idx) {
@@ -295,24 +299,28 @@ void fsm::check_committed() {
     }
 }
 
-std::optional<apply_batch> fsm::apply_entries() {
+future<apply_batch> fsm::apply_entries() {
+    index_t diff;
 
-    std::optional<apply_batch> batch;
-    auto diff = std::min(_commit_idx, _log.stable_idx()) - _last_applied;
+    while (true) {
+        diff = std::min(_commit_idx, _log.stable_idx()) - _last_applied;
+        if (diff > 0) {
+            break;
+        }
+        co_await _apply_entries.wait();
+    }
 
-    if (diff > 0) {
-        batch.emplace();
-        batch->idx = _last_applied + diff;
-        batch->commands.reserve(diff);
+    apply_batch batch;
+    batch.idx = _last_applied + diff;
+    batch.commands.reserve(diff);
 
-        for (auto idx = _last_applied + 1; idx <= batch->idx; ++idx) {
-            const auto& entry = _log[idx];
-            if (std::holds_alternative<command>(entry.data)) {
-                batch->commands.push_back(std::cref(std::get<command>(entry.data)));
-            }
+    for (auto idx = _last_applied + 1; idx <= batch.idx; ++idx) {
+        const auto& entry = _log[idx];
+        if (std::holds_alternative<command>(entry.data)) {
+            batch.commands.push_back(std::cref(std::get<command>(entry.data)));
         }
     }
-    return batch;
+    co_return make_ready_future<apply_batch>(std::move(batch));
 }
 
 void fsm::tick() {
