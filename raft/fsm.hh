@@ -234,8 +234,19 @@ struct fsm {
     // and term when entry was received by leader
     log _log;
 
-    bool _current_term_is_dirty = false;
-    bool _voted_for_is_dirty = false;
+    struct last_observed_state {
+        term_t _current_term;
+        server_id _voted_for;
+
+        bool is_equal(const fsm& fsm) {
+            return _current_term == fsm._current_term && _voted_for == fsm._voted_for;
+        }
+
+        void advance(const fsm& fsm) {
+            _current_term = fsm._current_term;
+            _voted_for = fsm._voted_for;
+        }
+    } _observed;
 
     int _election_elapsed = 0;
     // 3.4 Leader election
@@ -295,9 +306,6 @@ private:
         assert(_current_term < current_term);
         _current_term = current_term;
         _voted_for = server_id{};
-        // No need to mark voted_for as dirty since
-        // persisting current_term resets it.
-        _current_term_is_dirty = true;
 
         // Reset the randomized election timeout on each term
         // change, even if we do not plan to campaign during this
