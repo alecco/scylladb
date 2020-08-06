@@ -45,11 +45,21 @@ public:
     storage(initial_state conf) : _conf(std::move(conf)) {}
     storage() {}
     virtual future<> store_term(raft::term_t term) { co_return seastar::sleep(1us); }
+    virtual future<raft::term_t> load_term() { return make_ready_future<raft::term_t>(_conf.term); }
     virtual future<> store_vote(raft::server_id vote) { return make_ready_future<>(); }
+    virtual future<raft::server_id> load_vote() { return make_ready_future<raft::server_id>(_conf.vote); }
     virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) { return make_ready_future<>(); }
     virtual future<raft::snapshot> load_snapshot() { return make_ready_future<raft::snapshot>(raft::snapshot()); }
     virtual future<> store_log_entries(const std::vector<raft::log_entry>& entries) { co_return seastar::sleep(1us); };
     virtual future<> store_log_entry(const raft::log_entry& entry) { co_return seastar::sleep(1us); }
+    virtual future<raft::log> load_log() {
+        raft::log log;
+        for (auto&& e : _conf.log) {
+            log.emplace_back(std::move(e));
+        }
+        log.stable_to(raft::index_t(_conf.log.size()));
+        return make_ready_future<raft::log>(std::move(log));
+    }
     virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
     virtual future<> stop() { return make_ready_future<>(); }
 };
@@ -108,21 +118,13 @@ std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
         const raft::configuration& config, initial_state state) {
 
-    raft::log log;
-    for (auto&& e : state.log) {
-        log.emplace_back(std::move(e));
-    }
-    if (state.log.size()) {
-        log.stable_to(raft::index_t(state.log.size()));
-    }
-
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
-    raft::fsm fsm{uuid, state.term, state.vote, std::move(log)};
-    fsm.set_configuration(config);
-    auto raft = std::make_unique<raft::server>(std::move(fsm), std::move(mrpc), std::move(sm), std::move(mstorage));
+    auto raft = std::make_unique<raft::server>(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
+    raft->set_configuration(config);
+
     return std::make_pair(std::move(raft), &rsm);
 }
 

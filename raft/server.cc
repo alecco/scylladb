@@ -27,15 +27,16 @@ using namespace std::chrono_literals;
 
 namespace raft {
 
-server::server(
-    fsm fsm, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
-    std::unique_ptr<storage> storage) :
-            _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)),
-            _fsm(std::move(fsm)) {
+server::server(server_id uuid, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
+        std::unique_ptr<storage> storage) :
+                    _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)),
+                    _id(uuid) {
     _rpc->set_server(*this);
 }
 
 future<> server::start() {
+    _fsm = fsm(_id, co_await _storage->load_term(), co_await _storage->load_vote(), co_await _storage->load_log());
+    _fsm.set_configuration(_config);
     assert(_fsm._current_term != term_t(0));
 
     // start fiber to persist entries added to in-memory log
@@ -48,7 +49,7 @@ future<> server::start() {
         _fsm.tick();
     });
 
-    return make_ready_future<>();
+    co_return;
 }
 
 future<> server::add_entry(command command) {
