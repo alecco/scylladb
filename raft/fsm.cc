@@ -368,16 +368,11 @@ void fsm::tick() {
     }
 }
 
-void fsm::step() {
-    _election_elapsed = 0;
-}
-
 void fsm::append_entries(server_id from, append_request_recv&& append_request) {
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={}", _my_id,
             append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
             append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
 
-    step();
     if (append_request.current_term < _current_term) {
         send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx, _log.last_idx()}});
         return;
@@ -432,7 +427,6 @@ void fsm::append_entries(server_id from, append_request_recv&& append_request) {
 }
 
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {
-    step();
     if (!is_leader() || reply.current_term < _current_term) {
         // drop stray reply if we are no longer a leader or the term is too old
         return;
@@ -518,13 +512,11 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 }
 
 void fsm::request_vote(server_id from, vote_request&& vote_request) {
-    step();
     (void) from;
     (void) vote_request;
 }
 
 void fsm::reply_vote(server_id from, vote_reply&& vote_reply) {
-    step();
     if (_state != server_state::CANDIDATE) {
         return;
     }

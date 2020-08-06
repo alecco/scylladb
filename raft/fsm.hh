@@ -344,6 +344,12 @@ private:
     bool is_follower() const {
         return _state == server_state::FOLLOWER;
     }
+
+    void append_entries_reply(server_id from, append_reply&& reply);
+    void append_entries(server_id from, append_request_recv&& append_request);
+
+    void request_vote(server_id from, vote_request&& vote_request);
+    void reply_vote(server_id from, vote_reply&& vote_reply);
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
@@ -383,18 +389,34 @@ public:
     // Called to advance virtual clock of the protocol state machine.
     void tick();
 
-    // Common part of all transitions of the protocol state machine.
-    void step();
-
-    // returns true if new entries were committed
-    void append_entries_reply(server_id from, append_reply&& reply);
-    void append_entries(server_id from, append_request_recv&& append_request);
-
-    void request_vote(server_id from, vote_request&& vote_request);
-    void reply_vote(server_id from, vote_reply&& vote_reply);
+    // Feed one Raft RPC message into the state machine.
+    // Advances the state machine state and generates output
+    // messages available through log_entries() and
+    // apply_entries().
+    template <typename Message>
+    void step(server_id from, Message&& msg);
 
     void stop();
 };
+
+
+template <typename Message>
+void fsm::step(server_id from, Message&& msg) {
+    static_assert(std::is_rvalue_reference<decltype(msg)>::value, "must be rvalue");
+
+    // Reset election timer.
+    _election_elapsed = 0;
+
+    if constexpr (std::is_same_v<Message, append_reply>) {
+        append_entries_reply(from, std::move(msg));
+    } else if constexpr (std::is_same_v<Message, append_request_recv>) {
+        append_entries(from, std::move(msg));
+    } else if constexpr (std::is_same_v<Message, vote_request>) {
+        request_vote(from, std::move(msg));
+    } else if constexpr (std::is_same_v<Message, vote_reply>) {
+        reply_vote(from, std::move(msg));
+    }
+}
 
 } // namespace raft
 
