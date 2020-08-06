@@ -153,9 +153,9 @@ void fsm::commit_to(index_t leader_commit_idx) {
 
 
 void fsm::become_leader() {
-    assert(_state != server_state::LEADER);
+    assert(!std::holds_alternative<leader>(_state));
     assert(!_progress);
-    _state = server_state::LEADER;
+    _state = leader{};
     _current_leader = _my_id;
     _votes = std::nullopt;
     _progress.emplace();
@@ -166,16 +166,16 @@ void fsm::become_leader() {
 }
 
 void fsm::become_follower(server_id leader) {
-    assert(_state != server_state::FOLLOWER);
+    assert(!std::holds_alternative<follower>(_state));
     _current_leader = leader;
-    _state = server_state::FOLLOWER;
+    _state = follower{};
     _progress = std::nullopt;
     _votes = std::nullopt;
 }
 
 void fsm::become_candidate() {
     update_current_term(term_t{_current_term + 1});
-    _state = server_state::CANDIDATE;
+    _state = candidate{};
     _votes.emplace();
     _voted_for = _my_id;
 }
@@ -517,7 +517,7 @@ void fsm::request_vote(server_id from, vote_request&& vote_request) {
 }
 
 void fsm::reply_vote(server_id from, vote_reply&& vote_reply) {
-    if (_state != server_state::CANDIDATE) {
+    if (!std::holds_alternative<candidate>(_state)) {
         return;
     }
     (void) from;
