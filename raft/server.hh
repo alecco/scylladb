@@ -30,7 +30,7 @@ namespace raft {
 // calls from different Seastar shards must be synchronized.
 class server {
 public:
-    explicit server(fsm fsm, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage);
+    explicit server(server_id uuid, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage);
     server(server&&) = delete;
 
     // Adds command to replicated log
@@ -76,13 +76,19 @@ public:
     // Ad hoc functions for testing
 
     void make_me_leader();
+    void set_configuration(configuration config) {
+        _config = config;
+    }
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
     std::unique_ptr<storage> _storage;
+    // id of this server
+    server_id _id;
     // Protocol deterministic finite-state machine
     fsm _fsm;
     seastar::timer<lowres_clock> _ticker;
+    configuration _config;
 
     struct commit_status {
         term_t term; // term the entry was added with

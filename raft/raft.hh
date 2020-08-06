@@ -245,6 +245,74 @@ struct vote_reply {
 
 using rpc_message = std::variant<keep_alive, append_request_send, append_reply, vote_request, vote_reply>;
 
+// This class represents the Raft log in memory.
+// The value of the first index is 1.
+// New entries are added at the back.
+// Entries are persisted locally after they are added.
+// Entries may be dropped from the beginning by snapshotting
+// and from the end by a new leader replacing stale entries.
+class log {
+    // we need something that can be truncated form both sides.
+    // std::deque move constructor is not nothrow hence cannot be used
+    boost::container::deque<log_entry> _log;
+    // the index of the first entry in the log (index starts from 1)
+    // will be increased by log gc
+    index_t _start_idx = index_t(1);
+    // Index of the first stable (persisted) entry in the
+    // log.
+    index_t _stable_idx = index_t(0);
+
+private:
+    void truncate_head(index_t i);
+public:
+    log_entry& operator[](size_t i);
+    // reserve n additional entries
+    void emplace_back(log_entry&& e);
+    // Mark all entries up to this index
+    // as stable.
+    void stable_to(index_t idx);
+    // return true if in memory log is empty
+    bool empty() const;
+    // 3.6.1 Election restriction.
+    // The voter denies its vote if its own log is more up-to-date
+    // than that of the candidate.
+    bool is_up_to_date(index_t idx, term_t term) const;
+    index_t next_idx() const;
+    index_t last_idx() const;
+    index_t stable_idx() const {
+        return _stable_idx;
+    }
+    index_t start_idx() const;
+    term_t last_term() const;
+
+    // 3.5
+    // Raft maintains the following properties, which
+    // together constitute the Log Matching Property:
+    // * If two entries in different logs have the same index and
+    // term, then they store the same command.
+    // * If two entries in different logs have the same index and
+    // term, then the logs are identical in all preceding entries.
+    //
+    // The first property follows from the fact that a leader
+    // creates at most one entry with a given log index in a given
+    // term, and log entries never change their position in the
+    // log. The second property is guaranteed by a consistency
+    // check performed by AppendEntries. When sending an
+    // AppendEntries RPC, the leader includes the index and term
+    // of the entry in its log that immediately precedes the new
+    // entries. If the follower does not find an entry in its log
+    // with the same index and term, then it refuses the new
+    // entries.
+    //
+    // @retval disengaged optional - there is a match
+    // @retval non matching term - log matching property is violated
+    std::optional<term_t> match_term(index_t idx, term_t term) const;
+
+    // Called on a follower to append entries from a leader.
+    // @retval return an index of last appended entry
+    index_t maybe_append(std::vector<log_entry>&& entries);
+};
+
 class rpc;
 class storage;
 
@@ -339,11 +407,19 @@ public:
     // vs itself and store_vote() function (since both modify the vote)
     virtual future<> store_term(term_t term) = 0;
 
+    // Load persisted term
+    // Called during raft server initialization only, should not run in parallel with store
+    virtual future<term_t> load_term() = 0;
+
     // Persist given vote
     // Can be called concurrently with other and with itself
     // but an implementation has to make sure that result is linearisable
     // vs itself and store_term() function (since both modify the vote)
     virtual future<> store_vote(server_id vote) = 0;
+
+    // Load persisted vote
+    // Called during raft server initialization only, should not run in parallel with store
+    virtual future<server_id> load_vote() = 0;
 
     // Persist given snapshot and drops all but 'preserve_log_entries'
     // entries from the raft log starting from the beginning
@@ -367,6 +443,10 @@ public:
 
     // Persist given log entry
     virtual future<> store_log_entry(const log_entry& entry) = 0;
+
+    // Load saved raft log
+    // Called during raft server initialization only, should not run in parallel with store
+    virtual future<log> load_log() = 0;
 
     // Truncate all entries with an index greater or equal that the index in the log
     // and persist the truncation. Can be called in parallel with store_log_entries()
