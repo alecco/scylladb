@@ -421,15 +421,20 @@ void fsm::step(server_id from, Message&& msg) {
     // Reset election timer.
     _election_elapsed = 0;
 
-    if constexpr (std::is_same_v<Message, append_reply>) {
-        append_entries_reply(from, std::move(msg));
-    } else if constexpr (std::is_same_v<Message, append_request_recv>) {
-        append_entries(from, std::move(msg));
-    } else if constexpr (std::is_same_v<Message, vote_request>) {
-        request_vote(from, std::move(msg));
-    } else if constexpr (std::is_same_v<Message, vote_reply>) {
-        reply_vote(from, std::move(msg));
-    }
+    auto visitor = [this, from, msg = std::move(msg)]<typename State>(State&) mutable {
+
+        if constexpr (std::is_same_v<Message, append_reply>) {
+            append_entries_reply(from, std::move(msg));
+        } else if constexpr (std::is_same_v<Message, append_request_recv>) {
+            append_entries(from, std::move(msg));
+        } else if constexpr (std::is_same_v<Message, vote_request>) {
+            request_vote(from, std::move(msg));
+        } else if constexpr (std::is_same_v<Message, vote_reply>) {
+            reply_vote(from, std::move(msg));
+        }
+    };
+
+    std::visit(visitor, _state);
 }
 
 } // namespace raft
