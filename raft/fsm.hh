@@ -156,6 +156,20 @@ public:
     index_t maybe_append(std::vector<log_entry>&& entries);
 };
 
+// 3.3 Raft Basics
+// At any given time each server is in one of three states:
+// leader, follower, or candidate.
+// In normal operation there is exactly one leader and all of the
+// other servers are followers. Followers are passive: they issue
+// no requests on their own but simply respond to requests from
+// leaders and candidates. The leader handles all client requests
+// (if a client contacts a follower, the follower redirects it to
+// the leader). The third state, candidate, is used to elect a new
+// leader.
+class follower {};
+class candidate {};
+class leader {};
+
 // Raft protocol finite state machine
 //
 // A serious concern that prevented inheriting Scylla Raft from an
@@ -214,8 +228,8 @@ struct fsm {
     server_id _my_id;
     // id of the current leader
     server_id _current_leader;
-    // What state the server is in.
-    server_state _state = server_state::FOLLOWER;
+    // What state the server is in. The default is follower.
+    std::variant<follower, candidate, leader> _state;
     // _current_term, _voted_for && _log are persisted in storage
     // latest term the server has seen
     term_t _current_term = term_t(0);
@@ -301,7 +315,7 @@ private:
 
     // A helper to update FSM current term.
     void update_current_term(term_t current_term) {
-        assert(_state == server_state::FOLLOWER);
+        assert(std::holds_alternative<follower>(_state));
         assert(_current_term < current_term);
         _current_term = current_term;
         _voted_for = server_id{};
@@ -338,11 +352,11 @@ private:
     void replicate_to(server_id dst, bool allow_empty);
     void replicate();
     bool is_leader() const {
-        assert(_state != server_state::LEADER || _my_id == _current_leader);
-        return _state == server_state::LEADER;
+        assert(!std::holds_alternative<leader>(_state) || _my_id == _current_leader);
+        return std::holds_alternative<leader>(_state);
     }
     bool is_follower() const {
-        return _state == server_state::FOLLOWER;
+        return std::holds_alternative<follower>(_state);
     }
 
     void append_entries_reply(server_id from, append_reply&& reply);
