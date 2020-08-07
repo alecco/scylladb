@@ -227,7 +227,7 @@ struct keep_alive {
 
 struct vote_request {
     // candidate’s term
-    term_t term;
+    term_t current_term;
     // candidate requesting vote
     server_id candidate_id;
     // index of candidate's last log entry
@@ -240,7 +240,7 @@ struct vote_request {
 
 struct vote_reply {
     // current term, for candidate to update itself
-    term_t term;
+    term_t current_term;
     // true means candidate received vote
     bool vote_granted;
 };
