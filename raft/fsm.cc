@@ -184,7 +184,8 @@ future<log_batch> fsm::log_entries() {
 
     if (_observed._current_term != _current_term) {
         batch.term = _current_term;
-    }
+    } // XXX Else term didn't change? how does follower know what term the leader is in?
+    // XXX why send _current_term and not observed term?
 
     if (_observed._voted_for != _voted_for) {
         batch.vote = _voted_for;

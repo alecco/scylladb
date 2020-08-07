@@ -20,7 +20,7 @@ private:
     promise<> _done;
 public:
     state_machine(raft::server_id id, apply_fn apply) : _id(id), _apply(std::move(apply)) {}
-    virtual future<> apply(const std::vector<raft::command_cref> commands) {
+    virtual future<> apply(const std::vector<raft::command_cref> commands) override {
         return _apply(_id, _done, commands);
     }
     virtual future<raft::snapshot_id> take_snaphot() { return make_ready_future<raft::snapshot_id>(raft::snapshot_id()); }
@@ -181,17 +181,22 @@ future<> apply(raft::server_id id, promise<>& done, const std::vector<raft::comm
         }
         if (sums[id] == ((itr - 1) * itr)/2) {
             done.set_value();
-        }
+        } // else XXX hangs!
         return make_ready_future<>();
 };
 
 
+// Run test with n raft servers
+// giving each initial log states (with just ints starting from 0)
+// and starting at position start_itr
+// sum of all ints should match (checked at each server)
 future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
-    auto rafts = co_await create_cluster(states, apply);
+    auto rafts = co_await create_cluster(states, apply);  //  vector<raft::server, state_machine>
 
     auto& leader = *rafts[0].first;
     leader.make_me_leader();
 
+    // Add all commands serialized to leader  (0,1,2,3,...)
     co_await seastar::parallel_for_each(std::views::iota(start_itr, itr), [&] (int i) {
             tlogger.debug("Adding entry {} on a leader", i);
             raft::command command;
@@ -199,15 +204,16 @@ future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
             return leader.add_entry(std::move(command));
     });
 
+    // Wait for all state_machine s to finish processing commands
     for (auto& r:  rafts) {
         co_await r.second->done();
     }
 
     for (auto& r: rafts) {
-        co_await r.first->stop();
+        co_await r.first->stop();  // Stop raft::server
     }
 
-    sums.clear();
+    sums.clear();  // Clear results for next test
     co_return;
 }
 
@@ -315,6 +321,14 @@ future<> test_replace_two_common_entry_different_terms() {
     return test_helper(std::move(states), 7);
 }
 
+//
+future<> test_log_replication() {
+    // using rpc_message = std::variant<append_reply, keep_alive, append_request_send>
+    // fsm._messages
+
+    co_return;
+}
+
 int main(int argc, char* argv[]) {
     namespace bpo = boost::program_options;
 
@@ -331,7 +345,7 @@ int main(int argc, char* argv[]) {
         // test_replace_log_leaders_log_not_empty,
         // test_replace_log_leaders_log_not_empty_2,
         // test_replace_log_leaders_log_not_empty_3,
-        test_replace_no_common_entries,
+        // test_replace_no_common_entries,
         // test_replace_one_common_entry,
         // test_replace_two_common_entry_different_terms
     };
