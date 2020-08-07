@@ -85,7 +85,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-        net[id]->_server->reply_vote(_id, std::move(vote_reply));
+        net[id]->_server->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
     void send_keepalive(raft::server_id id, const raft::keep_alive& keep_alive) {

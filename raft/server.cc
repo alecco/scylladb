@@ -79,7 +79,7 @@ void server::request_vote(server_id from, vote_request vote_request) {
     _fsm.step(from, std::move(vote_request));
 }
 
-void server::reply_vote(server_id from, vote_reply vote_reply) {
+void server::request_vote_reply(server_id from, vote_reply vote_reply) {
     _fsm.step(from, std::move(vote_reply));
 }
 
