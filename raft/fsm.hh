@@ -128,12 +128,17 @@ public:
     void stable_to(index_t idx);
     // return true if in memory log is empty
     bool empty() const;
+    // 3.6.1 Election restriction.
+    // The voter denies its vote if its own log is more up-to-date
+    // than that of the candidate.
+    bool is_up_to_date(index_t idx, term_t term) const;
     index_t next_idx() const;
     index_t last_idx() const;
     index_t stable_idx() const {
         return _stable_idx;
     }
     index_t start_idx() const;
+    term_t last_term() const;
 
     // 3.5
     // Raft maintains the following properties, which
@@ -345,7 +350,7 @@ private:
 
     void become_candidate();
 
-    void become_follower(server_id leader, term_t current_term);
+    void become_follower(server_id leader);
 
     // return progress for a follower
     follower_progress& progress_for(server_id dst) {
@@ -443,10 +448,11 @@ void fsm::step(server_id from, Message&& msg) {
 				_my_id, _current_term, from, msg.current_term);
 
             if constexpr (std::is_same_v<Message, append_request_recv>) {
-                become_follower(from, msg.current_term);
+                become_follower(from);
             } else {
-                become_follower(server_id{}, msg.current_term);
+                become_follower(server_id{});
             }
+            update_current_term(msg.current_term);
 
         } else if (msg.current_term < _current_term) {
             if constexpr (std::is_same_v<Message, append_request_recv>) {
@@ -462,6 +468,17 @@ void fsm::step(server_id from, Message&& msg) {
         }
 
         if constexpr (std::is_same_v<Message, append_request_recv>) {
+            // Got AppendEntries RPC from self
+            assert((!std::is_same_v<State, leader>));
+            // 3.4 Leader Election
+            // While waiting for votes, a candidate may receive an AppendEntries
+            // RPC from another server claiming to be leader. If the
+            // leader’s term (included in its RPC) is at least as large as the
+            // candidate’s current term, then the candidate recognizes the
+            // leader as legitimate and returns to follower state.
+            if constexpr (std::is_same_v<State, candidate>) {
+                become_follower(from);
+            }
             append_entries(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, append_reply>) {
             if constexpr (!std::is_same_v<State, leader>) {
@@ -472,6 +489,10 @@ void fsm::step(server_id from, Message&& msg) {
         } else if constexpr (std::is_same_v<Message, vote_request>) {
             request_vote(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, vote_reply>) {
+            if constexpr (!std::is_same_v<State, candidate>) {
+                // Ignore stray reply if we're not a candidate.
+                return;
+            }
             request_vote_reply(from, std::move(msg));
         }
     };

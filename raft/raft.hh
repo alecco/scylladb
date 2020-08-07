@@ -228,8 +228,6 @@ struct keep_alive {
 struct vote_request {
     // candidate’s term
     term_t current_term;
-    // candidate requesting vote
-    server_id candidate_id;
     // index of candidate's last log entry
     index_t last_log_idx;
     // term of candidate's last log entry
@@ -245,7 +243,7 @@ struct vote_reply {
     bool vote_granted;
 };
 
-using rpc_message = std::variant<append_reply, keep_alive, append_request_send>;
+using rpc_message = std::variant<keep_alive, append_request_send, append_reply, vote_request, vote_reply>;
 
 class rpc;
 class storage;
