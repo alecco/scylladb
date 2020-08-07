@@ -582,7 +582,7 @@ void fsm::replicate_to(server_id dst, bool allow_empty) {
 
 void fsm::replicate() {
     assert(is_leader());
-    for (auto server : _current_config.servers) {
+    for (const auto& server : _current_config.servers) {
         if (server.id != _my_id) {
             replicate_to(server.id, false);
         }
