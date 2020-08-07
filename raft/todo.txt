@@ -28,3 +28,4 @@
 * implement cluster configuration changes
 * introduce class progress that instantiates match array
 * remove last_stable from log_fiber
+* harmonize tracing by implementing operator << for fsm and log
