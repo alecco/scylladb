@@ -36,6 +36,16 @@ bool log::empty() const {
     return _log.empty();
 }
 
+bool log::is_up_to_date(index_t idx, term_t term) const {
+    // 3.6.1 Election restriction
+    // Raft determines which of two logs is more up-to-date by comparing the
+    // index and term of the last entries in the logs. If the logs have last
+    // entries with different terms, then the log with the later term is more
+    // up-to-date. If the logs end with the same term, then whichever log is
+    // longer is more up-to-date.
+    return term > last_term() || (term == last_term() && idx >= last_idx());
+}
+
 index_t log::last_idx() const {
     return index_t(_log.size()) + _start_idx - index_t(1);
 }
@@ -53,6 +63,13 @@ void log::truncate_head(index_t idx) {
 
 index_t log::start_idx() const {
     return _start_idx;
+}
+
+term_t log::last_term() const {
+    if (_log.empty()) {
+        return term_t(0);
+    }
+    return _log.back().term;
 }
 
 void log::stable_to(index_t idx) {
@@ -166,12 +183,11 @@ void fsm::become_leader() {
     replicate();
 }
 
-void fsm::become_follower(server_id leader, term_t current_term) {
+void fsm::become_follower(server_id leader) {
     _current_leader = leader;
     _state = follower{};
     _progress = std::nullopt;
     _votes = std::nullopt;
-    update_current_term(current_term);
 }
 
 void fsm::become_candidate() {
@@ -179,6 +195,22 @@ void fsm::become_candidate() {
     _votes.emplace();
     _voted_for = _my_id;
     update_current_term(term_t{_current_term + 1});
+
+    if (_votes->tally_votes(_current_config.servers.size()) == vote_result::WON) {
+        // A single node cluster.
+        become_leader();
+        return;
+    }
+
+    for (const auto& server : _current_config.servers) {
+        if (server.id == _my_id) {
+            continue;
+        }
+        logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
+            _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
+
+        send_to(server.id, vote_request{_current_term, _log.last_idx(), _log.last_term()});
+    }
 }
 
 future<log_batch> fsm::log_entries() {
@@ -359,13 +391,8 @@ void fsm::tick() {
                 progress.activity = false;
             }
         }
-    }
-    if (is_past_election_timeout()) {
-        if (is_follower()) {
-            become_candidate();
-        } else {
-            // restart_election();
-        }
+    } else if (is_past_election_timeout()) {
+        become_candidate();
     }
 }
 
@@ -496,17 +523,58 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     replicate_to(from, false);
 }
 
-void fsm::request_vote(server_id from, vote_request&& vote_request) {
-    (void) from;
-    (void) vote_request;
+void fsm::request_vote(server_id from, vote_request&& request) {
+
+    // We can cast a vote in any state. If the candidate's term is
+    // lower than ours, we ignore the request. Otherwise we first
+    // update our current term and convert to a follower.
+    assert(_current_term == request.current_term);
+
+    bool can_vote =
+	    // We can vote if this is a repeat of a vote we've already cast...
+        _voted_for == from ||
+        // ...we haven't voted and we don't think there's a leader yet in this term...
+        (_voted_for == server_id{} && _current_leader == server_id{});
+
+    // ...and we believe the candidate is up to date.
+    if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
+
+        logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
+            "voted for {} [log_term: {}, log_index: {}]",
+            _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
+            from, request.last_log_term, request.last_log_idx);
+
+        _voted_for = from;
+
+        send_to(from, vote_reply{_current_term, true});
+    } else {
+        logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
+            "rejected vote for {} [log_term: {}, log_index: {}]",
+            _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
+            from, request.last_log_term, request.last_log_idx);
+
+        send_to(from, vote_reply{_current_term, false});
+    }
+
 }
 
-void fsm::request_vote_reply(server_id from, vote_reply&& vote_reply) {
-    if (!std::holds_alternative<candidate>(_state)) {
-        return;
+void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
+    assert(std::holds_alternative<candidate>(_state));
+
+    logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
+
+    _votes->register_vote(reply.vote_granted);
+
+    switch (_votes->tally_votes(_current_config.servers.size())) {
+    case vote_result::UNKNOWN:
+        break;
+    case vote_result::WON:
+        become_leader();
+        break;
+    case vote_result::LOST:
+        become_follower(server_id{});
+        break;
     }
-    (void) from;
-    (void) vote_reply;
 }
 
 bool fsm::can_send_to(const follower_progress& progress) {
