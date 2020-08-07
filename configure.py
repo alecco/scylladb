@@ -422,7 +422,8 @@ perf_tests = set([
 ])
 
 raft_tests = set([
-    'test/raft/replication_test'
+    'test/raft/replication_test',
+    'test/boost/raft_fsm_test',
 ])
 
 apps = set([
@@ -934,7 +935,6 @@ deps = {
     'test/tools/cql_repl': idls + ['test/tools/cql_repl.cc'] + scylla_core + scylla_tests_generic_dependencies,
     #FIXME: we don't need all of scylla_core here, only the types module, need to modularize scylla_core.
     'tools/scylla-types': idls + ['tools/scylla-types.cc'] + scylla_core,
-    'test/raft/replication_test': ['test/raft/replication_test.cc'] + scylla_raft_dependencies,
 }
 
 pure_boost_tests = set([
@@ -1046,7 +1046,11 @@ deps['test/boost/linearizing_input_stream_test'] = [
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/alternator_base64_test'] += ['alternator/base64.cc']
 
+deps['test/raft/replication_test'] = ['test/raft/replication_test.cc'] + scylla_raft_dependencies
+deps['test/boost/raft_fsm_test'] =  ['test/boost/raft_fsm_test.cc'] + scylla_raft_dependencies
+
 deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
+
 
 warnings = [
     '-Wall',

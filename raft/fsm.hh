@@ -274,12 +274,6 @@ struct fsm {
     } _observed;
 
     int _election_elapsed = 0;
-    // 3.4 Leader election
-    // If a follower receives no communication over a period of
-    // time called the election timeout, then it assumes there is
-    // no viable leader and begins an election to choose a new
-    // leader
-    const int _election_timeout = 10;
     // A random value in range [election_timeout, 2 * election_timeout)
     int _randomized_election_timeout = 10;
     std::optional<votes> _votes;
@@ -335,7 +329,7 @@ private:
         // change, even if we do not plan to campaign during this
         // term: the main purpose of the timeout is to avoid
         // starting our campaign simultaneously with other followers.
-        _randomized_election_timeout = _election_timeout + std::rand() % _election_timeout;
+        _randomized_election_timeout = ELECTION_TIMEOUT + std::rand() % ELECTION_TIMEOUT;
     }
     // Calculates current quorum
     size_t quorum() const {
@@ -362,14 +356,6 @@ private:
     bool can_send_to(const follower_progress& progress);
     void replicate_to(server_id dst, bool allow_empty);
     void replicate();
-    bool is_leader() const {
-        assert(!std::holds_alternative<leader>(_state) || _my_id == _current_leader);
-        return std::holds_alternative<leader>(_state);
-    }
-    bool is_follower() const {
-        return std::holds_alternative<follower>(_state);
-    }
-
     void append_entries(server_id from, append_request_recv&& append_request);
     void append_entries_reply(server_id from, append_reply&& reply);
 
@@ -377,6 +363,21 @@ private:
     void request_vote_reply(server_id from, vote_reply&& vote_reply);
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
+
+    bool is_leader() const {
+        return std::holds_alternative<leader>(_state);
+    }
+    bool is_follower() const {
+        return std::holds_alternative<follower>(_state);
+    }
+
+
+    // 3.4 Leader election
+    // If a follower receives no communication over a period of
+    // time called the election timeout, then it assumes there is
+    // no viable leader and begins an election to choose a new
+    // leader
+    const int ELECTION_TIMEOUT = 10;
 
     void become_leader();
 
