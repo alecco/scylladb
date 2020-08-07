@@ -165,21 +165,20 @@ void fsm::become_leader() {
     replicate();
 }
 
-void fsm::become_follower(server_id leader) {
-    assert(!std::holds_alternative<follower>(_state));
+void fsm::become_follower(server_id leader, term_t current_term) {
     _current_leader = leader;
     _state = follower{};
     _progress = std::nullopt;
     _votes = std::nullopt;
+    update_current_term(current_term);
 }
 
 void fsm::become_candidate() {
-    update_current_term(term_t{_current_term + 1});
     _state = candidate{};
     _votes.emplace();
     _voted_for = _my_id;
+    update_current_term(term_t{_current_term + 1});
 }
-
 
 future<log_batch> fsm::log_entries() {
     logger.trace("fsm::log_entries() {} stable index: {} last index: {}",
@@ -373,22 +372,9 @@ void fsm::append_entries(server_id from, append_request_recv&& append_request) {
             append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx,
             append_request.entries.size() ? append_request.entries[0].idx : index_t(0));
 
-    if (append_request.current_term < _current_term) {
-        send_to(from, append_reply{_current_term, append_reply::rejected{append_request.prev_log_idx, _log.last_idx()}});
-        return;
-    }
-
     // Can it happen that a leader gets append request with the same term?
     // What should we do about it?
-    assert(!is_leader() || _current_term > append_request.current_term);
-
-    if (!is_follower()) {
-        become_follower(from);
-    }
-
-    if (_current_term < append_request.current_term) {
-        update_current_term(append_request.current_term);
-    }
+    assert(is_follower());
 
     // TODO: need to handle keep alive management here
 
@@ -427,16 +413,7 @@ void fsm::append_entries(server_id from, append_request_recv&& append_request) {
 }
 
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {
-    if (!is_leader() || reply.current_term < _current_term) {
-        // drop stray reply if we are no longer a leader or the term is too old
-        return;
-    }
-
-    if (reply.current_term > _current_term) {
-        // receiver knows something about newer leader, so this server has to convert to a follower
-        become_follower(server_id{});
-        return;
-    }
+    assert(is_leader());
 
     follower_progress& progress = progress_for(from);
 

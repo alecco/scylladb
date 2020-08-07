@@ -315,7 +315,6 @@ private:
 
     // A helper to update FSM current term.
     void update_current_term(term_t current_term) {
-        assert(std::holds_alternative<follower>(_state));
         assert(_current_term < current_term);
         _current_term = current_term;
         _voted_for = server_id{};
@@ -339,7 +338,7 @@ private:
 
     void become_candidate();
 
-    void become_follower(server_id leader);
+    void become_follower(server_id leader, term_t current_term);
 
     // return progress for a follower
     follower_progress& progress_for(server_id dst) {
@@ -423,10 +422,46 @@ void fsm::step(server_id from, Message&& msg) {
 
     auto visitor = [this, from, msg = std::move(msg)]<typename State>(State&) mutable {
 
-        if constexpr (std::is_same_v<Message, append_reply>) {
-            append_entries_reply(from, std::move(msg));
-        } else if constexpr (std::is_same_v<Message, append_request_recv>) {
+        // 3.3. Raft basics.
+        //
+        // Current terms are exchanged whenever servers
+        // communicate; if one server’s current term is smaller
+        // than the other’s, then it updates its current term to
+        // the larger value. If a candidate or leader discovers
+        // that its term is out of date, it immediately reverts to
+        // follower state. If a server receives a request with
+        // a stale term number, it rejects the request.
+        if (msg.current_term > _current_term) {
+			logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
+				_my_id, _current_term, from, msg.current_term);
+
+            if constexpr (std::is_same_v<Message, append_request_recv>) {
+                become_follower(from, msg.current_term);
+            } else {
+                become_follower(server_id{}, msg.current_term);
+            }
+
+        } else if (msg.current_term < _current_term) {
+            if constexpr (std::is_same_v<Message, append_request_recv>) {
+                // Instructs the leader to step down.
+                append_reply reply{_current_term, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
+                send_to(from, std::move(reply));
+            } else {
+                // Ignore other cases
+                logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
+                    _my_id, _current_term, from, msg.current_term);
+            }
+            return;
+        }
+
+        if constexpr (std::is_same_v<Message, append_request_recv>) {
             append_entries(from, std::move(msg));
+        } else if constexpr (std::is_same_v<Message, append_reply>) {
+            if constexpr (!std::is_same_v<State, leader>) {
+                // Ignore stray reply if we're not a leader.
+                return;
+            }
+            append_entries_reply(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, vote_request>) {
             request_vote(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, vote_reply>) {
