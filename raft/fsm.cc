@@ -136,6 +136,8 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _log(std::move(log)) {
 
     _observed.advance(*this);
+    // Make sure the state machine is consistent
+    _current_config.servers.push_back(server_address{_my_id});
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
 
     assert(_current_leader.is_nil());
