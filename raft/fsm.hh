@@ -358,11 +358,11 @@ private:
         return std::holds_alternative<follower>(_state);
     }
 
-    void append_entries_reply(server_id from, append_reply&& reply);
     void append_entries(server_id from, append_request_recv&& append_request);
+    void append_entries_reply(server_id from, append_reply&& reply);
 
     void request_vote(server_id from, vote_request&& vote_request);
-    void reply_vote(server_id from, vote_reply&& vote_reply);
+    void request_vote_reply(server_id from, vote_reply&& vote_reply);
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
 
@@ -465,7 +465,7 @@ void fsm::step(server_id from, Message&& msg) {
         } else if constexpr (std::is_same_v<Message, vote_request>) {
             request_vote(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, vote_reply>) {
-            reply_vote(from, std::move(msg));
+            request_vote_reply(from, std::move(msg));
         }
     };
 

@@ -501,7 +501,7 @@ void fsm::request_vote(server_id from, vote_request&& vote_request) {
     (void) vote_request;
 }
 
-void fsm::reply_vote(server_id from, vote_reply&& vote_reply) {
+void fsm::request_vote_reply(server_id from, vote_reply&& vote_reply) {
     if (!std::holds_alternative<candidate>(_state)) {
         return;
     }
