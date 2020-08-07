@@ -54,30 +54,37 @@ struct follower_progress {
 enum class vote_result {
     // We haven't got enough responses yet, either because
     // the servers haven't voted or responses failed to arrive.
-    VOTE_UNKNOWN,
+    UNKNOWN,
     // This candidate has won the election
-    VOTE_WON,
+    WON,
     // The quorum of servers has voted against this candidate
-    VOTE_LOST,
+    LOST,
 };
 
 // Candidate's state specific to election
-struct votes {
+class votes {
     // Number of responses to RequestVote RPC.
     // The candidate always votes for self.
-    size_t responded = 1;
+    size_t _responded = 1;
     // Number of granted votes.
     // The candidate always votes for self.
-    size_t granted = 1;
+    size_t _granted = 1;
+public:
+    void register_vote(bool granted) {
+        _responded++;
+        if (granted) {
+            _granted++;
+        }
+    }
 
     vote_result tally_votes(size_t cluster_size) const {
         auto quorum = cluster_size / 2 + 1;
-        if (granted >= quorum) {
-            return vote_result::VOTE_WON;
+        if (_granted >= quorum) {
+            return vote_result::WON;
         }
-        assert(responded <= cluster_size);
-        auto unknown = cluster_size - responded;
-        return granted + unknown >= quorum ? vote_result::VOTE_UNKNOWN : vote_result::VOTE_LOST;
+        assert(_responded <= cluster_size);
+        auto unknown = cluster_size - _responded;
+        return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
     }
 };
 
