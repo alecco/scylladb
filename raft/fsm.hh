@@ -25,7 +25,8 @@
 namespace raft {
 
 // Leader's view of each follower, including self.
-struct follower_progress {
+class follower_progress {
+public:
     // Index of the next log entry to send to this server.
     index_t next_idx;
     // Index of the highest log entry known to be replicated to this
@@ -48,6 +49,16 @@ struct follower_progress {
     // Set when a message is sent to the follower
     // reset on a tick. Used to decide if keep alive is needed.
     bool activity = false;
+
+    // check if a reject packet should be ignored because it was delayed
+    // or reordered
+    bool is_stray_reject(const append_reply::rejected&);
+
+    void become_probe();
+    void become_pipeline();
+
+    // return true if new replication record can be send to the follower
+    bool can_send_to();
 };
 
 // Possible leader election outcomes.
