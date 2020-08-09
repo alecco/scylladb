@@ -23,6 +23,52 @@
 
 namespace raft {
 
+bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) {
+    switch (state) {
+    case follower_progress::state::PIPELINE:
+        if (rejected.non_matching_idx <= match_idx) {
+            // If rejected index is smaller that matched it means this is a stray reply
+            return true;
+        }
+        break;
+    case follower_progress::state::PROBE:
+        // In the probe state the reply is only valid if it matches next_idx - 1, since only
+        // one append request is outstanding.
+        if (rejected.non_matching_idx != index_t(next_idx - 1)) {
+            return true;
+        }
+        break;
+    default:
+        assert(false);
+    }
+    return false;
+}
+
+void follower_progress::become_probe() {
+    state = state::PROBE;
+    probe_sent = false;
+}
+
+void follower_progress::become_pipeline() {
+    if (state != state::PIPELINE) {
+        // If a previous request was accepted, move to "pipeline" state
+        // since we now know the follower's log state.
+        state = state::PIPELINE;
+        in_flight = 0;
+    }
+}
+
+bool follower_progress::can_send_to() {
+    if (state == state::PROBE && probe_sent) {
+        return false;
+    }
+
+    // allow 10 outstanding indexes
+    // FIXME: make it smarter
+    return in_flight < follower_progress::max_in_flight;
+}
+
+
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)) {
@@ -360,12 +406,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // out next_idx may be large because of optimistic increase in pipeline mode
         progress.next_idx = std::max(progress.next_idx, index_t(last_idx + 1));
 
-        if (progress.state != follower_progress::state::PIPELINE) {
-            // If a previous request was accepted, move to "pipeline" state
-            // since we now know the follower's log state.
-            progress.state = follower_progress::state::PIPELINE;
-            progress.in_flight = 0;
-        }
+        progress.become_pipeline();
 
         // check if any new entry can be committed
         check_committed();
@@ -377,26 +418,8 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
             _my_id, from, progress.match_idx, rejected.non_matching_idx);
 
         // check reply validity
-        switch (progress.state) {
-        case follower_progress::state::PIPELINE:
-            if (rejected.non_matching_idx <= progress.match_idx) {
-                // If rejected index is smaller that matched it means this is a stray reply
-                logger.trace("append_entries_reply[{}->{}]: drop reply because {} < {}",
-                    _my_id, from, rejected.non_matching_idx, progress.match_idx);
-                return;
-            }
-            break;
-        case follower_progress::state::PROBE:
-            // In the probe state the reply is only valid if it matches next_idx - 1, since only
-            // one append request is outstanding.
-            if (rejected.non_matching_idx != index_t(progress.next_idx - 1)) {
-                logger.trace("append_entries_reply[{}->{}]: drop reply because {} != {}",
-                    _my_id, from, rejected.non_matching_idx, index_t(progress.next_idx - 1));
-                return;
-            }
-            break;
-        default:
-            assert(false);
+        if (progress.is_stray_reject(rejected)) {
+            logger.trace("append_entries_reply[{}->{}]: drop stray append reject", _my_id, from);
         }
 
         // we should always be able to successfully commit start index
@@ -406,8 +429,8 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // FIXME: make it more efficient
         progress.next_idx = std::min(rejected.non_matching_idx, index_t(rejected.last_idx + 1));
 
-        progress.state = follower_progress::state::PROBE;
-        progress.probe_sent = false;
+        progress.become_probe();
+
         // We should not fail to apply an entry next after a matched one.
         assert(progress.next_idx != progress.match_idx);
     }
@@ -472,23 +495,13 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     }
 }
 
-bool fsm::can_send_to(const follower_progress& progress) {
-    if (progress.state == follower_progress::state::PROBE && progress.probe_sent) {
-        return false;
-    }
-
-    // allow 10 outstanding indexes
-    // FIXME: make it smarter
-    return progress.in_flight < follower_progress::max_in_flight;
-}
-
 void fsm::replicate_to(server_id dst, bool allow_empty) {
     auto& progress = progress_for(dst);
 
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, dst, progress.next_idx, progress.match_idx);
 
-    while (fsm::can_send_to(progress)) {
+    while (progress.can_send_to()) {
         index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.stable_idx()) {
             next_idx = index_t(0);
