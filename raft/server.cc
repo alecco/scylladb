@@ -108,7 +108,7 @@ future<> server::log_fiber() {
     try {
         index_t last_stable = _fsm._log.stable_idx();
         while (true) {
-            auto batch = co_await _fsm.log_entries();
+            auto batch = co_await _fsm.log_entries();  // XXX here commands from fsm
 
             if (batch.commit_idx) {
                 commit_entries(*batch.commit_idx);

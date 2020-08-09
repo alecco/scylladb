@@ -504,8 +504,9 @@ void fsm::replicate_to(server_id dst, bool allow_empty) {
 
     while (progress.can_send_to()) {
         index_t next_idx = progress.next_idx;
+        // Send out
         if (progress.next_idx > _log.stable_idx()) {
-            next_idx = index_t(0);
+            next_idx = index_t(0); // XXX zero??
             logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}",
                     _my_id, dst, progress.next_idx, _log.stable_idx(), allow_empty);
             if (!allow_empty) {
