@@ -7,6 +7,14 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 
+// TODO:
+//      expected server/fsm state
+//          create actual log in test server (+truncate etc)
+//          check
+//          struct with expected (optional?)
+//      test log replication
+//
+
 using namespace std::chrono_literals;
 
 static seastar::logger tlogger("test");
