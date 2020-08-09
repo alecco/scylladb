@@ -365,7 +365,8 @@ void fsm::step(server_id from, Message&& msg) {
     // Reset election timer.
     _election_elapsed = 0;
 
-    auto visitor = [this, from, msg = std::move(msg)]<typename State>(State&) mutable {
+    auto visitor = [this, from, msg = std::move(msg)](auto state) mutable {
+        using State = decltype(state);
 
         // 3.3. Raft basics.
         //
