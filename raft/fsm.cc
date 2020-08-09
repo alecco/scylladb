@@ -161,8 +161,9 @@ void fsm::stable_to(term_t term, index_t idx) {
         // If the terms do not match it means the log was truncated.
         _log.stable_to(idx);
         if (is_leader()) {
-            (*_progress)[_my_id].match_idx = idx;
-            (*_progress)[_my_id].next_idx = index_t{idx + 1};
+            auto& progress = progress_for(_my_id);
+            progress.match_idx = idx;
+            progress.next_idx = index_t{idx + 1};
             replicate();
             check_committed();
         }
