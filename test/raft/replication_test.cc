@@ -73,7 +73,7 @@ public:
 };
 
 class rpc : public raft::rpc {
-    static std::unordered_map<raft::server_id, rpc*> net;
+    static std::unordered_map<raft::server_id, rpc*> net;    // XXX here shared Server networking
     raft::server_id _id;
 public:
     rpc(raft::server_id id) : _id(id) {
@@ -90,7 +90,7 @@ public:
         for (auto&& e: append_request.entries) {
             req.entries.push_back(e);
         }
-        net[id]->_server->append_entries(_id, std::move(req));
+        net[id]->_server->append_entries(_id, std::move(req)); // XXX HERE APPEND ON OTHER SERVER
         //co_return seastar::sleep(1us);
         return make_ready_future<>();
     }
@@ -120,7 +120,7 @@ public:
     virtual future<> stop() { return make_ready_future<>(); }
 };
 
-std::unordered_map<raft::server_id, rpc*> rpc::net;
+std::unordered_map<raft::server_id, rpc*> rpc::net;  // XXX global definition? why?
 
 std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
