@@ -20,7 +20,7 @@
  */
 #pragma once
 
-#include <seastar/core/abort_source.hh>
+#include <seastar/core/pipe.hh>
 #include "fsm.hh"
 
 namespace raft {
@@ -89,6 +89,8 @@ private:
     fsm _fsm;
     seastar::timer<lowres_clock> _ticker;
     configuration _config;
+
+    seastar::pipe<std::vector<command_cref>> _apply_entries = seastar::pipe<std::vector<command_cref>>(10);
 
     struct commit_status {
         term_t term; // term the entry was added with

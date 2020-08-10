@@ -105,7 +105,6 @@ void fsm::commit_to(index_t leader_commit_idx) {
         assert(_commit_idx > _last_applied);
         logger.trace("commit_to[{}]: signal apply_entries: committed: {} applied: {}",
             _my_id, _commit_idx, _last_applied);
-        _apply_entries.signal();
     }
 }
 
@@ -157,11 +156,13 @@ future<log_batch> fsm::log_entries() {
     logger.trace("fsm::log_entries() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
 
-    index_t diff;
+    index_t log_diff, apply_diff;
 
     while (true) {
-        diff = _log.last_idx() - _log.stable_idx();;
-        if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this)) {
+        log_diff = _log.last_idx() - _log.stable_idx();
+        apply_diff = std::min(_commit_idx, _log.stable_idx()) - _last_applied;
+
+        if (log_diff > 0 || apply_diff > 0 || !_messages.empty() || !_observed.is_equal(*this)) {
             break;
         }
         co_await _sm_events.wait();
@@ -171,7 +172,7 @@ future<log_batch> fsm::log_entries() {
 
     // get a snapshot of all unsent replies
     std::swap(batch.messages, _messages);
-    batch.log_entries.reserve(diff);
+    batch.log_entries.reserve(log_diff);
 
     for (auto i = _log.stable_idx() + 1; i <= _log.last_idx(); i++) {
         // Copy before saving to storage to prevent races with log updates,
@@ -194,7 +195,20 @@ future<log_batch> fsm::log_entries() {
     }
     _observed.advance(*this);
 
-    co_return make_ready_future<log_batch>(std::move(batch));
+    // Return entries to apply.
+    batch.apply.reserve(apply_diff);
+
+    auto new_last_applied = _last_applied + apply_diff;
+
+    for (auto idx = _last_applied + 1; idx <= new_last_applied; ++idx) {
+        const auto& entry = _log[idx];
+        if (std::holds_alternative<command>(entry.data)) {
+            batch.apply.push_back(std::cref(std::get<command>(entry.data)));
+        }
+    }
+    _last_applied = new_last_applied;
+
+    co_return batch;
 }
 
 void fsm::stable_to(term_t term, index_t idx) {
@@ -265,38 +279,6 @@ void fsm::check_committed() {
     // events and apply events to the local state machine in
     // parallel.
     _sm_events.signal();
-    if (std::min(_commit_idx, _log.stable_idx()) > _last_applied) {
-        logger.trace("check_committed[{}]: signal apply_entries: committed: {} applied: {}",
-            _my_id, _commit_idx, _last_applied);
-        _apply_entries.signal();
-    }
-}
-
-future<apply_batch> fsm::apply_entries() {
-    index_t diff;
-
-    while (true) {
-        diff = std::min(_commit_idx, _log.stable_idx()) - _last_applied;
-        if (diff > 0) {
-            break;
-        }
-        co_await _apply_entries.wait();
-    }
-
-    apply_batch batch;
-    batch.reserve(diff);
-
-    auto new_last_applied = _last_applied + diff;
-
-    for (auto idx = _last_applied + 1; idx <= new_last_applied; ++idx) {
-        const auto& entry = _log[idx];
-        if (std::holds_alternative<command>(entry.data)) {
-            batch.push_back(std::cref(std::get<command>(entry.data)));
-        }
-    }
-    logger.trace("apply_entries[{}] applying up to {}", _my_id, new_last_applied);
-    _last_applied = new_last_applied;
-    co_return make_ready_future<apply_batch>(std::move(batch));
 }
 
 void fsm::tick() {
@@ -567,7 +549,6 @@ void fsm::replicate() {
 
 void fsm::stop() {
     _sm_events.broken();
-    _apply_entries.broken();
 }
 
 } // end of namespace raft

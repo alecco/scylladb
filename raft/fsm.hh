@@ -106,10 +106,9 @@ struct log_batch {
     std::optional<index_t> commit_idx;
     std::vector<log_entry> log_entries;
     std::vector<std::pair<server_id, rpc_message>> messages;
+    // Entries to apply.
+    std::vector<command_cref> apply;
 };
-
-// A batch of entries to apply to the state machine.
-using apply_batch = std::vector<command_cref>;
 
 // 3.3 Raft Basics
 // At any given time each server is in one of three states:
@@ -243,8 +242,6 @@ struct fsm {
 private:
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
-    // Signaled when there is an entry to apply.
-    seastar::condition_variable _apply_entries;
     // Called when one of the replicas advanced its match index
     // so it may be the case that some entries are committed now.
     // Signals relevant events.
@@ -345,10 +342,6 @@ public:
 
     // Called after an added entry is persisted on disk.
     void stable_to(term_t term, index_t idx);
-
-    // Return entries ready to be applied to the state machine,
-    // or an empty optional if there are no such entries.
-    future<apply_batch> apply_entries();
 
     // Called on a follower with a new known leader commit index.
     // Advances the follower's commit index up to all log-stable

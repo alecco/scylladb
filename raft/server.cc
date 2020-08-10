@@ -164,6 +164,10 @@ future<> server::log_fiber() {
 
                 });
             }
+
+            if (batch.apply.size()) {
+                co_await _apply_entries.writer.write(std::move(batch.apply));
+            }
         }
     } catch (seastar::broken_condition_variable&) {
         // log fiber is stopped explicitly.
@@ -177,11 +181,13 @@ future<> server::applier_fiber() {
     logger.trace("applier_fiber start");
     try {
         while (true) {
-            auto batch = co_await _fsm.apply_entries();
-            co_await _state_machine->apply(std::move(batch));
+            auto opt_batch = co_await _apply_entries.reader.read();
+            if (!opt_batch) {
+                // EOF
+                break;
+            }
+            co_await _state_machine->apply(std::move(*opt_batch));
         }
-    } catch (seastar::broken_condition_variable&) {
-        // applier fiber is stopped explicitly.
     } catch (...) {
         logger.error("applier fiber {} stopped because of the error: {}", _fsm._my_id, std::current_exception());
     }
@@ -191,6 +197,10 @@ future<> server::applier_fiber() {
 future<> server::stop() {
     logger.trace("stop() called");
     _fsm.stop();
+    {
+        // there is not explicit close for the pipe!
+        auto tmp = std::move(_apply_entries.writer);
+    }
     for (auto& ac: _awaited_commits) {
         ac.second.committed.set_exception(stopped_error());
     }
