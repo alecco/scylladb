@@ -142,6 +142,8 @@ future<> server::log_fiber() {
             }
             if (batch.messages.size()) {
                 // after entries are persisted we can send messages
+                // XXX limit loop parallelism? (semaphore(x) and repeat &limit)
+                // XXX group by server_id?
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
                     return std::visit([this, id = message.first] (auto&& m) {
                         using T = std::decay_t<decltype(m)>;

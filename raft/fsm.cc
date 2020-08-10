@@ -212,7 +212,7 @@ void fsm::stable_to(term_t term, index_t idx) {
             progress.match_idx = idx;
             progress.next_idx = index_t{idx + 1};
             replicate();
-            check_committed();
+            check_committed();  // Committed now might advance
         }
     }
 }
@@ -506,7 +506,7 @@ void fsm::replicate_to(server_id dst, bool allow_empty) {
         index_t next_idx = progress.next_idx;
         // Send out
         if (progress.next_idx > _log.stable_idx()) {
-            next_idx = index_t(0); // XXX zero??
+            next_idx = index_t(0); // XXX zero == don't send any entries
             logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}",
                     _my_id, dst, progress.next_idx, _log.stable_idx(), allow_empty);
             if (!allow_empty) {
