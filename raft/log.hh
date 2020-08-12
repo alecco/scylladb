@@ -103,5 +103,8 @@ public:
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
     index_t maybe_append(std::vector<log_entry>&& entries);
+
+    friend std::ostream& operator<<(std::ostream& os, const log& l);
 };
+
 }

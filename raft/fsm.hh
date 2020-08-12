@@ -281,6 +281,8 @@ public:
     // Returns true if the current leader has at least one entry committed
     // and it heard replies from the quorum of followers in the last tick period
     bool can_read();
+
+    friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
 template <typename Message>

@@ -204,7 +204,6 @@ using rpc_message = std::variant<keep_alive, append_request_send, append_reply, 
 // std::deque move constructor is not nothrow hence cannot be used
 using log_entries = boost::container::deque<log_entry_ptr>;
 
-
 // rpc. storage and satte_machine classes will have to be implemented by the
 // raft user to provide network, persistency and busyness logic support
 // repectively.
@@ -372,6 +371,10 @@ public:
     // this function is called.
     virtual future<> abort() = 0;
 };
+
+inline auto short_id(raft::server_id id) {
+    return id.id.get_least_significant_bits();
+}
 
 } // namespace raft
 

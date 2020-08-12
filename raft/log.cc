@@ -134,4 +134,13 @@ index_t log::maybe_append(std::vector<log_entry>&& entries) {
     return last_new_idx;
 }
 
+std::ostream& operator<<(std::ostream& os, const log& l) {
+    os << "next idx: " << l.next_idx() << ", ";
+    os << "last idx: " << l.last_idx() << ", ";
+    os << "stable idx: " << l.stable_idx() << ", ";
+    os << "start idx: " << l.start_idx() << ", ";
+    os << "last term: " << l.last_term();
+    return os;
+}
+
 } // end of namespace raft
