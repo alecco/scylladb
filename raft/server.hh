@@ -159,6 +159,8 @@ private:
 
     future<> _applier_status = make_ready_future<>();
     future<> _log_status = make_ready_future<>();
+
+    friend std::ostream& operator<<(std::ostream& os, const server& s);
 };
 
 } // namespace raft

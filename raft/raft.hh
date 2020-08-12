@@ -331,6 +331,8 @@ public:
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
     index_t maybe_append(std::vector<log_entry>&& entries);
+
+    friend std::ostream& operator<<(std::ostream& os, const log& l);
 };
 
 class rpc;
@@ -490,6 +492,10 @@ public:
     // this function is called.
     virtual future<> abort() = 0;
 };
+
+inline auto short_id(raft::server_id id) {
+    return id.id.get_least_significant_bits();
+}
 
 } // namespace raft
 

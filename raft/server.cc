@@ -246,4 +246,9 @@ void server::make_me_leader() {
     _fsm.become_leader();
 }
 
+std::ostream& operator<<(std::ostream& os, const server& s) {
+    os << "[id: " << short_id(s._id) << ", fsm (" << s._fsm << ")]\n";
+    return os;
+}
+
 } // end of namespace raft
