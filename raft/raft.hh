@@ -83,6 +83,10 @@ public:
     typed_uint64 operator-(const typed_uint64& o) const {
         return typed_uint64(_val - o._val);
     }
+    friend std::ostream& operator<<(std::ostream& os, const typed_uint64<Tag>& u) {
+        os << u._val;
+        return os;
+    }
 };
 
 template<typename Tag>
@@ -320,6 +324,8 @@ public:
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
     index_t maybe_append(std::vector<log_entry>&& entries);
+
+    friend std::ostream& operator<<(std::ostream& os, const log& l);
 };
 
 class rpc;
@@ -457,6 +463,10 @@ public:
     // function is called
     virtual future<> stop() = 0;
 };
+
+inline auto short_id(raft::server_id id) {
+    return id.id.get_least_significant_bits();
+}
 
 } // namespace raft
 
