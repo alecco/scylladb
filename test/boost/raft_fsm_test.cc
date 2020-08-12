@@ -188,3 +188,52 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
     fsm.step(id3, raft::vote_reply{output.term, true});
     BOOST_CHECK(fsm.is_leader());
 }
+
+BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
+
+    server_id id1{utils::make_random_uuid()},
+              id2{utils::make_random_uuid()},
+              id3{utils::make_random_uuid()};
+
+    raft::log log(index_t{1000});
+    log.emplace_back(raft::log_entry{term_t{10}, index_t{1000}});
+    log.stable_to(log.last_idx());
+
+    raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log));
+
+    raft::configuration cfg;
+    cfg.servers.push_back(raft::server_address{id1});
+    cfg.servers.push_back(raft::server_address{id2});
+    cfg.servers.push_back(raft::server_address{id3});
+
+    fsm.set_configuration(cfg);
+    // Initial state is follower
+    BOOST_CHECK(fsm.is_follower());
+
+    (void) fsm.get_output();
+
+    fsm.step(id2, raft::vote_request{term_t{9}, index_t{1001}, term_t{11}});
+    // Current term is too old - vote is not granted
+    auto output = fsm.get_output();
+    BOOST_CHECK(output.messages.empty());
+
+    auto request_vote = [&](term_t term, index_t last_log_idx, term_t last_log_term) -> raft::vote_reply {
+        fsm.step(id2, raft::vote_request{term, last_log_idx, last_log_term});
+        auto output = fsm.get_output();
+        return std::get<raft::vote_reply>(output.messages.back().second);
+    };
+
+    // Last stable index is too small - vote is not granted
+    BOOST_CHECK(!request_vote(term_t{11}, index_t{999}, term_t{10}).vote_granted);
+    // Last stable term is too small - vote is not granted
+    BOOST_CHECK(!request_vote(term_t{12}, index_t{1002}, term_t{9}).vote_granted);
+    // Last stable term and index are equal to the voter's - vote
+    // is granted
+    BOOST_CHECK(request_vote(term_t{13}, index_t{1000}, term_t{10}).vote_granted);
+    // Last stable term is the same, index is greater to the voter's - vote
+    // is granted
+    BOOST_CHECK(request_vote(term_t{14}, index_t{1001}, term_t{10}).vote_granted);
+    // Both term and index are greater than the voter's - vote
+    // is granted
+    BOOST_CHECK(request_vote(term_t{15}, index_t{1001}, term_t{11}).vote_granted);
+}

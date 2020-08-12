@@ -185,7 +185,7 @@ class fsm {
     std::variant<follower, candidate, leader> _state;
     // _current_term, _voted_for && _log are persisted in storage
     // latest term the server has seen
-    term_t _current_term = term_t(0);
+    term_t _current_term;
     // candidateId that received vote in current term (or nil if none)
     server_id _voted_for;
     // commit_index && last_applied are volatile state

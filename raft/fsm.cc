@@ -177,14 +177,18 @@ fsm_output fsm::get_output() {
 
     // get a snapshot of all unsent replies
     std::swap(output.messages, _messages);
-    output.log_entries.reserve(_log.last_idx() - _log.stable_idx());
+    auto diff = _log.last_idx() - _log.stable_idx();
 
-    for (auto i = _log.stable_idx() + 1; i <= _log.last_idx(); i++) {
-        // Copy before saving to storage to prevent races with log updates,
-        // e.g. truncation of the log.
-        // TODO: avoid copies by making sure log truncate is
-        // copy-on-write.
-        output.log_entries.emplace_back(_log[i]);
+    if (diff > 0) {
+        output.log_entries.reserve(diff);
+
+        for (auto i = _log.stable_idx() + 1; i <= _log.last_idx(); i++) {
+            // Copy before saving to storage to prevent races with log updates,
+            // e.g. truncation of the log.
+            // TODO: avoid copies by making sure log truncate is
+            // copy-on-write.
+            output.log_entries.emplace_back(_log[i]);
+        }
     }
 
     if (_observed._current_term != _current_term || _observed._voted_for != _voted_for) {
@@ -193,7 +197,7 @@ fsm_output fsm::get_output() {
     }
 
     // Return committed entries.
-    auto diff = _commit_idx - _observed._commit_idx;
+    diff = _commit_idx - _observed._commit_idx;
     if (diff > 0) {
         output.committed.reserve(diff);
 

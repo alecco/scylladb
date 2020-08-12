@@ -271,6 +271,9 @@ class log {
 private:
     void truncate_head(index_t i);
 public:
+    log(index_t start_idx = index_t{1})
+            : _start_idx(start_idx) {
+    }
     log_entry_ptr& operator[](size_t i);
     // reserve n additional entries
     void emplace_back(log_entry&& e);
