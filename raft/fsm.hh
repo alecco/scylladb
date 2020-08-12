@@ -97,6 +97,8 @@ public:
         auto unknown = cluster_size - _responded;
         return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const votes& v);
 };
 
 // State of the FSM that needs logging & sending.
@@ -373,6 +375,8 @@ public:
     // Returns true if the current leader has at least one entry committed
     // and it heard replies from the quorum of followers in the last tick period
     bool can_read();
+
+    friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
 

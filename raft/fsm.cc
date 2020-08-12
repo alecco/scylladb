@@ -572,4 +572,65 @@ void fsm::stop() {
     _sm_events.broken();
 }
 
+std::ostream& operator<<(std::ostream& os, const votes& v) {
+    os << "responded: " << v._responded << ", ";
+    os << "granted: " << v._granted;
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const fsm& f) {
+    os << "current term: " << f._current_term << ", ";
+    os << "current leader: " << short_id(f._current_leader) << ", ";
+    os << "len messages: " << f._messages.size() << ", ";
+    os << "voted for: " << short_id(f._voted_for) << ", ";
+    os << "commit idx:" << f._commit_idx << ", ";
+    // os << "last applied: " << f._last_applied << ", ";
+    os << "log (" << f._log << "), ";
+    os << "observed (current term: " << f._observed._current_term << ", ";
+    os << "voted for: " << short_id(f._observed._voted_for) << ", ";
+    os << "commit index: " << f._observed._commit_idx << "), ";
+    os << "election elapsed: " << f._election_elapsed << ", ";
+    if (f._votes) {
+        os << "votes (" << *f._votes << "), ";
+    }
+    os << "messages: " << f._messages.size() << ", ";
+    os << "committed_config (";
+    for (auto& server: f._commited_config.servers) {
+        os << short_id(server.id) << ", ";
+    }
+    os << "), current_config (";
+    for (auto& server: f._current_config.servers) {
+        os << short_id(server.id) << ", ";
+    }
+    os << "), ";
+
+    if (std::holds_alternative<leader>(f._state)) {
+        os << "leader, ";
+    } else if (std::holds_alternative<candidate>(f._state)) {
+        os << "candidate";
+    } else if (std::holds_alternative<follower>(f._state)) {
+        os << "follower";
+    }
+    if (f._progress) {
+        os << "followers (";
+        for (const auto& [server_id, follower_progress]: *f._progress) {
+            os << short_id(server_id) << ", ";
+            os << follower_progress.next_idx << ", ";
+            os << follower_progress.match_idx << ", ";
+            if (follower_progress.state == follower_progress::state::PROBE) {
+                os << "PROBE, ";
+            } else if (follower_progress.state == follower_progress::state::PIPELINE) {
+                os << "PIPELINE, ";
+            }
+            // probe_sent
+            os << follower_progress.in_flight;
+            // activity
+            os << "; ";
+        }
+        os << ")";
+
+    }
+    return os;
+}
+
 } // end of namespace raft
