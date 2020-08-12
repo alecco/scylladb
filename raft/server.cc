@@ -217,4 +217,69 @@ void server::make_me_leader() {
     _fsm.become_leader();
 }
 
+auto short_id(raft::server_id id) {
+    return id.id.get_least_significant_bits();
+}
+
+std::ostream& operator<<(std::ostream& os, const server& s) {
+
+    os << "id: " << short_id(s._id) << ", ";
+    os << "current term: " << s._fsm._current_term << ", ";
+    os << "current leader: " << short_id(s._fsm._current_leader) << ", ";
+    os << "len messages: " << s._fsm._messages.size() << ", ";
+    os << "voted for: " << short_id(s._fsm._voted_for) << ", ";
+    os << "commit idx:" << s._fsm._commit_idx << ", ";
+    os << "last applied: " << s._fsm._last_applied << ", ";
+    //    fsm._log
+    os << "observed (";
+    os << "current term: " << s._fsm._observed._current_term << ", ";
+    os << "voted for: " << short_id(s._fsm._observed._voted_for) << ", ";
+    os << "commit index: " << s._fsm._observed._commit_idx;
+    os << "),";
+
+    os << "election elapsed: " << s._fsm._election_elapsed << ", ";
+    // if (s._fsm._votes) {
+    //     os << s._fsm._votes->_responded << ", ";
+    //     os << s._fsm._votes->_granted << ", ";
+    // }
+
+    os << "messages: " << s._fsm._messages.size() << ", ";
+
+    os << "committed_config (";
+    for (auto& server: s._fsm._commited_config.servers) {
+        os << short_id(server.id) << ", ";
+    }
+    os << "), current_config (";
+    for (auto& server: s._fsm._current_config.servers) {
+        os << short_id(server.id) << ", ";
+    }
+    os << "), ";
+
+    if (std::holds_alternative<leader>(s._fsm._state)) {
+        os << "leader, ";
+    } else if (std::holds_alternative<candidate>(s._fsm._state)) {
+        os << "candidate";
+    } else if (std::holds_alternative<follower>(s._fsm._state)) {
+        os << "follower";
+    }
+    if (s._fsm._progress) {
+        os << "followers: ";
+        for (const auto& [server_id, follower_progress]: *s._fsm._progress) {
+            os << short_id(server_id) << ", ";
+            os << follower_progress.next_idx << ", ";
+            os << follower_progress.match_idx << ", ";
+            if (follower_progress.state == follower_progress::state::PROBE) {
+                os << "PROBE, ";
+            } else if (follower_progress.state == follower_progress::state::PIPELINE) {
+                os << "PIPELINE, ";
+            }
+            // probe_sent
+            os << follower_progress.in_flight;
+            // activity
+            os << "; ";
+        }
+
+    }
+    return os;
+}
 } // end of namespace raft
