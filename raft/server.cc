@@ -56,8 +56,8 @@ future<> server::start() {
     co_return;
 }
 
-future<> server::add_entry(command command, wait_type type) {
-
+template <typename T>
+future<> server::add_entry_internal(T command, wait_type type) {
     logger.trace("An entry is submitted on a leader");
 
     // lock access to the raft log while it is been updated
@@ -74,6 +74,13 @@ future<> server::add_entry(command command, wait_type type) {
     return it->second.done.get_future();
 }
 
+future<> server::add_entry(command command, wait_type type) {
+    return add_entry_internal(std::move(command), type);
+}
+
+future<> server::commit_dummy_entry() {
+    return add_entry_internal(log_entry::dummy(), wait_type::committed);
+}
 void server::append_entries(server_id from, append_request_recv append_request) {
     _fsm.step(from, std::move(append_request));
 }
@@ -201,6 +208,15 @@ future<> server::applier_fiber() {
     } catch (...) {
         logger.error("applier fiber {} stopped because of the error: {}", _id, std::current_exception());
     }
+    co_return;
+}
+
+future<> server::read_barrier() {
+    if (_fsm.can_read()) {
+        co_return;
+    }
+
+    co_await commit_dummy_entry();
     co_return;
 }
 

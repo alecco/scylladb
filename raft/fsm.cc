@@ -81,7 +81,8 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
     assert(_current_leader.is_nil());
 }
 
-const log_entry& fsm::add_entry(command command) {
+template<typename T>
+const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader
     check_is_leader();
 
@@ -91,6 +92,8 @@ const log_entry& fsm::add_entry(command command) {
     return *_log[_log.last_idx()];
 }
 
+template const log_entry& fsm::add_entry(command command);
+template const log_entry& fsm::add_entry(log_entry::dummy dummy);
 
 void fsm::commit_to(index_t leader_commit_idx) {
 
@@ -115,7 +118,11 @@ void fsm::become_leader() {
     _votes = std::nullopt;
     _progress.emplace();
     for (auto s : _current_config.servers) {
-        _progress->emplace(s.id, follower_progress{_log.next_idx(), index_t(0), follower_progress::state::PROBE});
+        auto i = _progress->emplace(s.id, follower_progress{_log.next_idx(), index_t(0), follower_progress::state::PROBE});
+        if (s.id == _my_id) {
+            // the leader itself is alwasy active
+            i.first->second.activity = true;
+        }
     }
     replicate();
 }
@@ -538,6 +545,23 @@ void fsm::replicate() {
             replicate_to(server.id, false);
         }
     }
+}
+
+bool fsm::can_read() {
+    check_is_leader();
+
+    if (_log[_log.last_idx()]->term != _current_term) {
+        return false;
+    }
+
+    size_t active = 0;
+    for (const auto& p : *_progress) {
+        if (p.second.activity) {
+            active++;
+        }
+    }
+
+    return active >= quorum();
 }
 
 void fsm::stop() {

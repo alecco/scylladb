@@ -141,9 +141,10 @@ struct configuration {
 };
 
 struct log_entry {
+    struct dummy{};
     term_t term;
     index_t idx;
-    std::variant<command, configuration> data;
+    std::variant<command, configuration, dummy> data;
 };
 
 using log_entry_ptr = seastar::shared_ptr<log_entry>;

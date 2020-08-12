@@ -338,7 +338,7 @@ public:
     }
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
-    const log_entry& add_entry(command command);
+    template<typename T> const log_entry& add_entry(T command);
 
     // Wait until there is, and return state machine output that
     // needs to be handled.
@@ -368,6 +368,11 @@ public:
     term_t get_current_term() {
         return _current_term;
     }
+
+    // Should be called on the leader only, throws otherwise
+    // Returns true if the current leader has at least one entry committed
+    // and it heard replies from the quorum of followers in the last tick period
+    bool can_read();
 };
 
 

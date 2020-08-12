@@ -39,11 +39,20 @@ public:
     };
 
     // Adds command to replicated log
-    // Returned future is resolved when command is committed (but not necessary applied yet)
+    // Returned future is resolved depending on wait_type parameter:
+    //  'committed' - when the entry is committed
+    //  'applied'   - when the entry is applied
     // The function has to be called on a leader, throws otherwise
     // May fail because of internal error or because leader changed and an entry was replaced
     // by another leader
     future<> add_entry(command command, wait_type type);
+
+    // Commits dummy entry that is not propagated to a state machine.
+    // Resolves when the entry is committed
+    // The function has to be called on a leader, throws otherwise
+    // May fail because of internal error or because leader changed and an entry was replaced
+    // by another leader
+    future<> commit_dummy_entry();
 
     // This function is called by append_entries RPC
     void append_entries(server_id from, append_request_recv append_request);
@@ -77,6 +86,11 @@ public:
     // a leader it will relinquish its leadership and cease
     // replication.
     future<> stop();
+
+    // This function needs to be called before attempting read from the local state
+    // machine. The read can proceed only if the future returned by the function resolved
+    // successfully. If called not on a leader it throws an error.
+    future<> read_barrier();
 
     // Ad hoc functions for testing
 
@@ -123,6 +137,8 @@ private:
 
     // This fiber runs in the background and applies committed entries.
     future<> applier_fiber();
+
+    template <typename T> future<> add_entry_internal(T command, wait_type type);
 
     future<> _applier_status = make_ready_future<>();
     future<> _log_status = make_ready_future<>();
