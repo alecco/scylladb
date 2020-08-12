@@ -6,8 +6,10 @@
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
+#include <sstream>
 
 using namespace std::chrono_literals;
+using namespace std::placeholders;
 
 static seastar::logger tlogger("test");
 
@@ -133,7 +135,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
     for (size_t i = 0; i < states.size(); i++) {
-        auto uuid = utils::make_random_uuid();
+        auto uuid = utils::UUID(0, i);
         config.servers.push_back(raft::server_address{uuid});
     }
 
@@ -165,33 +167,34 @@ std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list) {
 }
 
 constexpr int itr = 100;
-std::unordered_map<raft::server_id, int> sums;
+const int MARK_DONE = INT_MIN;
 
 future<> apply(raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
         tlogger.debug("sm::apply got {} entries", commands.size());
         for (auto&& d : commands) {
             auto is = ser::as_input_stream(d);
             int n = ser::deserialize(is, boost::type<int>());
-            tlogger.debug("{}: apply {}", id, n);
-            auto it = sums.find(id);
-            if (it == sums.end()) {
-                sums[id] = 0;
+            if (n == MARK_DONE) {
+                done.set_value();
+                break;
             }
-            sums[id] += n;
-        }
-        if (sums[id] == ((itr - 1) * itr)/2) {
-            done.set_value();
+            tlogger.debug("{}: apply {}", id, n);
         }
         return make_ready_future<>();
 };
 
 
-future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
+// Run test with n raft servers
+// giving each initial log states (with just ints starting from 0)
+// and starting at position start_itr
+future<> test_helper(std::vector<initial_state> states, std::stringstream& os, int start_itr = 0,
+        const int start_leader = 0) {
     auto rafts = co_await create_cluster(states, apply);
 
-    auto& leader = *rafts[0].first;
+    auto& leader = *rafts[start_leader].first;
     leader.make_me_leader();
 
+    // Add all commands serialized to leader  (0,1,2,3,...)
     co_await seastar::parallel_for_each(std::views::iota(start_itr, itr), [&] (int i) {
             tlogger.debug("Adding entry {} on a leader", i);
             raft::command command;
@@ -199,46 +202,52 @@ future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
             return leader.add_entry(std::move(command), raft::server::wait_type::committed);
     });
 
+    raft::command command;
+    ser::serialize(command, MARK_DONE);
+    co_await leader.add_entry(std::move(command), raft::server::wait_type::committed);
+
+    // Wait for all state_machine s to finish processing commands
     for (auto& r:  rafts) {
         co_await r.second->done();
     }
 
+    // Aggregate each server state
     for (auto& r: rafts) {
+        os << *r.first;
         co_await r.first->stop();
     }
 
-    sums.clear();
     co_return;
 }
 
-future<> test_simple_replication(size_t size) {
-    return test_helper(std::vector<initial_state>(size));
+future<> test_simple_replication(size_t size, std::stringstream& ss) {
+    return test_helper(std::vector<initial_state>(size), ss);
 }
 
 // initially a leader has non empty log
-future<> test_replicate_non_empty_leader_log() {
+future<> test_replicate_non_empty_leader_log(std::stringstream& ss) {
     // 2 nodes, leader has entries in his log
     std::vector<initial_state> states(2);
     states[0].term = raft::term_t(1);
     states[0].log = create_log({{1, 0}, {1, 1}, {1, 2}, {1, 3}});
 
     // start iterations from 4 since o4 entry is already in the log
-    return test_helper(std::move(states), 4);
+    return test_helper(std::move(states), ss, 4);
 }
 
 // test special case where prev_index = 0 because the leader's log is empty
-future<> test_replace_log_leaders_log_empty() {
+future<> test_replace_log_leaders_log_empty(std::stringstream& ss) {
     // current leaders term is 2 and empty log
     // one of the follower have three entries that should be replaced
     std::vector<initial_state> states(3);
     states[0].term = raft::term_t(2);
     states[2].log = create_log({{1, 10}, {1, 20}, {1, 30}});
 
-    return test_helper(std::move(states));
+    return test_helper(std::move(states), ss);
 }
 
 // two nodes, leader has one entry, follower has 3, existing entries do not match
-future<> test_replace_log_leaders_log_not_empty() {
+future<> test_replace_log_leaders_log_not_empty(std::stringstream& ss) {
     // current leaders term is 2 and the log has one entry
     // one of the follower have three entries that should be replaced
     std::vector<initial_state> states(2);
@@ -247,11 +256,11 @@ future<> test_replace_log_leaders_log_not_empty() {
     states[1].log = create_log({{2, 10}, {2, 20}, {2, 30}});
 
     // start iterations from 1 since one entry is already in the log
-    return test_helper(std::move(states), 1);
+    return test_helper(std::move(states), ss, 1);
 }
 
 // two nodes, leader has 2 entries, follower has 4, index=1 matches index=2 does not
-future<> test_replace_log_leaders_log_not_empty_2() {
+future<> test_replace_log_leaders_log_not_empty_2(std::stringstream& ss) {
     // current leader's term is 2 and the log has one entry
     // one of the follower have three entries that should be replaced
     std::vector<initial_state> states(2);
@@ -260,11 +269,11 @@ future<> test_replace_log_leaders_log_not_empty_2() {
     states[1].log = create_log({{1, 0}, {2, 20}, {2, 30}, {2, 40}});
 
     // start iterations from 2 since 2 entries are already in the log
-    return test_helper(std::move(states), 2);
+    return test_helper(std::move(states), ss, 2);
 }
 
 // a follower and a leader have matching logs but leader's is shorter
-future<> test_replace_log_leaders_log_not_empty_3() {
+future<> test_replace_log_leaders_log_not_empty_3(std::stringstream& ss) {
     // current leaders term is 2 and the log has one entry
     // one of the follower have three entries that should be replaced
     std::vector<initial_state> states(2);
@@ -273,11 +282,11 @@ future<> test_replace_log_leaders_log_not_empty_3() {
     states[1].log = create_log({{1, 0}, {1, 1}, {1, 2}, {1, 3}});
 
     // start iterations from 2 since 2 entries are already in the log
-    return test_helper(std::move(states), 2);
+    return test_helper(std::move(states), ss, 2);
 }
 
 // a follower and a leader have no common entries
-future<> test_replace_no_common_entries() {
+future<> test_replace_no_common_entries(std::stringstream& ss) {
     // current leaders term is 2 and the log has one entry
     // one of the follower have three entries that should be replaced
     std::vector<initial_state> states(2);
@@ -286,11 +295,11 @@ future<> test_replace_no_common_entries() {
     states[1].log = create_log({{2, 10}, {2, 11}, {2, 12}, {2, 13}, {2, 14}, {2, 15}, {2, 16}});
 
     // start iterations from 7 since 7 entries are already in the log
-    return test_helper(std::move(states), 7);
+    return test_helper(std::move(states), ss, 7);
 }
 
 // a follower and a leader have one common entry
-future<> test_replace_one_common_entry() {
+future<> test_replace_one_common_entry(std::stringstream& ss) {
     // current leaders term is 2 and the log has one entry
     // one of the follower have three entries that should be replaced
     std::vector<initial_state> states(2);
@@ -299,11 +308,11 @@ future<> test_replace_one_common_entry() {
     states[1].log = create_log({{1, 0}, {2, 11}, {2, 12}, {2, 13}, {2, 14}, {2, 15}, {2, 16}});
 
     // start iterations from 7 since 7 entries are already in the log
-    return test_helper(std::move(states), 7);
+    return test_helper(std::move(states), ss, 7);
 }
 
 // a follower and a leader have t1i common entry in different terms
-future<> test_replace_two_common_entry_different_terms() {
+future<> test_replace_two_common_entry_different_terms(std::stringstream& ss) {
     // current leaders term is 2 and the log has one entry
     // one of the follower have three entries that should be replaced
     std::vector<initial_state> states(2);
@@ -312,7 +321,7 @@ future<> test_replace_two_common_entry_different_terms() {
     states[1].log = create_log({{1, 0}, {2, 1}, {2, 12}, {2, 13}, {2, 14}, {2, 15}, {2, 16}});
 
     // start iterations from 7 since 7 entries are already in the log
-    return test_helper(std::move(states), 7);
+    return test_helper(std::move(states), ss, 7);
 }
 
 int main(int argc, char* argv[]) {
@@ -321,27 +330,54 @@ int main(int argc, char* argv[]) {
     seastar::app_template::config cfg;
     seastar::app_template app(cfg);
 
-    using test_fn = std::function<future<>()>;
+    using test_fn = std::function<future<>(std::stringstream&)>;
 
-    test_fn tests[] =  {
-        std::bind(test_simple_replication, 1),
-        std::bind(test_simple_replication, 2),
-        test_replicate_non_empty_leader_log,
-        test_replace_log_leaders_log_empty,
-        test_replace_log_leaders_log_not_empty,
-        test_replace_log_leaders_log_not_empty_2,
-        test_replace_log_leaders_log_not_empty_3,
-        test_replace_no_common_entries,
-        test_replace_one_common_entry,
-        test_replace_two_common_entry_different_terms
+    std::vector<std::pair<test_fn, std::string>> tests =  {
+        { std::bind(test_simple_replication, 1, _1),
+            "[id: 0, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, ), current_config (0, ), leader, followers (0, 102, 101, PROBE, 0; ))]\n" },
+        { std::bind(test_simple_replication, 2, _1),
+            "[id: 0, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+        { test_replicate_non_empty_leader_log,
+            "[id: 0, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+        { test_replace_log_leaders_log_empty,
+            "[id: 0, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, 2, ), current_config (0, 1, 2, ), leader, followers (2, 102, 101, PIPELINE, 0; 1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, 2, ), current_config (0, 1, 2, ), follower)]\n"
+            "[id: 2, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, 2, ), current_config (0, 1, 2, ), follower)]\n" },
+        { test_replace_log_leaders_log_not_empty,
+            "[id: 0, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+        { test_replace_log_leaders_log_not_empty_2,
+            "[id: 0, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+        { test_replace_log_leaders_log_not_empty_3,
+            "[id: 0, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+        { test_replace_no_common_entries,
+            "[id: 0, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+        { test_replace_one_common_entry,
+            "[id: 0, fsm (current term: 4, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 4), observed (current term: 4, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 4, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 4), observed (current term: 4, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+        { test_replace_two_common_entry_different_terms,
+            "[id: 0, fsm (current term: 5, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 5), observed (current term: 5, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
+            "[id: 1, fsm (current term: 5, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 5), observed (current term: 5, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
     };
 
-    return app.run(argc, argv, [&tests] () -> future<> {
+    return app.run(argc, argv, [&tests] () -> future<int> {
         int i = 0;
+        std::stringstream ss;
         for (auto& t : tests) {
             tlogger.debug("test: {}", i++);
-            co_await t();
+            co_await t.first(ss);
+            if (ss.str() != t.second) {
+                tlogger.debug( "no match, seen ({}) vs expected ({})", ss.str(), t.second);
+                co_return -1;
+            }
+            ss.str(std::string());  // reset
         }
+        co_return 0;
     });
 }
 
