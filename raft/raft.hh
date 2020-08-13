@@ -333,7 +333,7 @@ public:
     // Will be eventually called on all replicas.
     // Raft owns the data since it may be still replicating.
     // Raft will not call another apply until the retuned future will not become ready.
-    virtual future<> apply(const std::vector<command_cref> command) = 0;
+    virtual future<> apply(std::vector<command_cref> command) = 0;
 
     // The function suppose to take a snapshot of a state machine
     // To be called during log compaction or when a leader brings
