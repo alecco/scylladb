@@ -78,8 +78,8 @@ future<> server::add_entry(command command, wait_type type) {
     return add_entry_internal(std::move(command), type);
 }
 
-future<> server::commit_dummy_entry() {
-    return add_entry_internal(log_entry::dummy(), wait_type::committed);
+future<> server::apply_dummy_entry() {
+    return add_entry_internal(log_entry::dummy(), wait_type::applied);
 }
 void server::append_entries(server_id from, append_request_recv append_request) {
     _fsm.step(from, std::move(append_request));
@@ -198,8 +198,9 @@ future<> server::applier_fiber() {
             commands.reserve(opt_batch->size());
 
             std::ranges::copy(
-                    std::ranges::views::transform(*opt_batch,
-                            [] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
+                    *opt_batch |
+                    std::views::filter([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
+                    std::views::transform([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
                     std::back_inserter(commands));
 
             co_await _state_machine->apply(std::move(commands));
@@ -216,7 +217,7 @@ future<> server::read_barrier() {
         co_return;
     }
 
-    co_await commit_dummy_entry();
+    co_await apply_dummy_entry();
     co_return;
 }
 

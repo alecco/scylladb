@@ -47,12 +47,13 @@ public:
     // by another leader
     future<> add_entry(command command, wait_type type);
 
-    // Commits dummy entry that is not propagated to a state machine.
+    // Apply dummy entry. Dummy entry is not propagated to a state machine,
+    // but waiting of it to be "applied" means that all previous entries are applied as well.
     // Resolves when the entry is committed
     // The function has to be called on a leader, throws otherwise
     // May fail because of internal error or because leader changed and an entry was replaced
     // by another leader
-    future<> commit_dummy_entry();
+    future<> apply_dummy_entry();
 
     // This function is called by append_entries RPC
     void append_entries(server_id from, append_request_recv append_request);
