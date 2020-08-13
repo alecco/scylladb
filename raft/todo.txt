@@ -1,0 +1,35 @@
+* class log exception safety & tests (error injections)
+* consider not resetting election timer on request_vote().
+* low prio: drop _my_id from fsm, it should be a server property.
+* Put back load_vote() and load_term()
+* when switching to leader state, we currently assume each follower
+  is at the current term and match_idx is 0. We need to extend AppendEntries
+  RPC  to efficiently inform the leader about the follower position.
+* add a test case when we can't commit even though followers
+  have made progress, but the term has changed.
+* change typed_uint64 to typed_int64
+* the algorithm for finding the first matching index
+  that uses linear search is both costly, cumbersome and most likely inefficient
+  in practice. etcd raft uses lastIndex() of the follower as a RejectHint, and
+  if it doesn't work, resets matchIndex to 0. We could try the same strategy
+  and use LastIndex() or CommitIndex(). The follower's commit index is
+  guaranteed to have the same term as the leader. This will
+  cover the two most common use cases: there is a gap between the
+  follower and the leader, so the leader simply sends this gap,
+  or, if there were multiple elections and multiple terms have passed,
+  the new leader simply resends all entries starting from the committed
+  one.
+* implement log snapshotting
+* implement flow control and batching in replication_fiber
+  currently it send out the first non matching entry in a loop,
+  so it will send the same entry again and again until reply is received
+  and match_idx is adjusted. The logic should be fixed to send several batched
+  requests and do not resend before certain time passes.
+* implement leader step down
+* implement pre-vote and sticky leadership
+* implement cluster configuration changes
+* introduce class progress that instantiates match array
+* remove last_stable from log_fiber
+* harmonize tracing by implementing operator << for fsm and log
+* implement overload protection by ignoring step/tick if get_output()
+  wasn't called.
