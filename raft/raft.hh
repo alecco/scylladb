@@ -80,6 +80,10 @@ public:
     typed_uint64 operator-(const typed_uint64& o) const {
         return typed_uint64(_val - o._val);
     }
+    friend std::ostream& operator<<(std::ostream& os, const typed_uint64<Tag>& u) {
+        os << u._val;
+        return os;
+    }
 };
 
 template<typename Tag>
@@ -250,7 +254,7 @@ struct vote_reply {
     bool vote_granted;
 };
 
-using rpc_message = std::variant<keep_alive, append_request_send, append_reply, vote_request, vote_reply>;
+using rpc_message = std::variant<keep_alive, append_request_send, append_reply, vote_request, vote_reply, snapshot>;
 
 // This class represents the Raft log in memory.
 //
@@ -262,21 +266,20 @@ using rpc_message = std::variant<keep_alive, append_request_send, append_reply, 
 // a new leader replacing stale entries. Any exception thrown by
 // any function leaves the log in a consistent state.
 class log {
+    // Snapshot of the prefix of the log.
+    snapshot _snapshot;
     // We need something that can be truncated form both sides.
-    // std::deque move constructor is not nothrow hence cannot be used.
+    // std::deque move constructor is not nothrow hence cannot be used
     boost::container::deque<log_entry_ptr> _log;
-    // the index of the first entry in the log (index starts from 1)
-    // will be increased by log gc
-    index_t _start_idx = index_t(1);
     // Index of the last stable (persisted) entry in the log.
     index_t _stable_idx = index_t(0);
 
 private:
     void truncate_head(index_t i);
+    log_entry_ptr& get_entry(index_t);
 public:
-    log(index_t start_idx = index_t{1})
-            : _start_idx(start_idx) {
-    }
+    log() = default;
+    log(snapshot snp) : _snapshot(std::move(snp)) {}
     log_entry_ptr& operator[](size_t i);
     // Add an entry to the log.
     void emplace_back(log_entry&& e);
@@ -295,6 +298,11 @@ public:
     }
     index_t start_idx() const;
     term_t last_term() const;
+
+    // The function returns current snapshot state of the log
+    const snapshot& get_snapshot() {
+        return _snapshot;
+    }
 
     // 3.5
     // Raft maintains the following properties, which
