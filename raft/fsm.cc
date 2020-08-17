@@ -615,15 +615,15 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
         os << "followers (";
         for (const auto& [server_id, follower_progress]: *f._progress) {
             os << short_id(server_id) << ", ";
-            os << follower_progress.next_idx << ", ";
-            os << follower_progress.match_idx << ", ";
+            os << "next_idx: " << follower_progress.next_idx << ", ";
+            os << "match_idx: " << follower_progress.match_idx << ", ";
             if (follower_progress.state == follower_progress::state::PROBE) {
                 os << "PROBE, ";
             } else if (follower_progress.state == follower_progress::state::PIPELINE) {
                 os << "PIPELINE, ";
             }
             // probe_sent
-            os << follower_progress.in_flight;
+            os << "in_flight: " << follower_progress.in_flight;
             // activity
             os << "; ";
         }
