@@ -7,6 +7,7 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 #include <sstream>
+#include <regex>
 
 using namespace std::chrono_literals;
 using namespace std::placeholders;
@@ -332,37 +333,28 @@ int main(int argc, char* argv[]) {
 
     using test_fn = std::function<future<>(std::stringstream&)>;
 
-    std::vector<std::pair<test_fn, std::string>> tests =  {
+    std::vector<std::pair<test_fn, const char *>> tests =  {
         { std::bind(test_simple_replication, 1, _1),
-            "[id: 0, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, ), current_config (0, ), leader, followers (0, 102, 101, PROBE, 0; ))]\n" },
+            R"(.*log \(next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1\).*)" },
         { std::bind(test_simple_replication, 2, _1),
-            "[id: 0, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+            R"(.*followers \(1, next_idx: 102, match_idx: 101, PIPELINE, in_flight: 0;.*)" },
         { test_replicate_non_empty_leader_log,
-            "[id: 0, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 1, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 1), observed (current term: 1, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+            R"(.*followers \(1, next_idx: 102, match_idx: 101, PIPELINE, in_flight: 0;.*)" },
         { test_replace_log_leaders_log_empty,
-            "[id: 0, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, 2, ), current_config (0, 1, 2, ), leader, followers (2, 102, 101, PIPELINE, 0; 1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, 2, ), current_config (0, 1, 2, ), follower)]\n"
-            "[id: 2, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, 2, ), current_config (0, 1, 2, ), follower)]\n" },
+            R"(.*followers \(2, next_idx: 102, match_idx: 101, PIPELINE, in_flight: 0;.*)" },
         { test_replace_log_leaders_log_not_empty,
-            "[id: 0, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+            R"(.*id: 1.*?log \(next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3.*)" },
         { test_replace_log_leaders_log_not_empty_2,
-            "[id: 0, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+            R"(.*id: 1.*?log \(next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3.*)" },
         { test_replace_log_leaders_log_not_empty_3,
-            "[id: 0, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 2, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2), observed (current term: 2, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+            R"(.*id: 1.*?log \(next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 2.*)" },
         { test_replace_no_common_entries,
-            "[id: 0, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 3, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3), observed (current term: 3, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+            R"(.*id: 1.*?log \(next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 3.*)" },
         { test_replace_one_common_entry,
-            "[id: 0, fsm (current term: 4, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 4), observed (current term: 4, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 4, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 4), observed (current term: 4, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+            R"(.*id: 1.*?log \(next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 4.*)" },
         { test_replace_two_common_entry_different_terms,
-            "[id: 0, fsm (current term: 5, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 5), observed (current term: 5, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n"
-            "[id: 1, fsm (current term: 5, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 5), observed (current term: 5, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n" },
+            R"([id: 0, fsm (current term: 5, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 5), observed (current term: 5, voted for: 0, commit index: 101), election elapsed: 2, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), leader, followers (1, 102, 101, PIPELINE, 0; 0, 102, 101, PROBE, 0; ))]\n)"
+            R"([id: 1, fsm (current term: 5, current leader: 0, len messages: 0, voted for: 0, commit idx:101, log (next idx: 102, last idx: 101, stable idx: 101, start idx: 1, last term: 5), observed (current term: 5, voted for: 0, commit index: 101), election elapsed: 0, messages: 0, committed_config (0, 1, ), current_config (0, 1, ), follower)]\n)" },
     };
 
     return app.run(argc, argv, [&tests] () -> future<int> {
@@ -371,10 +363,16 @@ int main(int argc, char* argv[]) {
         for (auto& t : tests) {
             tlogger.debug("test: {}", i++);
             co_await t.first(ss);
-            if (ss.str() != t.second) {
-                tlogger.debug( "no match, seen ({}) vs expected ({})", ss.str(), t.second);
+
+            std::regex expected(t.second);
+            if (!std::regex_search(ss.str(), expected)) {
+                tlogger.debug("no match, seen ({}) vs expected ({})", ss.str(), t.second);
+fmt::print("no match\n{}\nvs\n{}\n", ss.str(), t.second);
                 co_return -1;
             }
+else {
+fmt::print("match!\n{}\nvs\n{}\n", ss.str(), t.second);
+}
             ss.str(std::string());  // reset
         }
         co_return 0;

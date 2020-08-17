@@ -137,6 +137,19 @@ std::ostream& operator<<(std::ostream& os, const log& l) {
     os << "stable idx: " << l.stable_idx() << ", ";
     os << "start idx: " << l.start_idx() << ", ";
     os << "last term: " << l.last_term();
+    if (l._log.size() > 0) {
+        os << " items: (";
+        for (auto entry: l._log) {
+            if (std::holds_alternative<command>(entry->data)) {
+                os << "command, ";
+            } else if (std::holds_alternative<configuration>(entry->data)) {
+                os << "configuration, ";
+            } else  {
+                os << "dummy, ";
+            }
+        }
+        os << ")";
+    }
     return os;
 }
 
