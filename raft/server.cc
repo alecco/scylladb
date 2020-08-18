@@ -162,6 +162,9 @@ future<> server::log_fiber(index_t last_stable) {
                             return _rpc->send_vote_request(id, m);
                         } else if constexpr (std::is_same_v<T, vote_reply>) {
                             return _rpc->send_vote_reply(id, m);
+                        } else if constexpr (std::is_same_v<T, snapshot>) {
+                            // Send in the background.
+                            send_snapshot(id, std::move(m));
                         }
 
                         logger.error("log fiber {} tried to send unknown message type", _id);
@@ -183,6 +186,22 @@ future<> server::log_fiber(index_t last_stable) {
         logger.error("log fiber {} stopped because of the error: {}", _id, std::current_exception());
     }
     co_return;
+}
+
+void server::send_snapshot(server_id dst, snapshot&& snp) {
+    future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst] (future<> f){
+        if (f.failed()) {
+            logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
+            _fsm.snapshot_status(dst, false);
+        } else {
+            logger.trace("[{}] Transferred snapshot to {}", _id, dst);
+            _fsm.snapshot_status(dst, true);
+        }
+
+    });
+    auto res = _snapshot_transfers.emplace(dst, std::move(f));
+    assert(res.second);
+    return ;
 }
 
 future<> server::applier_fiber() {
@@ -238,8 +257,15 @@ future<> server::abort() {
     _awaited_applies.clear();
     _ticker.cancel();
 
+
+    auto snp_futures = std::views::values(_snapshot_transfers);
+    // For c++20 ranges iterator to an end is of a different type, so adaptor is needed
+    // since seastar primitives are not c++20 ready.
+    using CI = std::common_iterator<decltype(snp_futures.begin()), decltype(snp_futures.end())>;
+    auto snapshots = seastar::when_all_succeed(CI(snp_futures.begin()), CI(snp_futures.end()));
+
     return seastar::when_all_succeed(std::move(_log_status), std::move(_applier_status),
-            _rpc->abort(), _state_machine->abort(), _storage->abort()).discard_result();
+            _rpc->abort(), _state_machine->abort(), _storage->abort(), std::move(snapshots)).discard_result();
 }
 
 void server::make_me_leader() {
