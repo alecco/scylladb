@@ -173,6 +173,11 @@ fsm_output fsm::get_output() {
         output.vote = _voted_for;
     }
 
+    // see if there was a new snapshot that has to be handled
+    if (_observed._snapshot.id != _log.get_snapshot().id) {
+        output.snp = _log.get_snapshot();
+    }
+
     // Return committed entries.
     // Observer commit index may be smaller than snapshot index
     // in which case we should not attemp commiting entries belonging
@@ -476,6 +481,17 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         allow_empty = false; // allow only one empty message
 
+        if (progress.next_idx <= _log.get_snapshot().idx) {
+            // The next index to be sent points to a snapshot so
+            // we need to transfer the snasphot before we can
+            // continue syncing the log.
+            progress.become_snapshot();
+            send_to(progress.id, install_snapshot{_current_term, _log.get_snapshot()});
+            logger.trace("replicate_to[{}->{}]: send snapshot next={} snapshot={}",
+                    _my_id, progress.id, progress.next_idx,  _log.get_snapshot().idx);
+            return;
+        }
+
         index_t prev_idx = index_t(0);
         term_t prev_term = _current_term;
         if (progress.next_idx != 1) {
@@ -544,6 +560,26 @@ bool fsm::can_read() {
     return _clock.now() - _last_election_time <= logical_clock::duration{1};
 }
 
+void fsm::snapshot_status(server_id id, bool success) {
+    auto& progress = _tracker->find(id);
+
+    if (progress.state != follower_progress::state::SNAPSHOT) {
+        logger.trace("snasphot_status[{}]: called not in snapshot state", _my_id);
+        return;
+    }
+
+    // No matter if snapshot transfer failed or not move back to probe state
+    progress.become_probe();
+
+    if (success) {
+        progress.next_idx = _log.get_snapshot().idx + index_t(1);
+        // If snapshot was successfully transfered start replication immediately
+        replicate_to(progress, false);
+    }
+    // Otherwise wait for a heartbeat. Next attempt will move us to snapshotting state
+    // again and snapshot transfer will be attempted one more time.
+}
+
 void fsm::stop() {
     _sm_events.broken();
 }
@@ -559,7 +595,8 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
     os << "observed (current term: " << f._observed._current_term << ", ";
     os << "voted for: " << short_id(f._observed._voted_for) << ", ";
     os << "commit index: " << f._observed._commit_idx << "), ";
-    os << "election elapsed: " << f._election_elapsed << ", ";
+    os << "current time: " << f._clock.now() << ", ";
+    os << "last election time: " << f._last_election_time << ", ";
     if (f._votes) {
         os << "votes (" << *f._votes << "), ";
     }
@@ -588,7 +625,6 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
             } else if (follower_progress.state == follower_progress::state::PIPELINE) {
                 os << "PIPELINE, ";
             }
-            // probe_sent
             os << follower_progress.in_flight;
             os << "; ";
         }
