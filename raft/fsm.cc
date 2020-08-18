@@ -146,12 +146,20 @@ fsm_output fsm::get_output() {
         output.vote = _voted_for;
     }
 
-    // Return committed entries.
-    diff = _commit_idx - _observed._commit_idx;
-    if (diff > 0) {
-        output.committed.reserve(diff);
+    // see if there was a new snapshot that has to be handled
+    if (_observed._snapshot.id != _log.get_snapshot().id) {
+        output.snp = _log.get_snapshot();
+    }
 
-        for (auto idx = _observed._commit_idx + 1; idx <= _commit_idx; ++idx) {
+    // Return committed entries.
+    // Observer commit index may be smaller than snapshot index
+    // in which case we should not attemp commiting entries belonging
+    // to a snapshot.
+    auto observed_ci =  std::max(_observed._commit_idx, _log.get_snapshot().idx);
+    if (observed_ci < _commit_idx) {
+        output.committed.reserve(_commit_idx - observed_ci);
+
+        for (auto idx = observed_ci + 1; idx <= _commit_idx; ++idx) {
             const auto& entry = _log[idx];
             if (!std::holds_alternative<configuration>(entry->data)) {
                 output.committed.push_back(entry);
@@ -427,11 +435,24 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         allow_empty = false; // allow only one empty message
 
+        if (progress.next_idx <= _log.get_snapshot().idx) {
+            // The next index to be sent points to a snapshot so
+            // we need to transfer the snasphot before we can
+            // continue syncing the log.
+            progress.become_snapshot();
+            send_to(progress.id, install_snapshot{_current_term, _log.get_snapshot()});
+            logger.trace("replicate_to[{}->{}]: send snapshot next={} snapshot={}",
+                    _my_id, progress.id, progress.next_idx,  _log.get_snapshot().idx);
+            return;
+        }
+
         index_t prev_idx = index_t(0);
         term_t prev_term = _current_term;
         if (progress.next_idx != 1) {
+            auto& s =  _log.get_snapshot();
             prev_idx = index_t(progress.next_idx - 1);
-            prev_term = _log[prev_idx]->term;
+            assert (prev_idx >= s.idx);
+            prev_term = s.idx == prev_idx ? s.term : _log[prev_idx]->term;
         }
 
         append_request_send req = {{
@@ -492,6 +513,26 @@ bool fsm::can_read() {
     // replies from a quorum of followers during this tick it will stay to be the leader for a couple of
     // next ticks at least (this is kind of a time lease).
     return _tracker->is_quorum_active();
+}
+
+void fsm::snapshot_status(server_id id, bool success) {
+    auto& progress = _tracker->find(id);
+
+    if (progress.state != follower_progress::state::SNAPSHOT) {
+        logger.trace("snasphot_status[{}]: called not in snapshot state", _my_id);
+        return;
+    }
+
+    // No matter if snapshot transfer failed or not move back to probe state
+    progress.become_probe();
+
+    if (success) {
+        progress.next_idx = _log.get_snapshot().idx + index_t(1);
+        // If snapshot was successfully transfered start replication immediately
+        replicate_to(progress, false);
+    }
+    // Otherwise wait for a heartbeat. Next attempt will move us to snapshotting state
+    // again and snapshot transfer will be attempted one more time.
 }
 
 void fsm::stop() {

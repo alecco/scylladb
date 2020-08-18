@@ -35,6 +35,7 @@ struct fsm_output {
     std::vector<std::pair<server_id, rpc_message>> messages;
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
+    std::optional<snapshot> snp;
 };
 
 // 3.3 Raft Basics
@@ -110,16 +111,18 @@ class fsm {
         term_t _current_term;
         server_id _voted_for;
         index_t _commit_idx;
+        snapshot _snapshot;
 
-        bool is_equal(const fsm& fsm) {
+        bool is_equal(const fsm& fsm) const {
             return _current_term == fsm._current_term && _voted_for == fsm._voted_for &&
-                _commit_idx == fsm._commit_idx;
+                _commit_idx == fsm._commit_idx && _snapshot.id == fsm._log.get_snapshot().id;
         }
 
         void advance(const fsm& fsm) {
             _current_term = fsm._current_term;
             _voted_for = fsm._voted_for;
             _commit_idx = fsm._commit_idx;
+            _snapshot = fsm._log.get_snapshot();
         }
     } _observed;
 
@@ -204,6 +207,7 @@ class fsm {
 
     void request_vote(server_id from, vote_request&& vote_request);
     void request_vote_reply(server_id from, vote_reply&& vote_reply);
+
     // Called on a follower with a new known leader commit index.
     // Advances the follower's commit index up to all log-stable
     // entries, known to be committed.
@@ -282,6 +286,8 @@ public:
     // and it heard replies from the quorum of followers in the last tick period
     bool can_read();
 
+    void snapshot_status(server_id id, bool success);
+
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
@@ -314,6 +320,8 @@ void fsm::step(server_id from, Message&& msg) {
             // Instructs the leader to step down.
             append_reply reply{_current_term, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
             send_to(from, std::move(reply));
+        } else if constexpr (std::is_same_v<Message, install_snapshot>) {
+            send_to(from, snapshot_reply{ .success = false });
         } else {
             // Ignore other cases
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
@@ -355,6 +363,15 @@ void fsm::step(server_id from, Message&& msg) {
                 return;
             }
             request_vote_reply(from, std::move(msg));
+        } else if constexpr (std::is_same_v<Message, install_snapshot>) {
+            if constexpr (!std::is_same_v<State, follower>) {
+                // snapshot can be installed only in follower
+                send_to(from, snapshot_reply{ .success = false });
+            } else {
+                // apply snaphot and reply with success
+                _log.apply_snapshot(std::move(msg.snp));
+                send_to(from, snapshot_reply{ .success = true });
+            }
         }
     };
 

@@ -198,7 +198,18 @@ struct vote_reply {
     bool vote_granted;
 };
 
-using rpc_message = std::variant<keep_alive, append_request_send, append_reply, vote_request, vote_reply, snapshot>;
+struct install_snapshot {
+    // Current term on a leader
+    term_t current_term;
+    // A snapshot to install
+    snapshot snp;
+};
+
+struct snapshot_reply {
+    bool success;
+};
+
+using rpc_message = std::variant<keep_alive, append_request_send, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply>;
 
 // we need something that can be truncated form both sides.
 // std::deque move constructor is not nothrow hence cannot be used
@@ -263,7 +274,7 @@ public:
     // A returned future is resolved when snapshot is sent and
     // successfully applied by a receiver. Will be waited to
     // know if a snaphot transfer succeeded.
-    virtual future<> send_snapshot(server_id server_id, const snapshot& snap) = 0;
+    virtual future<> send_snapshot(server_id server_id, const install_snapshot& snap) = 0;
 
     // Send provided append_request to the supplied server, does
     // not wait for reply. The returned future resolves when

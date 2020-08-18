@@ -43,12 +43,13 @@ class log {
 
 private:
     void truncate_head(index_t i);
+    void truncate_tail(index_t i);
     log_entry_ptr& get_entry(index_t);
     index_t start_idx() const;
 public:
     log() = default ;
     log(log_entries log) : _log(std::move(log)) { stable_to(index_t(_log.size())); };
-    log(snapshot snp, log_entries log) : _snapshot(std::move(snp)), _log(std::move(log)) { stable_to(index_t(_log.size())); }
+    log(snapshot snp, log_entries log) : _snapshot(std::move(snp)), _log(std::move(log)) { stable_to(last_idx()); }
     log(snapshot snp) : _snapshot(std::move(snp)) {}
     // The index here the global raft log index, not related to a snpashot.
     // It is a programming error to call the function with an index tha points into the snapshot,
@@ -72,9 +73,11 @@ public:
     term_t last_term() const;
 
     // The function returns current snapshot state of the log
-    const snapshot& get_snapshot() {
+    const snapshot& get_snapshot() const {
         return _snapshot;
     }
+
+    void apply_snapshot(snapshot&& snp);
 
     // 3.5
     // Raft maintains the following properties, which

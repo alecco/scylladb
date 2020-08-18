@@ -38,6 +38,9 @@ bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) 
             return true;
         }
         break;
+    case follower_progress::state::SNAPSHOT:
+        // any reject during snapshot transfer is stray one
+        return true;
     default:
         assert(false);
     }

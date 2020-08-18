@@ -64,6 +64,17 @@ void log::truncate_head(index_t idx) {
     stable_to(std::min(_stable_idx, last_idx()));
 }
 
+void log::truncate_tail(index_t idx) {
+    assert(start_idx() <= idx);
+
+    auto diff = std::min(index_t(_log.size()), idx - start_idx());
+
+    if (diff) {
+        _log.erase(_log.begin(), _log.begin() + diff);
+    }
+    _stable_idx = std::max(idx, _stable_idx);
+}
+
 index_t log::start_idx() const {
     return _snapshot.idx + index_t(1);
 }
@@ -90,13 +101,20 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
     // idx cannot point into the snapshot
     assert(idx >= _snapshot.idx);
 
-    auto i = idx - start_idx();
+    term_t my_term;
 
-    if (i >= _log.size()) {
-        // We have a gap between the follower and the leader.
-        return std::make_pair(false, term_t(0));
+    if (idx == _snapshot.idx) {
+        my_term = _snapshot.term;
+    } else {
+        auto i = idx - start_idx();
+
+        if (i >= _log.size()) {
+            // We have a gap between the follower and the leader.
+            return std::make_pair(false, term_t(0));
+        }
+
+        my_term =  _log[i]->term;
     }
-    term_t my_term = idx == _snapshot.idx ? _snapshot.term : _log[i]->term;
 
     return my_term == term ? std::make_pair(true, term_t(0)) : std::make_pair(false, my_term);
 }
@@ -132,6 +150,12 @@ index_t log::maybe_append(std::vector<log_entry>&& entries) {
     }
 
     return last_new_idx;
+}
+
+void log::apply_snapshot(snapshot&& snp) {
+    // call truncate first since it uses old snapshot
+    truncate_tail(snp.idx);
+    _snapshot = std::move(snp);
 }
 
 std::ostream& operator<<(std::ostream& os, const log& l) {

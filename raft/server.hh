@@ -60,6 +60,9 @@ public:
     // Handle response to RequestVote RPC
     void request_vote_reply(server_id from, vote_reply vote_reply);
 
+    // Apply incomming snapshot, future resolves when application is complete
+    future<> apply_snapshot(server_id from, install_snapshot snp);
+
     // Adds new server to a cluster. If a node is already a member
     // of the cluster does nothing Provided node_info is passed to
     // rpc::new_node() on each node in a cluster as it learns
@@ -128,6 +131,10 @@ private:
     // Contains active snapshot transfers, to be waited on exit.
     std::unordered_map<server_id, future<>> _snapshot_transfers;
 
+    // The optional is engaged when incomming snapshot is received
+    // And signalled when it is successfully applied or there was an error
+    std::optional<promise<snapshot_reply>> _snapshot_application_done;
+
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
 
@@ -159,6 +166,9 @@ private:
     // has changed and the entry was replaced by another one,
     // submitted to the new leader.
     future<> apply_dummy_entry();
+
+    // Send snapshot in the background and notify FSM about the result.
+    void send_snapshot(server_id id, install_snapshot&& snp);
 
     future<> _applier_status = make_ready_future<>();
     future<> _io_status = make_ready_future<>();
