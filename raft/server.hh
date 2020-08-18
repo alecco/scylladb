@@ -160,6 +160,9 @@ private:
     // submitted to the new leader.
     future<> apply_dummy_entry();
 
+    // Send snapshot in the background and notify FSM about the result.
+    void send_snapshot(server_id id, snapshot&& snp);
+
     future<> _applier_status = make_ready_future<>();
     future<> _io_status = make_ready_future<>();
 

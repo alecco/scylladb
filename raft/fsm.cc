@@ -427,6 +427,16 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         allow_empty = false; // allow only one empty message
 
+        if (progress.next_idx <= _log.get_snapshot().idx) {
+            // The next index to be sent points to a snapshot so
+            // we need to transfer the snasphot before we can
+            // continue syncing the log.
+            progress.become_snapshot();
+            // The std::move below will actually make a copy.
+            send_to(progress.id, std::move(_log.get_snapshot()));
+            return;
+        }
+
         index_t prev_idx = index_t(0);
         term_t prev_term = _current_term;
         if (progress.next_idx != 1) {
@@ -492,6 +502,25 @@ bool fsm::can_read() {
     // replies from a quorum of followers during this tick it will stay to be the leader for a couple of
     // next ticks at least (this is kind of a time lease).
     return _tracker->is_quorum_active();
+}
+
+void fsm::snapshot_status(server_id id, bool success) {
+    auto& progress = _tracker->find(id);
+
+    if (progress.state != follower_progress::state::SNAPSHOT) {
+        logger.trace("snasphot_status[{}]: called not in snapshot state", _my_id);
+        return;
+    }
+
+    // No matter if snapshot transfer failed or not move back to probe state
+    progress.become_probe();
+
+    if (success) {
+        // If snapshot was successfully transfered start replication immediately
+        replicate_to(progress, false);
+    }
+    // Otherwise wait for a heartbeat. Next attempt will move us to snapshotting state
+    // again and snapshot transfer will be attempted one more time.
 }
 
 void fsm::stop() {
