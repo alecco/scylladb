@@ -45,6 +45,7 @@ struct initial_state {
     raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
+    state_machine::apply_fn apply;
 };
 
 class storage : public raft::storage {
@@ -123,10 +124,9 @@ public:
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
 std::pair<std::unique_ptr<raft::server>, state_machine*>
-create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
-        const raft::configuration& config, initial_state state) {
+create_raft_server(raft::server_id uuid, const raft::configuration& config, initial_state state) {
 
-    auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
+    auto sm = std::make_unique<state_machine>(uuid, std::move(state.apply));
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
@@ -136,7 +136,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
     return std::make_pair(std::move(raft), &rsm);
 }
 
-future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply) {
+future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states) {
     raft::configuration config;
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
@@ -147,7 +147,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
 
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
-        auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, config, states[i])).first;
+        auto& raft = *rafts.emplace_back(create_raft_server(s.id, config, states[i])).first;
         co_await raft.start();
     }
 
@@ -159,7 +159,7 @@ struct log_entry {
     int value;
 };
 
-std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list) {
+std::vector<raft::log_entry> create_log(const std::initializer_list<log_entry> list) {
     std::vector<raft::log_entry> log;
 
     unsigned i = 0;
@@ -172,111 +172,121 @@ std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list) {
     return log;
 }
 
-const int MARK_DONE = INT_MIN;
-long int count = 0;
+template <typename T>
+std::vector<raft::command> create_commands(std::vector<T> list) {
+    std::vector<raft::command> commands;
+    commands.reserve(list.size());
 
-future<> apply(raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
-        tlogger.debug("sm::apply got {} entries", commands.size());
-        for (auto&& d : commands) {
-            auto is = ser::as_input_stream(d);
-            int n = ser::deserialize(is, boost::type<int>());
-            if (n == MARK_DONE) {
-                done.set_value();
-                break;
-            }
-            tlogger.debug("{}: apply {}", id, n);
-        }
-        return make_ready_future<>();
-};
+    for (auto e : list) {
+        raft::command command;
+        ser::serialize(command, e);
+        commands.push_back(std::move(command));
+    }
 
-future<> apply_count(long int end, raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
-        tlogger.debug("sm::apply_count got {} entries", commands.size());
-        for (auto&& d : commands) {
-            auto is = ser::as_input_stream(d);
-            int n = ser::deserialize(is, boost::type<int>());
-            if (n == MARK_DONE) {
-fmt::print("apply_count: {} command DONE\n", id);
-                done.set_value();
-                break;
-            }
-else
-fmt::print("apply_count: {} command {}\n", id, n);
-            tlogger.debug("{}: apply_count {}", id, n);
-        }
-        return make_ready_future<>();
-};
+    return commands;
+}
 
-long int sum = 0;
-
-future<> apply_sum(long int end, raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
-        tlogger.debug("sm::apply_sum got {} entries", commands.size());
-        for (auto&& d : commands) {
-            auto is = ser::as_input_stream(d);
-            int n = ser::deserialize(is, boost::type<int>());
-            if (n == MARK_DONE) {
-                done.set_value();
-                break;
-            }
-            tlogger.debug("{}: apply_sum {}", id, n);
-        }
-        return make_ready_future<>();
+future<> apply_changes(std::vector<int> &res, size_t expected, raft::server_id id, promise<>& done,
+        const std::vector<raft::command_cref>& commands) {
+    tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
+// fmt::print("apply_changes: start\n");
+std::vector<int> vals;
+for (auto&& d : commands) {
+    auto is = ser::as_input_stream(d);
+    int n = ser::deserialize(is, boost::type<int>());
+    vals.push_back(n);
+}
+fmt::print("apply_changes[{}]: got {} entries: {}\n", short_id(id), commands.size(), vals);
+    for (auto&& d : commands) {
+        auto is = ser::as_input_stream(d);
+        int n = ser::deserialize(is, boost::type<int>());
+        res.push_back(n);
+// fmt::print("apply_changes[{}]: pushed {}\n", short_id(id), n);
+        tlogger.debug("{}: apply_changes {}", id, n);
+    }
+// fmt::print("apply_changes[{}]: committed {} expected {}\n", short_id(id), res.size(), expected);
+    if (res.size() >= expected) {
+// fmt::print("apply_changes[{}]: done\n", short_id(id));
+        done.set_value();
+    }
+    return make_ready_future<>();
 };
 
 using update = std::variant<raft::command, raft::configuration>;
 
-// Run test with n raft servers
-// giving each initial log states (with just ints starting from 0)
-// and starting at position start_itr
-future<int> test_helper(const std::vector<initial_state> initial_states,
-        const std::vector<update> updates, const state_machine::apply_fn apply,
-        const int start_leader = 0) {
+struct test_case {
+    const std::string name;
+    const size_t nodes;
+    raft::term_t term;
+    const size_t leader;
+    const std::vector<std::initializer_list<log_entry>> initial_states;
+    const std::vector<raft::command> updates;
+    test_case(std::string name, size_t nodes, int term, size_t leader,
+            std::vector<std::initializer_list<log_entry>> initial_states,
+            std::vector<raft::command> updates) : name(name),
+            nodes(nodes), term(raft::term_t(term)), leader(leader), initial_states(initial_states), updates(updates) {
+        assert(leader < nodes && "Leader higher than total nodes");
+    }
+};
 
-    auto rafts = co_await create_cluster(initial_states, apply);
+// Run test case (name, nodes, leader, initial logs, updates)
+future<int> run_test(test_case test) {
 
-    auto& leader = *rafts[start_leader].first;
+    std::vector<initial_state> states(test.nodes);
+    states[test.leader].term = test.term;
+// fmt::print("run_test: {} leader {} initial log size {}\n", test.name, test.leader, test.leader < test.initial_states.size()? test.initial_states[test.leader].size() : 0);
+    std::vector<std::vector<int>> committed(test.nodes);
+    size_t expected = test.updates.size();
+if (test.leader < test.initial_states.size()) {
+    expected += test.initial_states[test.leader].size();
+}
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (i < test.initial_states.size()) {
+            states[i].log = create_log(test.initial_states[i]);
+        } else {
+            states[i].log = {};
+        }
+        states[i].apply = std::bind(apply_changes, std::ref(committed[i]), expected, _1, _2, _3);
+    }
+
+    auto rafts = co_await create_cluster(states);
+
+    auto& leader = *rafts[test.leader].first;
     leader.make_me_leader();
 
     // Process all updates in order
-    co_await seastar::do_for_each(updates, [&] (const update u) {
-        if (std::holds_alternative<raft::command>(u)) {
+    co_await seastar::parallel_for_each(test.updates, [&] (const update u) {
             raft::command cmd = std::get<raft::command>(u);
-            // XXX int val = ser::deserialize(cmd, boost::type<int>());
             tlogger.debug("Adding command entry on leader");
-fmt::print("test_helper: adding command\n");
             return leader.add_entry(std::move(cmd), raft::server::wait_type::committed);
-        }
         return make_ready_future<>();
     });
 
-    raft::command command;
-    ser::serialize(command, MARK_DONE);
-    co_await leader.add_entry(std::move(command), raft::server::wait_type::committed);
-
+// fmt::print("run_test: {} done, waiting\n", test.name);
     // Wait for all state_machine s to finish processing commands
     for (auto& r:  rafts) {
         co_await r.second->done();
     }
 
-    co_return 1;
-}
-
-
-future<int> test_simple_commit_count(size_t size) {
-    long int end = 10;  // Count till ten
-    std::vector<initial_state> states(3);
-    states[0].term = raft::term_t(2);
-    states[2].log = create_log({{1, 10}, {1, 20}, {1, 30}});
-    std::vector<update> updates = { };
-    for (int i: std::views::iota(1, 10)) {
-        raft::command command;
-        ser::serialize(command, i);
-// fmt::print("test_simple_commit_count: adding {}\n", i);
-        updates.push_back(std::move(command));
+    for (auto& r: rafts) {
+        co_await r.first->abort(); // Stop servers
     }
-    auto apply = std::bind(apply_count, end, _1, _2, _3); // XXX , _1),
-    return test_helper(std::move(states), std::move(updates), apply);
-}
 
+    // Check final state of committed is fine
+    auto leader_committed = committed[test.leader];
+// fmt::print("run_test: {} checking committed\n", test.name);
+// fmt::print("run_test: {} leader {} result {}\n", test.name, test.leader, committed[test.leader]);
+    for (size_t i = 0; i < committed.size(); ++i) {
+        if (i != test.leader) {
+fmt::print("run_test: {}        {} result {}\n", test.name, i, committed[i]);
+            if (committed[i] != leader_committed) {
+                co_return 1;
+            }
+        }
+    }
+
+    co_return 0;
+}
 
 int main(int argc, char* argv[]) {
     namespace bpo = boost::program_options;
@@ -284,11 +294,28 @@ int main(int argc, char* argv[]) {
     seastar::app_template::config cfg;
     seastar::app_template app(cfg);
 
-    return app.run(argc, argv, [] () -> future<int> {
+    std::vector<test_case> replication_tests = {
+        // name, servers, current term, leader, initial logs (each), commands to send to leader
+#if 0
+        {"non_empty_leader_log", 2, 1, 1, {{},{{1, 0}, {1, 1}, {1, 3}}}, create_commands<int>({4}) },
+        {"simple1", 1, 1, 0, {{}}, create_commands<int>({1}),},
+        {"simple2", 1, 1, 0, {{{1,10}}}, create_commands<int>({1,2,3}),},
+        {"simple2", 2, 1, 0, {{{1,10}}}, create_commands<int>({1,2,3}),},
+#endif
+        {"simple3", 3, 1, 1, {{{1,10},{1,20},{1,30}}}, create_commands<int>({1,2,3}),},
+        {"simple_many", 3, 1, 1, {{{1,10},{2,20},{3,30}}}, create_commands<int>({1,2,3}),},
+    };
+
+    return app.run(argc, argv, [&replication_tests] () -> future<int> {
         std::stringstream ss;
-        auto ret = co_await test_simple_commit_count(2);
+        for (auto test: replication_tests) {
+            if (co_await run_test(test) != 0) {
+fmt::print("main: test {} failed\n", test.name);
+                co_return 1; // Fail
+            }
+        }
 fmt::print("main: done\n");
-        co_return ret;
+        co_return 0;
     });
 }
 
