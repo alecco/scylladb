@@ -25,11 +25,10 @@ namespace raft {
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
-        _log(std::move(log)) {
+        _log(std::move(log)), _current_config(_committed_config) {
 
     _observed.advance(*this);
-    // Make sure the state machine is consistent
-    _current_config.servers.push_back(server_address{_my_id});
+    set_configuration(_log.get_snapshot().config);
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
 
     assert(_current_leader.is_nil());
@@ -537,7 +536,7 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
     }
     os << "messages: " << f._messages.size() << ", ";
     os << "committed_config (";
-    for (auto& server: f._commited_config.servers) {
+    for (auto& server: f._committed_config.servers) {
         os << short_id(server.id) << ", ";
     }
     os << "), current_config (";

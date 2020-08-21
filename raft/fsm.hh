@@ -165,7 +165,7 @@ class fsm {
     std::vector<std::pair<server_id, rpc_message>> _messages;
 
     // Currently committed configuration.
-    configuration _commited_config;
+    configuration _committed_config;
     // Currently used configuration, may be different from
     // the committed during a configuration change.
     configuration _current_config;
@@ -232,9 +232,22 @@ class fsm {
     // Produces new FSM output.
     void advance_stable_index(index_t idx);
 
+    // Set cluster configuration
+    void set_configuration(const configuration& config) {
+        _committed_config = config;
+        _current_config = config;
+        // We unconditionally access _current_config
+        // to identify which entries are committed.
+        assert(_current_config.servers.size() > 0);
+        if (is_leader()) {
+            _tracker->set_configuration(_current_config.servers, _log.next_idx());
+        } else if (is_candidate()) {
+            _votes->set_configuration(_current_config.servers);
+        }
+    }
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
-    fsm() = default;
+    fsm() : _current_config(_committed_config) {}
 
     bool is_leader() const {
         return std::holds_alternative<leader>(_state);
@@ -255,18 +268,6 @@ public:
 
     void become_leader();
 
-    // Set cluster configuration, in real app should be taken from log
-    void set_configuration(const configuration& config) {
-        _current_config = _commited_config = config;
-        // We unconditionally access _current_config
-        // to identify which entries are committed.
-        assert(_current_config.servers.size() > 0);
-        if (is_leader()) {
-            _tracker->set_configuration(_current_config.servers, _log.next_idx());
-        } else if (is_candidate()) {
-            _votes->set_configuration(_current_config.servers);
-        }
-    }
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
     template<typename T> const log_entry& add_entry(T command);

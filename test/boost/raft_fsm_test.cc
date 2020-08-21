@@ -37,7 +37,10 @@ void election_timeout(raft::fsm& fsm) {
 
 BOOST_AUTO_TEST_CASE(test_election_single_node) {
 
-    raft::fsm fsm(server_id{utils::make_random_uuid()}, term_t{}, server_id{}, raft::log{});
+    server_id id1{utils::make_random_uuid()};
+    raft::configuration cfg({id1});
+    raft::log log{raft::snapshot{.config = cfg}};
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log));
 
     BOOST_CHECK(fsm.is_follower());
 
@@ -70,7 +73,11 @@ BOOST_AUTO_TEST_CASE(test_election_single_node) {
 // does not lead to RPC
 BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
 
-    raft::fsm fsm(server_id{utils::make_random_uuid()}, term_t{}, server_id{}, raft::log{});
+    server_id id1{utils::make_random_uuid()};
+    raft::configuration cfg({id1});
+    raft::log log{raft::snapshot{.config = cfg}};
+
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log));
 
     election_timeout(fsm);
 
@@ -88,12 +95,11 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
 
     server_id id1{utils::make_random_uuid()}, id2{utils::make_random_uuid()};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, raft::log{});
+    raft::configuration cfg({id1, id2});
+    raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::configuration cfg;
-    cfg.servers.push_back(raft::server_address{id1});
-    cfg.servers.push_back(raft::server_address{id2});
-    fsm.set_configuration(cfg);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log));
+
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
 
@@ -149,15 +155,11 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
               id3{utils::make_random_uuid()},
               id4{utils::make_random_uuid()};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, raft::log{});
+    raft::configuration cfg({id1, id2, id3, id4});
+    raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::configuration cfg;
-    cfg.servers.push_back(raft::server_address{id1});
-    cfg.servers.push_back(raft::server_address{id2});
-    cfg.servers.push_back(raft::server_address{id3});
-    cfg.servers.push_back(raft::server_address{id4});
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log));
 
-    fsm.set_configuration(cfg);
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
 
@@ -195,18 +197,14 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
               id2{utils::make_random_uuid()},
               id3{utils::make_random_uuid()};
 
-    raft::log log(raft::snapshot{.idx = index_t{999}});
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log(raft::snapshot{.idx = index_t{999}, .config = cfg});
+
     log.emplace_back(raft::log_entry{term_t{10}, index_t{1000}});
     log.stable_to(log.last_idx());
 
     raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log));
 
-    raft::configuration cfg;
-    cfg.servers.push_back(raft::server_address{id1});
-    cfg.servers.push_back(raft::server_address{id2});
-    cfg.servers.push_back(raft::server_address{id3});
-
-    fsm.set_configuration(cfg);
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
 

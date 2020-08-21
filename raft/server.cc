@@ -40,7 +40,6 @@ future<> server::start() {
     auto log = co_await _storage->load_log();
     index_t stable_idx = log.stable_idx();
     _fsm = fsm(_id,  term, vote, std::move(log));
-    _fsm.set_configuration(_config);
     assert(_fsm.get_current_term() != term_t(0));
 
     // start fiber to persist entries added to in-memory log

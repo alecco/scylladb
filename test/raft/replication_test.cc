@@ -37,7 +37,9 @@ struct initial_state {
     raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
+    raft::configuration config;
 };
+
 
 class storage : public raft::storage {
     initial_state _conf;
@@ -50,10 +52,12 @@ public:
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
     virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) { return make_ready_future<>(); }
-    virtual future<raft::snapshot> load_snapshot() { return make_ready_future<raft::snapshot>(raft::snapshot()); }
+    virtual future<raft::snapshot> load_snapshot() {
+        return make_ready_future<raft::snapshot>(raft::snapshot{.config = _conf.config});
+    }
     virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { co_return seastar::sleep(1us); };
     virtual future<raft::log> load_log() {
-        raft::log log;
+        raft::log log(raft::snapshot{.config = _conf.config});
         for (auto&& e : _conf.log) {
             log.emplace_back(std::move(e));
         }
@@ -116,14 +120,13 @@ std::unordered_map<raft::server_id, rpc*> rpc::net;
 
 std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
-        const raft::configuration& config, initial_state state) {
+        initial_state state) {
 
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
     auto raft = std::make_unique<raft::server>(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
-    raft->set_configuration(config);
 
     return std::make_pair(std::move(raft), &rsm);
 }
@@ -139,7 +142,8 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
 
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
-        auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, config, states[i])).first;
+        states[i].config = config;
+        auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i])).first;
         co_await raft.start();
     }
 

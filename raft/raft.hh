@@ -139,6 +139,14 @@ struct server_address {
 
 struct configuration {
     std::vector<server_address> servers;
+
+    configuration(std::initializer_list<server_id> ids) {
+        servers.reserve(ids.size());
+        for (auto&& id : ids) {
+            servers.emplace_back(server_address{std::move(id)});
+        }
+    }
+    configuration() = default;
 };
 
 struct log_entry {
