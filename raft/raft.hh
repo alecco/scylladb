@@ -170,6 +170,11 @@ struct not_leader : public error {
     explicit not_leader(server_id l) : error("Not a leader"), leader(l) {}
 };
 
+struct confchange_in_progress : public error {
+    explicit confchange_in_progress() : error(
+        "Can not accept a new configuration change while the previous one is in progress") {}
+};
+
 struct dropped_entry : public error {
     dropped_entry() : error("Entry was dropped because of a leader change") {}
 };
