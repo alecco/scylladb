@@ -48,17 +48,18 @@ const log_entry& fsm::add_entry(T command) {
 template const log_entry& fsm::add_entry(command command);
 template const log_entry& fsm::add_entry(log_entry::dummy dummy);
 
-void fsm::commit_to(index_t leader_commit_idx) {
+void fsm::advance_commit_idx(index_t leader_commit_idx) {
 
     auto new_commit_idx = std::min(leader_commit_idx, _log.stable_idx());
 
-    logger.trace("commit_to[{}]: leader_commit_idx={}, new_commit_idx={}",
+    logger.trace("advance_commit_idx[{}]: leader_commit_idx={}, new_commit_idx={}",
         _my_id, leader_commit_idx, new_commit_idx);
 
     if (new_commit_idx > _commit_idx) {
         _commit_idx = new_commit_idx;
         _sm_events.signal();
-        logger.trace("commit_to[{}]: signal apply_entries: committed: {}", _my_id, _commit_idx);
+        logger.trace("advance_commit_idx[{}]: signal apply_entries: committed: {}",
+            _my_id, _commit_idx);
     }
 }
 
@@ -293,7 +294,7 @@ void fsm::append_entries(server_id from, append_request_recv&& request) {
         send_to(from, append_reply{_current_term, append_reply::accepted{last_new_idx}});
     }
 
-    commit_to(request.leader_commit_idx);
+    advance_commit_idx(request.leader_commit_idx);
 }
 
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {

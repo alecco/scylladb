@@ -225,7 +225,7 @@ class fsm {
     // Called on a follower with a new known leader commit index.
     // Advances the follower's commit index up to all log-stable
     // entries, known to be committed.
-    void commit_to(index_t leader_commit_idx);
+    void advance_commit_idx(index_t leader_commit_idx);
     // Called after log entries in FSM output are considered persisted.
     // Produces new FSM output.
     void advance_stable_idx(index_t idx);
