@@ -25,7 +25,7 @@ namespace raft {
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
-        _log(std::move(log)), _current_config(_committed_config) {
+        _log(std::move(log)) {
 
     _observed.advance(*this);
     set_configuration(_log.get_snapshot().config);
@@ -535,11 +535,7 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
         os << "votes (" << *f._votes << "), ";
     }
     os << "messages: " << f._messages.size() << ", ";
-    os << "committed_config (";
-    for (auto& server: f._committed_config.servers) {
-        os << short_id(server.id) << ", ";
-    }
-    os << "), current_config (";
+    os << "current_config (";
     for (auto& server: f._current_config.servers) {
         os << short_id(server.id) << ", ";
     }

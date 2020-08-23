@@ -164,8 +164,6 @@ class fsm {
     // TLA+ line 328
     std::vector<std::pair<server_id, rpc_message>> _messages;
 
-    // Currently committed configuration.
-    configuration _committed_config;
     // Currently used configuration, may be different from
     // the committed during a configuration change.
     configuration _current_config;
@@ -234,7 +232,6 @@ class fsm {
 
     // Set cluster configuration
     void set_configuration(const configuration& config) {
-        _committed_config = config;
         _current_config = config;
         // We unconditionally access _current_config
         // to identify which entries are committed.
@@ -247,7 +244,7 @@ class fsm {
     }
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
-    fsm() : _current_config(_committed_config) {}
+    fsm() = default;
 
     bool is_leader() const {
         return std::holds_alternative<leader>(_state);
