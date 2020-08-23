@@ -309,44 +309,44 @@ template <typename Message>
 void fsm::step(server_id from, Message&& msg) {
     static_assert(std::is_rvalue_reference<decltype(msg)>::value, "must be rvalue");
 
+    // 3.3. Raft basics.
+    //
+    // Current terms are exchanged whenever servers
+    // communicate; if one server’s current term is smaller
+    // than the other’s, then it updates its current term to
+    // the larger value. If a candidate or leader discovers
+    // that its term is out of date, it immediately reverts to
+    // follower state. If a server receives a request with
+    // a stale term number, it rejects the request.
+    if (msg.current_term > _current_term) {
+        logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
+            _my_id, _current_term, from, msg.current_term);
+
+        if constexpr (std::is_same_v<Message, append_request_recv>) {
+            become_follower(from);
+        } else {
+            become_follower(server_id{});
+        }
+        update_current_term(msg.current_term);
+
+    } else if (msg.current_term < _current_term) {
+        if constexpr (std::is_same_v<Message, append_request_recv>) {
+            // Instructs the leader to step down.
+            append_reply reply{_current_term, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
+            send_to(from, std::move(reply));
+        } else {
+            // Ignore other cases
+            logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
+                _my_id, _current_term, from, msg.current_term);
+        }
+        return;
+    }
+
     // Reset election timer.
     _election_elapsed = 0;
 
     auto visitor = [this, from, msg = std::move(msg)](auto state) mutable {
         using State = decltype(state);
-
-        // 3.3. Raft basics.
-        //
-        // Current terms are exchanged whenever servers
-        // communicate; if one server’s current term is smaller
-        // than the other’s, then it updates its current term to
-        // the larger value. If a candidate or leader discovers
-        // that its term is out of date, it immediately reverts to
-        // follower state. If a server receives a request with
-        // a stale term number, it rejects the request.
-        if (msg.current_term > _current_term) {
-			logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
-				_my_id, _current_term, from, msg.current_term);
-
-            if constexpr (std::is_same_v<Message, append_request_recv>) {
-                become_follower(from);
-            } else {
-                become_follower(server_id{});
-            }
-            update_current_term(msg.current_term);
-
-        } else if (msg.current_term < _current_term) {
-            if constexpr (std::is_same_v<Message, append_request_recv>) {
-                // Instructs the leader to step down.
-                append_reply reply{_current_term, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
-                send_to(from, std::move(reply));
-            } else {
-                // Ignore other cases
-                logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
-                    _my_id, _current_term, from, msg.current_term);
-            }
-            return;
-        }
 
         if constexpr (std::is_same_v<Message, append_request_recv>) {
             // Got AppendEntries RPC from self
