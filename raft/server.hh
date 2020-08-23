@@ -21,7 +21,8 @@
 #pragma once
 
 #include <map>
-#include "raft.hh"
+#include <seastar/core/pipe.hh>
+#include "fsm.hh"
 
 namespace raft {
 
@@ -96,12 +97,71 @@ public:
     // access to the local state machine.
     future<> read_barrier();
 
+    // Ad hoc functions for testing
+
+    void make_me_leader();
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
     std::unique_ptr<storage> _storage;
     // id of this server
     server_id _id;
+    // Protocol deterministic finite-state machine
+    fsm _fsm;
+    seastar::timer<lowres_clock> _ticker;
+
+    seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
+
+    struct op_status {
+        term_t term; // term the entry was added with
+        promise<> done; // notify when done here
+    };
+
+    // Entries that have a waiter that needs to be notified when the
+    // respective entry is known to be committed.
+    std::map<index_t, op_status> _awaited_commits;
+
+    // Entries that have a waiter that needs to be notified after
+    // the respective entry is applied.
+    std::map<index_t, op_status> _awaited_applies;
+
+    // Contains active snapshot transfers, to be waited on exit.
+    std::unordered_map<server_id, future<>> _snapshot_transfers;
+
+    // Called to commit entries (on a leader or otherwise).
+    void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
+
+    // Called when a node wins an election.
+    future<> start_leadership();
+
+    // Called when a node stops being a leader. The returned
+    // future resolves when all the leader background work is
+    // stopped.
+    future<> stop_leadership();
+
+    // This fiber process fsm output, by doing the following steps in that order:
+    //  - persists current term and voter
+    //  - persists unstable log entries on disk.
+    //  - sends out messages
+    future<> io_fiber(index_t stable_idx);
+
+    // This fiber runs in the background and applies committed entries.
+    future<> applier_fiber();
+
+    template <typename T> future<> add_entry_internal(T command, wait_type type);
+
+    // Apply a dummy entry. Dummy entry is not propagated to the
+    // state machine, but waiting for it to be "applied" ensures
+    // all previous entries are applied as well.
+    // Resolves when the entry is committed.
+    // The function has to be called on the leader, throws otherwise
+    // May fail because of an internal error or because the leader
+    // has changed and the entry was replaced by another one,
+    // submitted to the new leader.
+    future<> apply_dummy_entry();
+
+    future<> _applier_status = make_ready_future<>();
+    future<> _io_status = make_ready_future<>();
 };
 
 } // namespace raft
