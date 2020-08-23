@@ -169,13 +169,13 @@ fsm_output fsm::get_output() {
         // will fail the FSM will be stopped and get_output() will
         // never be called again, so any new sate that assumes that
         // the entries are stable will not be observed.
-        advance_stable_index(output.log_entries.back()->idx);
+        advance_stable_idx(output.log_entries.back()->idx);
     }
 
     return output;
 }
 
-void fsm::advance_stable_index(index_t idx) {
+void fsm::advance_stable_idx(index_t idx) {
     _log.stable_to(idx);
     if (is_leader()) {
         auto& progress = _tracker->find(_my_id);

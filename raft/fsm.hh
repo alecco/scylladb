@@ -228,7 +228,7 @@ class fsm {
     void commit_to(index_t leader_commit_idx);
     // Called after log entries in FSM output are considered persisted.
     // Produces new FSM output.
-    void advance_stable_index(index_t idx);
+    void advance_stable_idx(index_t idx);
 
     // Set cluster configuration
     void set_configuration(const configuration& config) {
