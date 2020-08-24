@@ -215,7 +215,14 @@ fmt::print("apply_changes[{}]: got {} entries: {}\n", short_id(id), commands.siz
     return make_ready_future<>();
 };
 
-using update = std::variant<raft::command, raft::configuration>;
+// Updates can be
+//  - Entries
+//  - Leader change
+//  - Configuration change
+using entries = std::vector<int>;
+using new_leader = int;
+// TODO: config change
+using update = std::variant<entries, new_leader>;
 
 struct test_case {
     const std::string name;
@@ -224,10 +231,10 @@ struct test_case {
     const size_t leader;
     const std::vector<std::initializer_list<log_entry>> initial_states;
     // const std::vector<raft::command> updates;
-    const std::vector<int> updates;
+    const std::vector<update> updates;
     test_case(std::string name, size_t nodes, int term, size_t leader,
             std::vector<std::initializer_list<log_entry>> initial_states,
-            std::vector<int> updates) : name(name),
+            std::vector<update> updates) : name(name),
             nodes(nodes), term(raft::term_t(term)), leader(leader), initial_states(initial_states), updates(updates) {
         assert(leader < nodes && "Leader higher than total nodes");
     }
@@ -250,7 +257,12 @@ fmt::print("run_test: {} leader {} initial log size {}\n", test.name, test.leade
             expected.push_back(le.value);
         }
     }
-    expected.insert(expected.end(), test.updates.begin(), test.updates.end());
+    for (auto update: test.updates) {
+        if (std::holds_alternative<entries>(update)) {
+            auto updates = std::get<entries>(update);
+            expected.insert(expected.end(), updates.begin(), updates.end());
+        }
+    }
     size_t expected_entries = expected.size();
 
     // Server initial logs
@@ -269,13 +281,25 @@ fmt::print("run_test: {} leader {} initial log size {}\n", test.name, test.leade
     leader.make_me_leader();
 
     // Process all updates in order
-    std::vector<raft::command> updates = create_commands<int>(test.updates);
-    co_await seastar::parallel_for_each(updates, [&] (const update u) {
-            raft::command cmd = std::get<raft::command>(u);
-            tlogger.debug("Adding command entry on leader");
-            return leader.add_entry(std::move(cmd), raft::server::wait_type::committed);
-        return make_ready_future<>();
-    });
+    // XXX here pick
+    for (auto update: test.updates) {
+        //
+        if (std::holds_alternative<entries>(update)) {
+            auto updates = std::get<entries>(update);
+            std::vector<raft::command> commands = create_commands<int>(updates);
+            co_await seastar::parallel_for_each(commands, [&] (const raft::command cmd) {
+                tlogger.debug("Adding command entry on leader");
+                return leader.add_entry(std::move(cmd), raft::server::wait_type::committed);
+            });
+        } else if (std::holds_alternative<new_leader>(update)) {
+            // auto new_leader_id = std::get<new_leader>(update);
+// fmt::print("XXX new leader {} {}\n", new_leader_id, rafts.size());
+            // auto& new_leader = *rafts[new_leader_id].first;
+
+            // co_await new_leader.read_barrier();
+            // XXX new_leader.make_me_leader();
+        }
+    }
 
 // fmt::print("run_test: {} done, waiting\n", test.name);
     // Wait for all state_machine s to finish processing commands
@@ -306,12 +330,17 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
-        // name, servers, current term, leader, initial logs (each), commands to send to leader
-        {"simple_1_1_0_e*_1", 1, 1, 0, {{}}, {1,2},},
-        {"simple_1_1_0_1_2", 1, 1, 0, {{{1,10}}}, {1,2},},
-        {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}}, {1,2},},
-        {"simple_2_1_1_1_2", 2, 2, 1, {{{1,10}}}, {1,2},},
-        {"simple_3_2_1_1_2", 3, 2, 1, {{{1,10}}}, {1,2},},
+        // name, servers, current term, leader, initial logs (each), updates
+        {"simple_1_1_0_e*_1", 1, 1, 0, {{}},
+            {entries{1,2}}},
+        {"simple_1_1_0_1_2", 1, 1, 0, {{{1,10}}},
+            {entries{1,2}},},
+        {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
+            {entries{1,2},new_leader{1}},},
+        {"simple_2_1_1_1_2", 2, 2, 1, {{{1,10}}},
+            {entries{1,2}},},
+        {"simple_3_2_1_1_2", 3, 2, 1, {{{1,10}}},
+            {entries{1,2}},},
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {
