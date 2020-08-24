@@ -206,10 +206,6 @@ class fsm {
         }
     }
 
-    void become_candidate();
-
-    void become_follower(server_id leader);
-
     // Controls whether the follower has been responsive recently,
     // so it makes sense to send more data to it.
     bool can_send_to(const follower_progress& progress);
@@ -264,6 +260,10 @@ public:
     static constexpr int ELECTION_TIMEOUT = 10;
 
     void become_leader();
+
+    void become_candidate();
+
+    void become_follower(server_id leader);
 
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
