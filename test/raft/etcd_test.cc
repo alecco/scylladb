@@ -60,6 +60,9 @@ public:
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
     virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) { return make_ready_future<>(); }
+    virtual future<raft::snapshot> load_snapshot() override {
+        return make_ready_future<raft::snapshot>(raft::snapshot{.config = _conf.config});
+    }
     virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { co_return seastar::sleep(1us); };
     virtual future<raft::log> load_log() {
         raft::log log(raft::snapshot{.config = _conf.config});
