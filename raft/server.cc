@@ -130,8 +130,8 @@ private:
 
 server::server(server_id uuid, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
         std::unique_ptr<storage> storage) :
-                    _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)),
-                    _id(uuid) {
+                    _id(uuid), _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
+                    _storage(std::move(storage)) {
     _rpc->set_server(*this);
 }
 
