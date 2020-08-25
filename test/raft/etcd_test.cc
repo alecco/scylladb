@@ -85,6 +85,7 @@ public:
     }
     virtual future<> send_snapshot(raft::server_id server_id, const raft::snapshot& snap) { return make_ready_future<>(); }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
+fmt::print("XXX [{}] send_append_entries: to {}\n", _id, id);
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
@@ -103,10 +104,12 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+fmt::print("XXX [{}] send_vote_request: to {}\n", _id, id);
         net[id]->_server->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+fmt::print("XXX [{}] send_vote_reply: to {}\n", _id, id);
         net[id]->_server->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
@@ -124,23 +127,49 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
+class server : public raft::server {
+public:
+    using raft::server::server;
+    // Force election
+    void election_timeout() {
+        for (int i = 0; i < 2 * _fsm.ELECTION_TIMEOUT; i++) {
+            if (_fsm.is_candidate()) {
+fmt::print("XXX election_timeout: became candidate at {}\n", i);
+                break;
+            }
+            _fsm.tick();
+        }
+    }
+
+    void make_leader() {
+        election_timeout();
+fmt::print("make_leader: is candidate {}\n", _fsm.is_candidate());
+        // auto batch = co_await _fsm.poll_output();
+        (void) _fsm.get_output();
+fmt::print("make_leader: polled\n");
+fmt::print("make_leader: is candidate {}\n", _fsm.is_candidate());
+fmt::print("make_leader: is leader {}\n", _fsm.is_leader());
+//        _fsm.become_candidate();
+    }
+};
+
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-std::pair<std::unique_ptr<raft::server>, state_machine*>
+std::pair<std::unique_ptr<server>, state_machine*>
 create_raft_server(raft::server_id uuid, initial_state state) {
 
     auto sm = std::make_unique<state_machine>(uuid, std::move(state.apply));
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
-    auto raft = std::make_unique<raft::server>(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
+    auto raft = std::make_unique<server>(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
 
     return std::make_pair(std::move(raft), &rsm);
 }
 
-future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states) {
+future<std::vector<std::pair<std::unique_ptr<server>, state_machine*>>> create_cluster(std::vector<initial_state> states) {
     raft::configuration config;
-    std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
+    std::vector<std::pair<std::unique_ptr<server>, state_machine*>> rafts;
 
     for (size_t i = 0; i < states.size(); i++) {
         auto uuid = utils::UUID(0, i);
@@ -278,7 +307,8 @@ fmt::print("run_test: {} leader {} initial log size {}\n", test.name, test.leade
     auto rafts = co_await create_cluster(states);
 
     auto& leader = *rafts[test.leader].first;
-    leader.make_me_leader();
+    leader.make_leader();
+co_return 0; // XXX
 
     // Process all updates in order
     // XXX here pick
@@ -289,10 +319,12 @@ fmt::print("run_test: {} leader {} initial log size {}\n", test.name, test.leade
             std::vector<raft::command> commands = create_commands<int>(updates);
             co_await seastar::parallel_for_each(commands, [&] (const raft::command cmd) {
                 tlogger.debug("Adding command entry on leader");
+fmt::print("XXX adding new command\n");
                 return leader.add_entry(std::move(cmd), raft::server::wait_type::committed);
             });
         } else if (std::holds_alternative<new_leader>(update)) {
             // auto new_leader_id = std::get<new_leader>(update);
+fmt::print("XXX new leader\n");
 // fmt::print("XXX new leader {} {}\n", new_leader_id, rafts.size());
             // auto& new_leader = *rafts[new_leader_id].first;
 
@@ -331,16 +363,20 @@ int main(int argc, char* argv[]) {
 
     std::vector<test_case> replication_tests = {
         // name, servers, current term, leader, initial logs (each), updates
+#if 0
         {"simple_1_1_0_e*_1", 1, 1, 0, {{}},
             {entries{1,2}}},
         {"simple_1_1_0_1_2", 1, 1, 0, {{{1,10}}},
             {entries{1,2}},},
+#endif
         {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
             {entries{1,2},new_leader{1}},},
+#if 0
         {"simple_2_1_1_1_2", 2, 2, 1, {{{1,10}}},
             {entries{1,2}},},
         {"simple_3_2_1_1_2", 3, 2, 1, {{{1,10}}},
             {entries{1,2}},},
+#endif
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {
