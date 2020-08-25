@@ -93,6 +93,7 @@ public:
         return net[id]->_server->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
+fmt::print("XXX [{}] send_append_entries: to {}\n", short_id(_id), short_id(id));
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
@@ -111,10 +112,12 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+fmt::print("XXX [{}] send_vote_request: to {}\n", short_id(_id), short_id(id));
         net[id]->_server->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+fmt::print("XXX [{}] send_vote_reply: to {}\n", short_id(_id), short_id(id));
         net[id]->_server->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
@@ -246,7 +249,7 @@ future<int> run_test(test_case test) {
     std::vector<int> expected;                           // Expected output for Raft
     std::vector<std::vector<int>> committed(test.nodes); // Actual outputs for each server
     states[test.leader].term = test.term;
-fmt::print("run_test: {} leader {} initial log size {}\n", test.name, test.leader, test.leader < test.initial_states.size()? test.initial_states[test.leader].size() : 0);
+fmt::print("run_test: {} servers {} term {} leader {} initial log size {}\n", test.name, test.nodes, test.term, test.leader, test.leader < test.initial_states.size()? test.initial_states[test.leader].size() : 0);
     if (test.leader < test.initial_states.size()) {
         for (auto log_initializer: test.initial_states[test.leader]) {
             log_entry le(log_initializer);
@@ -293,9 +296,12 @@ fmt::print("run_test: XXX 2c\n");
             co_await seastar::parallel_for_each(commands, [&] (const raft::command cmd) {
                 tlogger.debug("Adding command entry on leader");
                 return leader.add_entry(std::move(cmd), raft::wait_type::committed);
+fmt::print("XXX adding new command\n");
+                return leader.add_entry(std::move(cmd), raft::wait_type::committed);
             });
         } else if (std::holds_alternative<new_leader>(update)) {
             // auto new_leader_id = std::get<new_leader>(update);
+fmt::print("XXX new leader\n");
 // fmt::print("XXX new leader {} {}\n", new_leader_id, rafts.size());
             // auto& new_leader = *rafts[new_leader_id].first;
 
@@ -336,16 +342,20 @@ int main(int argc, char* argv[]) {
 
     std::vector<test_case> replication_tests = {
         // name, servers, current term, leader, initial logs (each), updates
+#if 1
         {"simple_1_1_0_e*_1", 1, 1, 0, {{}},
             {entries{1,2}}},
         {"simple_1_1_0_1_2", 1, 1, 0, {{{1,10}}},
             {entries{1,2}},},
         {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
             {entries{1,2},new_leader{1}},},
-        {"simple_2_1_1_1_2", 2, 2, 1, {{{1,10}}},
+#endif
+        {"simple_2_1_1_1_2", 2, 1, 1, {{},{{1,10}}},
             {entries{1,2}},},
+#if 1
         {"simple_3_2_1_1_2", 3, 2, 1, {{{1,10}}},
             {entries{1,2}},},
+#endif
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {

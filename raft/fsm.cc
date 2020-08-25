@@ -116,6 +116,7 @@ void fsm::become_candidate() {
         if (server.id == _my_id) {
             continue;
         }
+fmt::print("XXX server [{}] fsm::become_leader: sent vote request to {} [term: {}, index: {}, last log term: {}]\n", _my_id, server.id, _current_term, _log.last_idx(), _log.last_term());
         logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
 
@@ -402,6 +403,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(std::holds_alternative<candidate>(_state));
 
+fmt::print("XXX {} received a {} vote from {}\n", _my_id, reply.vote_granted ? "yes" : "no", from);
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     _votes->register_vote(from, reply.vote_granted);
