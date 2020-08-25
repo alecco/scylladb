@@ -342,19 +342,18 @@ int main(int argc, char* argv[]) {
 
     std::vector<test_case> replication_tests = {
         // name, servers, current term, leader, initial logs (each), updates
-#if 1
         {"simple_1_1_0_e*_1", 1, 1, 0, {{}},
             {entries{1,2}}},
         {"simple_1_1_0_1_2", 1, 1, 0, {{{1,10}}},
             {entries{1,2}},},
         {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
             {entries{1,2},new_leader{1}},},
-#endif
-        {"simple_2_1_1_1_2", 2, 1, 1, {{},{{1,10}}},
-            {entries{1,2}},},
-#if 1
         {"simple_3_2_1_1_2", 3, 2, 1, {{{1,10}}},
             {entries{1,2}},},
+#if 0
+        // TODO: hangs as 1 and 2 don't want to vote for 1
+        {"simple_3_3_0_0_1_1", 3, 3, 0, {{},{{1,10}},{{2,30}}},
+            {entries{1,2,3}},},
 #endif
     };
 
