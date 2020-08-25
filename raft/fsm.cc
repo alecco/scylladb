@@ -116,7 +116,7 @@ void fsm::become_candidate() {
         if (server.id == _my_id) {
             continue;
         }
-fmt::print("XXX server [{}] fsm::become_leader: sent vote request to {} [term: {}, index: {}, last log term: {}]\n", _my_id, server.id, _current_term, _log.last_idx(), _log.last_term());
+fmt::print("XXX server [{}] fsm::become_candidate: sent vote request to {} [term: {}, index: {}, last log term: {}]\n", short_id(_my_id), short_id(server.id), _current_term, _log.last_idx(), _log.last_term());
         logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
 
@@ -125,6 +125,7 @@ fmt::print("XXX server [{}] fsm::become_leader: sent vote request to {} [term: {
 }
 
 future<fsm_output> fsm::poll_output() {
+fmt::print("[{}] fsm::poll_output() stable index: {} last index: {}\n", short_id(_my_id), _log.stable_idx(), _log.last_idx());
     logger.trace("fsm::poll_output() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
 
@@ -377,10 +378,15 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         _voted_for == from ||
         // ...we haven't voted and we don't think there's a leader yet in this term...
         (_voted_for == server_id{} && _current_leader == server_id{});
+fmt::print("[{}] fsm::request_vote: _voted_for {} current_leader {} can vote {}\n", short_id(_my_id), short_id(_voted_for),  short_id(_current_leader), can_vote);
 
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
+fmt::print("[{}] [term: {}, index: {}, log_term: {}, voted_for: {}] "
+            "voted for {} [log_term: {}, log_index: {}]\n",
+            short_id(_my_id), _current_term, _log.last_idx(), _log.last_term(), short_id(_voted_for),
+            short_id(from), request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -390,6 +396,10 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 
         send_to(from, vote_reply{_current_term, true});
     } else {
+fmt::print("[{}] fsm::request_vote: term: {}, index: {}, log_term: {}, voted_for: {}] "
+            "rejected vote for {} [log_term: {}, log_index: {}]\n",
+            short_id(_my_id), _current_term, _log.last_idx(), _log.last_term(), short_id(_voted_for),
+            short_id(from), request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -403,7 +413,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(std::holds_alternative<candidate>(_state));
 
-fmt::print("XXX {} received a {} vote from {}\n", _my_id, reply.vote_granted ? "yes" : "no", from);
+fmt::print("XXX [{}] received a {} vote from {}\n", short_id(_my_id), reply.vote_granted ? "yes" : "no", from);
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     _votes->register_vote(from, reply.vote_granted);
