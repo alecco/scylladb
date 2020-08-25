@@ -182,7 +182,7 @@ future<std::vector<std::pair<std::unique_ptr<server>, state_machine*>>> create_c
 
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
-        states[i].config = config;
+        states[i].snapshot.config = config;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, states[i])).first;
         co_await raft.start();
     }
