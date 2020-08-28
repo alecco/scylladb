@@ -250,13 +250,17 @@ future<int> run_test(test_case test) {
     std::vector<int> expected;                           // Expected output for Raft
     std::vector<std::vector<int>> committed(test.nodes); // Actual outputs for each server
     states[leader].term = test.term;
-fmt::print("run_test: {} servers {} term {} leader {} initial log size {}\n", test.name, test.nodes, test.term, leader, leader < test.initial_states.size()? test.initial_states[leader].size() : 0);
+fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial log size {}\n",
+            test.name, test.nodes, test.term, test.initial_states.size(),
+            leader, leader < test.initial_states.size()?
+            test.initial_states[leader].size() : 0);
     if (leader < test.initial_states.size()) {
         for (auto log_initializer: test.initial_states[leader]) {
             log_entry le(log_initializer);
             if (le.term > test.term) {
                 break;
             }
+fmt::print("run_test: pushing expected value {}\n", le.value);
             expected.push_back(le.value);
         }
     }
@@ -297,13 +301,12 @@ fmt::print("XXX adding new command to {}\n", leader);
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
         } else if (std::holds_alternative<new_leader>(update)) {
-fmt::print("XXX old leader {} ", leader);
             leader = std::get<new_leader>(update);
-fmt::print("new leader {}\n", leader);
+fmt::print("[{}] XXX new leader\n", leader);
 
             // co_await new_leader.read_barrier();
-            co_await rafts[leader].first->make_me_leader();
-fmt::print("XXX new leader confirmed {}\n", leader);
+            co_await rafts[leader].first->make_leader();
+fmt::print("[{}] XXX new leader confirmed\n", leader);
 
         }
     }
@@ -341,15 +344,20 @@ int main(int argc, char* argv[]) {
 
     std::vector<test_case> replication_tests = {
         // name, servers, current term, leader, initial logs (each), updates
+        {"simple_3_01", 3, 1, 1, {{},{{1,10}}},
+            {entries{1,2},new_leader{1},new_leader{2},entries{3,4}},},
+#if 0
         {"simple_1_1_0_e*_1", 1, 1, 0, {{}},
             {entries{1,2}}},
         {"simple_1_1_0_1_2", 1, 1, 0, {{{1,10}}},
             {entries{1,2}},},
         {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
+            {entries{1,2}},},
+        {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
             {entries{1,2},new_leader{1},entries{3,4}},},
+        // Follower has to remove old entry
         {"simple_3_2_1_1_2", 3, 2, 1, {{{1,10}}},
             {entries{1,2}},},
-#if 0
         // TODO: hangs as 1 and 2 don't want to vote for 1
         {"simple_3_3_0_0_1_1", 3, 3, 0, {{},{{1,10}},{{2,30}}},
             {entries{1,2,3}},},
