@@ -253,14 +253,15 @@ struct test_case {
 
 // Run test case (name, nodes, leader, initial logs, updates)
 future<int> run_test(test_case test) {
+    auto leader = test.leader;
 
     std::vector<initial_state> states(test.nodes);       // Server initial states
     std::vector<int> expected;                           // Expected output for Raft
     std::vector<std::vector<int>> committed(test.nodes); // Actual outputs for each server
-    states[test.leader].term = test.term;
-fmt::print("run_test: {} servers {} term {} leader {} initial log size {}\n", test.name, test.nodes, test.term, test.leader, test.leader < test.initial_states.size()? test.initial_states[test.leader].size() : 0);
-    if (test.leader < test.initial_states.size()) {
-        for (auto log_initializer: test.initial_states[test.leader]) {
+    states[leader].term = test.term;
+fmt::print("run_test: {} servers {} term {} leader {} initial log size {}\n", test.name, test.nodes, test.term, leader, leader < test.initial_states.size()? test.initial_states[leader].size() : 0);
+    if (leader < test.initial_states.size()) {
+        for (auto log_initializer: test.initial_states[leader]) {
             log_entry le(log_initializer);
             if (le.term > test.term) {
                 break;
@@ -290,10 +291,7 @@ fmt::print("run_test: XXX 2\n");
 
     auto rafts = co_await create_cluster(states);
 
-fmt::print("run_test: XXX 2b\n");
-    auto& leader = *rafts[test.leader].first;
-    leader.make_me_leader();
-fmt::print("run_test: XXX 2c\n");
+    co_await rafts[leader].first->make_me_leader();
 
     // Process all updates in order
     // XXX here pick
@@ -303,23 +301,23 @@ fmt::print("run_test: XXX 2c\n");
             auto updates = std::get<entries>(update);
             std::vector<raft::command> commands = create_commands<int>(updates);
             co_await seastar::parallel_for_each(commands, [&] (const raft::command cmd) {
-                tlogger.debug("Adding command entry on leader");
-                return leader.add_entry(std::move(cmd), raft::wait_type::committed);
-fmt::print("XXX adding new command\n");
-                return leader.add_entry(std::move(cmd), raft::wait_type::committed);
+                tlogger.debug("Adding command entry on leader {}", leader);
+fmt::print("XXX adding new command to {}\n", leader);
+                return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
         } else if (std::holds_alternative<new_leader>(update)) {
-            // auto new_leader_id = std::get<new_leader>(update);
-fmt::print("XXX new leader\n");
-// fmt::print("XXX new leader {} {}\n", new_leader_id, rafts.size());
-            // auto& new_leader = *rafts[new_leader_id].first;
+fmt::print("XXX old leader {} ", leader);
+            leader = std::get<new_leader>(update);
+fmt::print("new leader {}\n", leader);
 
             // co_await new_leader.read_barrier();
-            // XXX new_leader.make_me_leader();
+            co_await rafts[leader].first->make_me_leader();
+fmt::print("XXX new leader confirmed {}\n", leader);
+
         }
     }
 
-// fmt::print("run_test: {} done, waiting\n", test.name);
+fmt::print("run_test: {} done, waiting\n", test.name);
     // Wait for all state_machine s to finish processing commands
 fmt::print("run_test: XXX 5\n");
     for (auto& r:  rafts) {
@@ -327,6 +325,7 @@ fmt::print("run_test: XXX 5\n");
     }
 
 fmt::print("run_test: XXX 6\n");
+fmt::print("run_test: {} finishing\n", test.name);
     for (auto& r: rafts) {
         co_await r.first->abort(); // Stop servers
     }
@@ -356,7 +355,7 @@ int main(int argc, char* argv[]) {
         {"simple_1_1_0_1_2", 1, 1, 0, {{{1,10}}},
             {entries{1,2}},},
         {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
-            {entries{1,2},new_leader{1}},},
+            {entries{1,2},new_leader{1},entries{3,4}},},
         {"simple_3_2_1_1_2", 3, 2, 1, {{{1,10}}},
             {entries{1,2}},},
 #if 0
