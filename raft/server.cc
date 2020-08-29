@@ -164,6 +164,7 @@ future<> server::start() {
 
 template <typename T>
 future<> server::add_entry_internal(T command, wait_type type) {
+    assert(_fsm->is_leader());
     logger.trace("An entry is submitted on a leader");
 
     // lock access to the raft log while it is been updated
