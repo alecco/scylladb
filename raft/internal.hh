@@ -72,12 +72,11 @@ struct tagged_id {
     bool operator==(const tagged_id& o) const {
         return id == o.id;
     }
-    // The default constructor sets the id to nil, which is
-    // guaranteed to not match any valid id.
-    bool is_nil() const {
-        return id.get_least_significant_bits() == 0 && id.get_most_significant_bits() == 0;
+    explicit operator bool() const {
+        // The default constructor sets the id to nil, which is
+        // guaranteed to not match any valid id.
+        return id != utils::UUID();
     }
-    explicit operator bool() const { return !is_nil(); }
 };
 
 template<typename Tag>

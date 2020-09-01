@@ -31,7 +31,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log) :
     set_configuration(_log.get_snapshot().config);
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
 
-    assert(_current_leader.is_nil());
+    assert(!bool(_current_leader));
 }
 
 template<typename T>
