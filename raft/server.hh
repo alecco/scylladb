@@ -156,6 +156,7 @@ private:
     future<> applier_fiber();
 
     template <typename T> future<> add_entry_internal(T command, wait_type type);
+    template <typename Message> future<> send_message(server_id id, Message m);
 
     // Apply a dummy entry. Dummy entry is not propagated to the
     // state machine, but waiting for it to be "applied" ensures

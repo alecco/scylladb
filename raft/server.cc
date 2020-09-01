@@ -130,6 +130,39 @@ void server::notify_waiters(std::map<index_t, op_status>& waiters, const std::ve
     }
 }
 
+template <typename Message>
+future<> server::send_message(server_id id, Message m) {
+    return std::visit([this, id] (auto&& m) {
+        using T = std::decay_t<decltype(m)>;
+        if constexpr (std::is_same_v<T, append_reply>) {
+              return _rpc->send_append_entries_reply(id, m);
+          } else if constexpr (std::is_same_v<T, keep_alive>) {
+              _rpc->send_keepalive(id, m);
+              return make_ready_future<>();
+          } else if constexpr (std::is_same_v<T, append_request_send>) {
+              return _rpc->send_append_entries(id, m);
+          } else if constexpr (std::is_same_v<T, vote_request>) {
+              return _rpc->send_vote_request(id, m);
+          } else if constexpr (std::is_same_v<T, vote_reply>) {
+              return _rpc->send_vote_reply(id, m);
+          } else if constexpr (std::is_same_v<T, install_snapshot>) {
+              // Send in the background.
+              send_snapshot(id, std::move(m));
+              return make_ready_future<>();
+          } else if constexpr (std::is_same_v<T, snapshot_reply>) {
+              assert(_snapshot_application_done);
+              // send reply to install_snapshot here
+              _snapshot_application_done->set_value(std::move(m));
+              _snapshot_application_done = std::nullopt;
+              return make_ready_future<>();
+          }
+
+          logger.error("log fiber {} tried to send unknown message type", _id);
+          ::abort();
+          return make_ready_future<>();
+    }, std::move(m));
+}
+
 future<> server::io_fiber(index_t last_stable) {
     logger.trace("[{}] io_fiber start", _id);
     try {
@@ -169,35 +202,7 @@ future<> server::io_fiber(index_t last_stable) {
             if (batch.messages.size()) {
                 // after entries are persisted we can send messages
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
-                    return std::visit([this, id = message.first] (auto&& m) {
-                        using T = std::decay_t<decltype(m)>;
-                        if constexpr (std::is_same_v<T, append_reply>) {
-                            return _rpc->send_append_entries_reply(id, m);
-                        } else if constexpr (std::is_same_v<T, keep_alive>) {
-                            _rpc->send_keepalive(id, m);
-                            return make_ready_future<>();
-                        } else if constexpr (std::is_same_v<T, append_request_send>) {
-                            return _rpc->send_append_entries(id, m);
-                        } else if constexpr (std::is_same_v<T, vote_request>) {
-                            return _rpc->send_vote_request(id, m);
-                        } else if constexpr (std::is_same_v<T, vote_reply>) {
-                            return _rpc->send_vote_reply(id, m);
-                        } else if constexpr (std::is_same_v<T, install_snapshot>) {
-                            // Send in the background.
-                            send_snapshot(id, std::move(m));
-                            return make_ready_future<>();
-                        } else if constexpr (std::is_same_v<T, snapshot_reply>) {
-                            assert(_snapshot_application_done);
-                            // send reply to install_snapshot here
-                            _snapshot_application_done->set_value(std::move(m));
-                            _snapshot_application_done = std::nullopt;
-                            return make_ready_future<>();
-                        }
-
-                        logger.error("log fiber {} tried to send unknown message type", _id);
-                        return make_ready_future<>();
-                    }, std::move(message.second));
-
+                    return send_message(message.first, std::move(message.second));
                 });
             }
 
