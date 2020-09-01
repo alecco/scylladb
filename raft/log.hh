@@ -51,8 +51,8 @@ public:
     log(log_entries log) : _log(std::move(log)) { stable_to(index_t(_log.size())); };
     log(snapshot snp, log_entries log) : _snapshot(std::move(snp)), _log(std::move(log)) { stable_to(last_idx()); }
     log(snapshot snp) : _snapshot(std::move(snp)) {}
-    // The index here the global raft log index, not related to a snpashot.
-    // It is a programming error to call the function with an index tha points into the snapshot,
+    // The index here the global raft log index, not related to a snapshot.
+    // It is a programming error to call the function with an index that points into the snapshot,
     // the function will abort()
     log_entry_ptr& operator[](size_t i);
     // Add an entry to the log.

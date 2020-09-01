@@ -125,8 +125,6 @@ future<fsm_output> fsm::poll_output() {
 fsm_output fsm::get_output() {
     fsm_output output;
 
-    // Get a snapshot of all unsent messages.
-    std::swap(output.messages, _messages);
     auto diff = _log.last_idx() - _log.stable_idx();
 
     if (diff > 0) {
@@ -167,11 +165,16 @@ fsm_output fsm::get_output() {
         }
     }
 
+    // Get a snapshot of all unsent messages.
+    // Do it after populting log_entries and committed arrays
+    // to not lose messages in case arrays population throws
+    std::swap(output.messages, _messages);
+
     // Advance the observed state.
     _observed.advance(*this);
 
-    // XXX This has to be the last action of get_output(), please
-    // check the comment below why.
+    // Be careful to do that only after any use of stable_idx() in this
+    // function and after any code that may throw
     if (output.log_entries.size()) {
         // We advance stable index before the entries are
         // actually persisted, because if writing to stable storage
@@ -199,8 +202,9 @@ void fsm::check_committed() {
 
     index_t new_commit_idx = _tracker->committed(_commit_idx);
 
-    if (new_commit_idx <= _commit_idx)
+    if (new_commit_idx <= _commit_idx) {
         return;
+    }
 
     if (_log[new_commit_idx]->term != _current_term) {
 
@@ -211,11 +215,11 @@ void fsm::check_committed() {
         // an entry from the current term has been committed in
         // this way, then all prior entries are committed
         // indirectly because of the Log Matching Property.
-        logger.trace("check committed: cannot commit because of term {} != {}",
-            _log[new_commit_idx]->term, _current_term);
+        logger.trace("check_committed[{}]: cannot commit because of term {} != {}",
+            _my_id, _log[new_commit_idx]->term, _current_term);
         return;
     }
-    logger.trace("check committed commit {}", new_commit_idx);
+    logger.trace("check_committed[{}]: commit {}", _my_id, new_commit_idx);
     _commit_idx = new_commit_idx;
     // We have a quorum of servers with match_idx greater than the
     // current commit index. Commit && apply more entries.

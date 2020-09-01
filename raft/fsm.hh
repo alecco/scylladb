@@ -263,7 +263,9 @@ public:
     future<fsm_output> poll_output();
 
     // Get state machine output, if there is any. Doesn't
-    // wait. For use in testing.
+    // wait. It is public for use in testing.
+    // May throw on allocation failure, but leaves state machine
+    // in the same state in that case
     fsm_output get_output();
 
     // Called to advance virtual clock of the protocol state machine.

@@ -43,7 +43,7 @@ future<> server::start() {
     auto log_entries = co_await _storage->load_log();
     auto log = raft::log(std::move(snapshot), std::move(log_entries));
     index_t stable_idx = log.stable_idx();
-    _fsm = fsm(_id,  term, vote, std::move(log));
+    _fsm = fsm(_id, term, vote, std::move(log));
     assert(_fsm.get_current_term() != term_t(0));
 
     if (snp_id) {
@@ -114,6 +114,10 @@ void server::notify_waiters(std::map<index_t, op_status>& waiters, const std::ve
             break;
         }
         auto [entry_idx, status] = std::move(*it);
+
+        // if there is a waiter entry with an index smaller than first entry
+        // it means that notification is out of order which is prohinited
+        assert(entry_idx >= first_idx);
 
         waiters.erase(it);
         if (status.term == entries[entry_idx - first_idx]->term) {
