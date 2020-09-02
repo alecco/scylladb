@@ -30,7 +30,7 @@ using raft::term_t, raft::index_t, raft::server_id;
 
 
 void election_timeout(raft::fsm& fsm) {
-    for (int i = 0; i < 2 * fsm.ELECTION_TIMEOUT; i++) {
+    for (int i = 0; i < 2 * fsm.ELECTION_TIMEOUT.count(); i++) {
         fsm.tick();
     }
 }
