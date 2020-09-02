@@ -23,6 +23,7 @@
 #include <seastar/core/condition-variable.hh>
 #include "raft.hh"
 #include "progress.hh"
+#include "logical_clock.hh"
 #include "log.hh"
 
 namespace raft {
@@ -126,10 +127,13 @@ class fsm {
         }
     } _observed;
 
-    int _election_elapsed = 0;
+    logical_clock _clock;
+    // Start of the current election epoch - a time point relative
+    // to which we expire election timeout.
+    logical_clock::time_point _last_election_time = logical_clock::min();
     // A random value in range [election_timeout, 2 * election_timeout),
     // reset on each term change.
-    int _randomized_election_timeout = 10;
+    logical_clock::duration _randomized_election_timeout = ELECTION_TIMEOUT;
     // Votes received during an election round. Available only in
     // candidate state.
     std::optional<votes> _votes;
@@ -161,7 +165,7 @@ class fsm {
     void check_committed();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
-        return _election_elapsed > _randomized_election_timeout;
+        return _last_election_time + _randomized_election_timeout <= _clock.now();
     }
 
     // A helper to send any kind of RPC message.
@@ -173,17 +177,7 @@ class fsm {
     }
 
     // A helper to update the FSM's current term.
-    void update_current_term(term_t current_term) {
-        assert(_current_term < current_term);
-        _current_term = current_term;
-        _voted_for = server_id{};
-
-        // Reset the randomized election timeout on each term
-        // change, even if we do not plan to campaign during this
-        // term: the main purpose of the timeout is to avoid
-        // starting our campaign simultaneously with other followers.
-        _randomized_election_timeout = ELECTION_TIMEOUT + std::rand() % ELECTION_TIMEOUT;
-    }
+    void update_current_term(term_t current_term);
 
     void check_is_leader() const {
         if (!is_leader()) {
@@ -247,7 +241,7 @@ public:
     // time called the election timeout, then it assumes there is
     // no viable leader and begins an election to choose a new
     // leader
-    static constexpr int ELECTION_TIMEOUT = 10;
+    static constexpr logical_clock::duration ELECTION_TIMEOUT = logical_clock::duration{10};
 
     void become_leader();
 
@@ -332,8 +326,8 @@ void fsm::step(server_id from, Message&& msg) {
         return;
     }
 
-    // Reset election timer.
-    _election_elapsed = 0;
+    // Assume we heard from a leader and update last election time
+    _last_election_time = _clock.now();
 
     auto visitor = [this, from, msg = std::move(msg)](auto state) mutable {
         using State = decltype(state);

@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "fsm.hh"
+#include <random>
 #include <seastar/core/coroutine.hh>
 
 namespace raft {
@@ -63,6 +64,21 @@ void fsm::advance_commit_idx(index_t leader_commit_idx) {
     }
 }
 
+
+void fsm::update_current_term(term_t current_term)
+{
+    assert(_current_term < current_term);
+    _current_term = current_term;
+    _voted_for = server_id{};
+
+    static thread_local std::default_random_engine re{std::random_device{}()};
+    static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
+    // Reset the randomized election timeout on each term
+    // change, even if we do not plan to campaign during this
+    // term: the main purpose of the timeout is to avoid
+    // starting our campaign simultaneously with other followers.
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
+}
 
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
@@ -227,7 +243,7 @@ void fsm::check_committed() {
 }
 
 void fsm::tick() {
-    _election_elapsed++;
+    _clock.advance();
 
     if (is_leader()) {
         for (auto& [id, progress] : *_tracker) {
@@ -261,6 +277,8 @@ void fsm::tick() {
             }
         }
     } else if (is_past_election_timeout()) {
+        logger.trace("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id,
+            _last_election_time, _clock.now());
         become_candidate();
     }
 }
@@ -554,7 +572,7 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
     os << "observed (current term: " << f._observed._current_term << ", ";
     os << "voted for: " << short_id(f._observed._voted_for) << ", ";
     os << "commit index: " << f._observed._commit_idx << "), ";
-    os << "election elapsed: " << f._election_elapsed << ", ";
+    os << "last election time: " << f._last_election_time << ", ";
     if (f._votes) {
         os << "votes (" << *f._votes << "), ";
     }
