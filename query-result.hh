@@ -268,6 +268,9 @@ public:
     }
 };
 
+std::ostream& operator<<(std::ostream& os, const query::result_digest& d);
+
+
 //
 // The query results are stored in a serialized form. This is in order to
 // address the following problems, which a structured format has:

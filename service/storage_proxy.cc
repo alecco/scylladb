@@ -879,7 +879,7 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
 
                 std::unordered_set<gms::inet_address> missing_mrc = summary.replicas_missing_most_recent_commit(_schema, now_in_sec);
                 if (missing_mrc.size() > 0) {
-                    paxos::paxos_state::logger.debug("CAS[{}] Repairing replicas that missed the most recent commit", _id);
+                    paxos::paxos_state::logger.info("CAS[{}] Repairing replicas that missed the most recent commit", _id);
                     tracing::trace(tr_state, "Repairing replicas that missed the most recent commit");
                     std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>, 1>
                       m{std::make_tuple(make_lw_shared<paxos::proposal>(std::move(*summary.most_recent_commit)), _schema, _key.token(), std::move(missing_mrc))};
@@ -995,7 +995,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                     } else if constexpr (std::is_same_v<T, paxos::promise>) {
                         utils::UUID mrc_ballot = utils::UUID_gen::min_time_UUID(0);
 
-                        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got a response {} from {}", _id, response, peer);
+                        paxos::paxos_state::logger.info("CAS[{}] prepare_ballot: got a response {} from {}", _id, response, peer);
                         tracing::trace(tr_state, "prepare_ballot: got a response {} from /{}", response, peer);
 
                         // Find the newest learned value among all replicas that answered.
@@ -1028,14 +1028,22 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                                 foreign_ptr<lw_shared_ptr<query::result>> data;
                                 if (std::holds_alternative<foreign_ptr<lw_shared_ptr<query::result>>>(*response.data_or_digest)) {
                                     data = std::move(std::get<foreign_ptr<lw_shared_ptr<query::result>>>(*response.data_or_digest));
+                                    paxos::paxos_state::logger.info("CAS[{}] prepare_ballot: response data with digest {}", _id, data->digest()->get());
+                                } else {
+                                    paxos::paxos_state::logger.info("CAS[{}] prepare_ballot: response digest {}", _id,
+                                        std::get<query::result_digest>(*response.data_or_digest).get());
                                 }
-                                auto& digest = data ? data->digest() : std::get<query::result_digest>(*response.data_or_digest);
+                                auto digest = data ? data->digest() : std::get<query::result_digest>(*response.data_or_digest);
                                 if (request_tracker.digest) {
+                                    paxos::paxos_state::logger.info("CAS[{}] prepare_ballot: tracker digest {}", _id,
+                                        request_tracker.digest->get());
                                     if (*request_tracker.digest != digest) {
                                         request_tracker.digests_match = false;
                                     }
                                 } else {
                                     request_tracker.digest = digest;
+                                    paxos::paxos_state::logger.info("CAS[{}] prepare_ballot: setting tracker digest to {}", _id,
+                                        request_tracker.digest->get());
                                 }
                                 if (request_tracker.digests_match && !summary.data && data) {
                                     summary.data = std::move(data);
@@ -2803,6 +2811,7 @@ public:
     digest_read_resolver(schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, 0, timeout),
                                 _block_for(block_for),  _target_count_for_cl(target_count_for_cl) {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
+        paxos::paxos_state::logger.debug("Digest got data from {} {}", from, *result->digest());
         if (!_request_failed) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
             _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : *result->digest());
@@ -2814,6 +2823,7 @@ public:
         }
     }
     void add_digest(gms::inet_address from, query::result_digest digest, api::timestamp_type last_modified) {
+        paxos::paxos_state::logger.debug("Digest got digest from {} {}", from, digest);
         if (!_request_failed) {
             _digest_results.emplace_back(std::move(digest));
             _last_modified = std::max(_last_modified, last_modified);
@@ -3625,12 +3635,14 @@ public:
                 auto&& [result, digests_match] = f.get0(); // can throw
 
                 if (digests_match) {
+                    paxos::paxos_state::logger.debug("Digest match");
                     exec->_result_promise.set_value(std::move(result));
                     if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
                         background_repair_check = true;
                     }
                     exec->on_read_resolved();
                 } else { // digest mismatch
+                    paxos::paxos_state::logger.debug("Digest mismatch");
                     // Do not optimize cross-dc repair if read_timestamp is missing (or just negative)
                     // We're interested in reads that happen within write_timeout of a write,
                     // and comparing a timestamp that is too far causes int overflow (#5556)
@@ -4256,6 +4268,8 @@ storage_proxy::do_query(schema_ptr s,
         auto p = shared_from_this();
 
         if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
+            paxos::paxos_state::logger.info("Reading data with {} for {} {}",
+                cl, partition_ranges[0].start()->value().as_decorated_key(), cmd->slice.get_specific_ranges());
             try {
                 return query_singular(cmd,
                         std::move(partition_ranges),
@@ -4307,14 +4321,21 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
 
     struct read_cas_request : public cas_request {
         foreign_ptr<lw_shared_ptr<query::result>> res;
+        schema_ptr _schema;
         std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
             const query::partition_slice& slice, api::timestamp_type ts) {
+            paxos::paxos_state::logger.info("Read result for {} {} {}",
+                slice.get_specific_ranges(), ts, qr->pretty_printer(_schema, slice));
             res = std::move(qr);
             return std::nullopt;
         }
     };
 
     auto request = seastar::make_shared<read_cas_request>();
+    request->_schema = s;
+
+    paxos::paxos_state::logger.info("Reading data with SERIAL for {} {}",
+        partition_ranges[0].start()->value().as_decorated_key(), cmd->slice.get_specific_ranges());
 
     return cas(std::move(s), request, cmd, std::move(partition_ranges), std::move(query_options),
             cl, db::consistency_level::ANY, timeout, cas_timeout, false).then([this, request] (bool is_applied) mutable {

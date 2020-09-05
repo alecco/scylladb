@@ -24,6 +24,7 @@
 #include "mutation_partition_serializer.hh"
 #include "service/priority_manager.hh"
 #include "query-result-writer.hh"
+#include "service/paxos/paxos_state.hh"
 
 reconcilable_result::~reconcilable_result() {}
 
@@ -69,7 +70,9 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     if (r.is_short_read()) {
         builder.mark_as_short_read();
     }
-    return builder.build();
+    auto result = builder.build();
+    service::paxos::paxos_state::logger.info("Got result {}", result.pretty_printer(s, slice));
+    return result;
 }
 
 std::ostream& operator<<(std::ostream& out, const reconcilable_result::printer& pr) {

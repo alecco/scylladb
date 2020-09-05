@@ -190,6 +190,14 @@ clustering_row_ranges partition_slice::get_all_ranges() const {
     return all_ranges;
 }
 
+std::ostream& operator<<(std::ostream& os, const query::result_digest& d) {
+    os << std::hex << std::setw(2);
+    for (auto&& c : d.get()) {
+        os << unsigned(c) << " ";
+    }
+    return os;
+}
+
 sstring
 result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     std::ostringstream out;

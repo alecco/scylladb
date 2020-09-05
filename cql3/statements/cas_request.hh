@@ -65,7 +65,7 @@ struct cas_row_update {
  * Processed CAS conditions and update on potentially multiple rows of the same partition.
  */
 class cas_request: public service::cas_request {
-private:
+protected:
     std::vector<cas_row_update> _updates;
     schema_ptr _schema;
     // A single partition key. Represented as a vector of partition ranges

@@ -76,6 +76,7 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                         return make_exception_future<prepare_response>(utils::injected_error("injected_error_before_save_promise"));
                     }
                     auto f1 = futurize_invoke(db::system_keyspace::save_paxos_promise, *schema, std::ref(key), ballot, timeout);
+#if 0
                     auto f2 = futurize_invoke([&] {
                         return do_with(dht::partition_range_vector({dht::partition_range::make_singular({token, key})}),
                                 [tr_state, schema, &cmd, only_digest, da, timeout] (const dht::partition_range_vector& prv) {
@@ -84,17 +85,21 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                                     prv, tr_state, query::result_memory_limiter::maximum_result_size, timeout);
                         });
                     });
-                    return when_all(std::move(f1), std::move(f2)).then([state = std::move(state), only_digest] (auto t) {
+#endif
+                    return when_all(std::move(f1)).then([state = std::move(state), only_digest] (auto t) {
                         if (utils::get_local_injector().enter("paxos_error_after_save_promise")) {
                             return make_exception_future<prepare_response>(utils::injected_error("injected_error_after_save_promise"));
                         }
                         auto&& f1 = std::get<0>(t);
+#if 0
                         auto&& f2 = std::get<1>(t);
+#endif
                         if (f1.failed()) {
                             // Failed to save promise. Nothing we can do but throw.
                             return make_exception_future<prepare_response>(f1.get_exception());
                         }
                         std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>> data_or_digest;
+#if 0
                         // Silently ignore any errors querying the current value as the caller is prepared to fall back
                         // on querying it by itself in case it's missing in the response.
                         if (!f2.failed()) {
@@ -105,6 +110,7 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                                 data_or_digest = std::move(make_foreign(std::move(result)));
                             }
                         }
+#endif
                         return make_ready_future<prepare_response>(prepare_response(promise(std::move(state._accepted_proposal),
                                         std::move(state._most_recent_commit), std::move(data_or_digest))));
                     });
@@ -208,6 +214,9 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
             // We don't need to lock the partition key if there is no gap between loading paxos
             // state and saving it, and here we're just blindly updating.
             return utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout, [&decision, schema, timeout] {
+                logger.info("Learn paxos: {} {}",
+                    utils::UUID_gen::micros_timestamp(decision.ballot),
+                    decision.update.pretty_printer(schema));
                 return db::system_keyspace::save_paxos_decision(*schema, decision, timeout);
             });
         });

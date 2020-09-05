@@ -2300,13 +2300,17 @@ future<> delete_paxos_decision(const schema& s, const partition_key& key, const 
     // In this case we can remove learned paxos value using ballot's timestamp which
     // guarantees that if there is more recent round it will not be affected.
     static auto cql = format("DELETE most_recent_commit FROM system.{} USING TIMESTAMP ?  WHERE row_key = ? AND cf_id = ?", PAXOS);
+    slogger.info("Skip pruning {}", cql);
 
-    return execute_cql_with_timeout(cql,
+    return make_ready_future<>();
+#if 0
+    execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
             to_legacy(*key.get_compound_type(s), key.representation()),
             s.id()
         ).discard_result();
+#endif
 }
 
 } // namespace system_keyspace
