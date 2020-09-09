@@ -334,6 +334,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
             progress.in_flight--;
         }
     }
+    progress.last_append_reply_time = _clock.now();
 
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
         // accepted

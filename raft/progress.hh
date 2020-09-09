@@ -63,6 +63,8 @@ public:
     // In probe mode, used to limit the amount of entries sent to
     // the follower.
     logical_clock::time_point last_append_time = logical_clock::min();
+    // When we last heard from the follower.
+    logical_clock::time_point last_append_reply_time = logical_clock::min();
 
     // check if a reject packet should be ignored because it was delayed
     // or reordered

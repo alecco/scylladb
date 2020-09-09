@@ -95,7 +95,7 @@ bool tracker::is_quorum_active() const {
     size_t active = 0;
     for (const auto& [id, p] : *this) {
         // FIXME: we should count replies, not sends
-        if (p.id == _my_id || _clock.now() - p.last_append_time < ELECTION_TIMEOUT) {
+        if (p.id == _my_id || _clock.now() - p.last_append_reply_time < ELECTION_TIMEOUT) {
             active++;
         }
     }
