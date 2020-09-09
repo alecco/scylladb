@@ -137,7 +137,7 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-std::pair<std::unique_ptr<raft::server>, state_machine*>
+std::pair<std::unique_ptr<raft::node>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
         initial_state state) {
 
@@ -145,14 +145,14 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
-    auto raft = std::make_unique<raft::server>(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
+    auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage));
 
     return std::make_pair(std::move(raft), &rsm);
 }
 
-future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply) {
+future<std::vector<std::pair<std::unique_ptr<raft::node>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply) {
     raft::configuration config;
-    std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
+    std::vector<std::pair<std::unique_ptr<raft::node>, state_machine*>> rafts;
 
     for (size_t i = 0; i < states.size(); i++) {
         auto uuid = utils::make_random_uuid();
@@ -219,7 +219,7 @@ future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
             tlogger.debug("Adding entry {} on a leader", i);
             raft::command command;
             ser::serialize(command, i);
-            return leader.add_entry(std::move(command), raft::server::wait_type::committed);
+            return leader.add_entry(std::move(command), raft::wait_type::committed);
     });
 
     for (auto& r:  rafts) {

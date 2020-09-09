@@ -262,6 +262,7 @@ public:
     virtual future<> abort() = 0;
 };
 
+class rpc_server_interface;
 class server;
 
 // It is safe for for rpc implementation to drop any message.
@@ -273,7 +274,7 @@ class server;
 class rpc {
 protected:
     // Pointer to the server. Needed for passing RPC messages.
-    server* _server = nullptr;
+    rpc_server_interface* _server = nullptr;
 public:
     virtual ~rpc() {}
 
@@ -326,7 +327,7 @@ public:
     // function is called.
     virtual future<> abort() = 0;
 private:
-    void set_server(raft::server& server) { _server = &server; }
+    void set_server(raft::rpc_server_interface& server) { _server = &server; }
     friend server;
 };
 

@@ -26,42 +26,41 @@
 
 namespace raft {
 
-// A single uniquely identified participant of the Raft group.
-class server {
+class rpc_server_interface {
 public:
-    explicit server(server_id uuid, std::unique_ptr<rpc> rpc,
-        std::unique_ptr<state_machine> state_machine,
-        std::unique_ptr<storage> storage);
+    virtual ~rpc_server_interface() {};
 
-    server(server&&) = delete;
+    // This function is called by append_entries RPC
+    virtual void append_entries(server_id from, append_request_recv append_request) = 0;
 
-    enum class wait_type {
-        committed,
-        applied
-    };
+    // This function is called by append_entries_reply RPC
+    virtual void append_entries_reply(server_id from, append_reply reply) = 0;
 
+    // This function is called to handle RequestVote RPC.
+    virtual void request_vote(server_id from, vote_request vote_request) = 0;
+    // Handle response to RequestVote RPC
+    virtual void request_vote_reply(server_id from, vote_reply vote_reply) = 0;
+
+    // Apply incoming snapshot, future resolves when application is complete
+    virtual future<> apply_snapshot(server_id from, install_snapshot snp) = 0;
+};
+
+enum class wait_type {
+    committed,
+    applied
+};
+
+class node {
+public:
+    virtual ~node() {}
     // Adds command to replicated log
     // Returned future is resolved depending on wait_type parameter:
     //  'committed' - when the entry is committed
-    //  'applied'   - when the entry is applied (happens after it is commited)
+    //  'applied'   - when the entry is applied (happens after it is committed)
     // The function has to be called on a leader, throws not_a_leader exception otherwise.
     // May fail because of internal error or because leader changed and an entry was replaced
     // by another leader. In the later case dropped_entry exception will be returned.
-    future<> add_entry(command command, wait_type type);
-
-    // This function is called by append_entries RPC
-    void append_entries(server_id from, append_request_recv append_request);
-
-    // This function is called by append_entries_reply RPC
-    void append_entries_reply(server_id from, append_reply reply);
-
-    // This function is called to handle RequestVote RPC.
-    void request_vote(server_id from, vote_request vote_request);
-    // Handle response to RequestVote RPC
-    void request_vote_reply(server_id from, vote_reply vote_reply);
-
-    // Apply incomming snapshot, future resolves when application is complete
-    future<> apply_snapshot(server_id from, install_snapshot snp);
+    virtual future<> add_entry(command command, wait_type type) = 0;
 
     // Adds new server to a cluster. If a node is already a member
     // of the cluster does nothing Provided node_info is passed to
@@ -70,26 +69,26 @@ public:
     // Can be called on a leader only, otherwise throws not_a_leader.
     // Cannot be called until previous add/remove server completes
     // otherwise conf_change_in_progress exception is returned.
-    future<> add_server(server_id id, bytes node_info, clock_type::duration timeout);
+    virtual future<> add_server(server_id id, bytes node_info, clock_type::duration timeout) = 0;
 
     // Removes a server from the cluster. If the server is not a member
     // of the cluster does nothing. Can be called on a leader only
     // otherwise throws not_a_leader.
     // Cannot be called until previous add/remove server completes
     // otherwise conf_change_in_progress exception is returned.
-    future<> remove_server(server_id id, clock_type::duration timeout);
+    virtual future<> remove_server(server_id id, clock_type::duration timeout) = 0;
 
     // Load persisted state and start background work that needs
     // to run for this Raft server to function; The object cannot
     // be used until the returned future is resolved.
-    future<> start();
+    virtual future<> start() = 0;
 
     // Stop this Raft server, all submitted but not completed
     // operations will get an error and callers will not be able
     // to know if they succeeded or not. If this server was
     // a leader it will relinquish its leadership and cease
     // replication.
-    future<> abort();
+    virtual future<> abort() = 0;
 
     // This function needs to be called before attempting read
     // from the local state machine. The read can proceed only if
@@ -98,84 +97,15 @@ public:
     // this function the result of all completed
     // add_entries(wait_type::applied) can be observed by direct
     // access to the local state machine.
-    future<> read_barrier();
+    virtual future<> read_barrier() = 0;
 
     // Ad hoc functions for testing
 
-    void make_me_leader();
-private:
-    std::unique_ptr<rpc> _rpc;
-    std::unique_ptr<state_machine> _state_machine;
-    std::unique_ptr<storage> _storage;
-    // Protocol deterministic finite-state machine
-    std::unique_ptr<fsm> _fsm;
-    // id of this server
-    server_id _id;
-    seastar::timer<lowres_clock> _ticker;
-
-    seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
-
-    struct op_status {
-        term_t term; // term the entry was added with
-        promise<> done; // notify when done here
-    };
-
-    // Entries that have a waiter that needs to be notified when the
-    // respective entry is known to be committed.
-    std::map<index_t, op_status> _awaited_commits;
-
-    // Entries that have a waiter that needs to be notified after
-    // the respective entry is applied.
-    std::map<index_t, op_status> _awaited_applies;
-
-    // Contains active snapshot transfers, to be waited on exit.
-    std::unordered_map<server_id, future<>> _snapshot_transfers;
-
-    // The optional is engaged when incomming snapshot is received
-    // And signalled when it is successfully applied or there was an error
-    std::optional<promise<snapshot_reply>> _snapshot_application_done;
-
-    // Called to commit entries (on a leader or otherwise).
-    void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
-
-    // Called when a node wins an election.
-    future<> start_leadership();
-
-    // Called when a node stops being a leader. The returned
-    // future resolves when all the leader background work is
-    // stopped.
-    future<> stop_leadership();
-
-    // This fiber process fsm output, by doing the following steps in that order:
-    //  - persists current term and voter
-    //  - persists unstable log entries on disk.
-    //  - sends out messages
-    future<> io_fiber(index_t stable_idx);
-
-    // This fiber runs in the background and applies committed entries.
-    future<> applier_fiber();
-
-    template <typename T> future<> add_entry_internal(T command, wait_type type);
-    template <typename Message> future<> send_message(server_id id, Message m);
-
-    // Apply a dummy entry. Dummy entry is not propagated to the
-    // state machine, but waiting for it to be "applied" ensures
-    // all previous entries are applied as well.
-    // Resolves when the entry is committed.
-    // The function has to be called on the leader, throws otherwise
-    // May fail because of an internal error or because the leader
-    // has changed and the entry was replaced by another one,
-    // submitted to the new leader.
-    future<> apply_dummy_entry();
-
-    // Send snapshot in the background and notify FSM about the result.
-    void send_snapshot(server_id id, install_snapshot&& snp);
-
-    future<> _applier_status = make_ready_future<>();
-    future<> _io_status = make_ready_future<>();
-
-    friend std::ostream& operator<<(std::ostream& os, const server& s);
+    virtual void make_me_leader() = 0;
 };
+
+std::unique_ptr<node> create_server(server_id uuid, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
+        std::unique_ptr<storage> storage);
 
 } // namespace raft
 

@@ -29,6 +29,105 @@ using namespace std::chrono_literals;
 
 namespace raft {
 
+// A single uniquely identified participant of the Raft group.
+class server : public node, public rpc_server_interface {
+public:
+    explicit server(server_id uuid, std::unique_ptr<rpc> rpc,
+        std::unique_ptr<state_machine> state_machine,
+        std::unique_ptr<storage> storage);
+
+    server(server&&) = delete;
+
+    ~server() {}
+
+    // rpc interface
+    void append_entries(server_id from, append_request_recv append_request) override;
+    void append_entries_reply(server_id from, append_reply reply) override;
+    void request_vote(server_id from, vote_request vote_request) override;
+    void request_vote_reply(server_id from, vote_reply vote_reply) override;
+
+    future<> add_entry(command command, wait_type type);
+    future<> apply_snapshot(server_id from, install_snapshot snp) override;
+    future<> add_server(server_id id, bytes node_info, clock_type::duration timeout) override;
+    future<> remove_server(server_id id, clock_type::duration timeout) override;
+    future<> start() override;
+    future<> abort() override;
+    future<> read_barrier() override;
+    void make_me_leader() override;
+private:
+    std::unique_ptr<rpc> _rpc;
+    std::unique_ptr<state_machine> _state_machine;
+    std::unique_ptr<storage> _storage;
+    // Protocol deterministic finite-state machine
+    std::unique_ptr<fsm> _fsm;
+    // id of this server
+    server_id _id;
+    seastar::timer<lowres_clock> _ticker;
+
+    seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
+
+    struct op_status {
+        term_t term; // term the entry was added with
+        promise<> done; // notify when done here
+    };
+
+    // Entries that have a waiter that needs to be notified when the
+    // respective entry is known to be committed.
+    std::map<index_t, op_status> _awaited_commits;
+
+    // Entries that have a waiter that needs to be notified after
+    // the respective entry is applied.
+    std::map<index_t, op_status> _awaited_applies;
+
+    // Contains active snapshot transfers, to be waited on exit.
+    std::unordered_map<server_id, future<>> _snapshot_transfers;
+
+    // The optional is engaged when incomming snapshot is received
+    // And signalled when it is successfully applied or there was an error
+    std::optional<promise<snapshot_reply>> _snapshot_application_done;
+
+    // Called to commit entries (on a leader or otherwise).
+    void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
+
+    // Called when a node wins an election.
+    future<> start_leadership();
+
+    // Called when a node stops being a leader. The returned
+    // future resolves when all the leader background work is
+    // stopped.
+    future<> stop_leadership();
+
+    // This fiber process fsm output, by doing the following steps in that order:
+    //  - persists current term and voter
+    //  - persists unstable log entries on disk.
+    //  - sends out messages
+    future<> io_fiber(index_t stable_idx);
+
+    // This fiber runs in the background and applies committed entries.
+    future<> applier_fiber();
+
+    template <typename T> future<> add_entry_internal(T command, wait_type type);
+    template <typename Message> future<> send_message(server_id id, Message m);
+
+    // Apply a dummy entry. Dummy entry is not propagated to the
+    // state machine, but waiting for it to be "applied" ensures
+    // all previous entries are applied as well.
+    // Resolves when the entry is committed.
+    // The function has to be called on the leader, throws otherwise
+    // May fail because of an internal error or because the leader
+    // has changed and the entry was replaced by another one,
+    // submitted to the new leader.
+    future<> apply_dummy_entry();
+
+    // Send snapshot in the background and notify FSM about the result.
+    void send_snapshot(server_id id, install_snapshot&& snp);
+
+    future<> _applier_status = make_ready_future<>();
+    future<> _io_status = make_ready_future<>();
+
+    friend std::ostream& operator<<(std::ostream& os, const server& s);
+};
+
 server::server(server_id uuid, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
         std::unique_ptr<storage> storage) :
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)), _storage(std::move(storage)),
@@ -316,8 +415,26 @@ future<> server::abort() {
             _rpc->abort(), _state_machine->abort(), _storage->abort(), std::move(snapshots)).discard_result();
 }
 
+future<> server::add_server(server_id id, bytes node_info, clock_type::duration timeout) {
+    return make_ready_future<>();
+}
+
+// Removes a server from the cluster. If the server is not a member
+// of the cluster does nothing. Can be called on a leader only
+// otherwise throws not_a_leader.
+// Cannot be called until previous add/remove server completes
+// otherwise conf_change_in_progress exception is returned.
+future<> server::remove_server(server_id id, clock_type::duration timeout) {
+    return make_ready_future<>();
+}
+
 void server::make_me_leader() {
     _fsm->become_leader();
+}
+
+std::unique_ptr<node> create_server(server_id uuid, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
+        std::unique_ptr<storage> storage) {
+    return std::make_unique<raft::server>(uuid, std::move(rpc), std::move(state_machine), std::move(storage));
 }
 
 std::ostream& operator<<(std::ostream& os, const server& s) {
