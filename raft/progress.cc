@@ -49,7 +49,6 @@ bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) 
 
 void follower_progress::become_probe() {
     state = state::PROBE;
-    probe_sent = false;
 }
 
 void follower_progress::become_pipeline() {
@@ -65,15 +64,15 @@ void follower_progress::become_snapshot() {
     state = state::SNAPSHOT;
 }
 
-bool follower_progress::can_send_to() {
+bool follower_progress::can_send_to(logical_clock::time_point now) {
     if (state == state::SNAPSHOT) {
         // In this state we are waiting
-        // for snapshot to be transfered
-        // before starting to sync log
+        // for a snapshot to be transferred
+        // before starting to sync the log.
         return false;
     }
 
-    if (state == state::PROBE && probe_sent) {
+    if (state == state::PROBE && now - last_append_time < logical_clock::duration{1}) {
         return false;
     }
 

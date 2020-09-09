@@ -248,13 +248,10 @@ void fsm::tick() {
     if (is_leader()) {
         for (auto& [id, progress] : *_tracker) {
             if (progress.id != _my_id) {
-                if (progress.state == follower_progress::state::PROBE) {
-                    // allow one probe to be resent per follower per time tick
-                    progress.probe_sent = false;
-                } else {
-                    if (progress.in_flight == follower_progress::max_in_flight) {
-                        progress.in_flight--; // allow one more packet to be sent
-                    }
+                if (progress.state != follower_progress::state::PROBE &&
+                    progress.in_flight == follower_progress::max_in_flight) {
+
+                    progress.in_flight--; // allow one more packet to be sent
                 }
                 if (progress.match_idx < _log.stable_idx()) {
                     logger.trace("tick[{}]: replicate to {} because match={} < stable={}",
@@ -442,7 +439,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, progress.id, progress.next_idx, progress.match_idx);
 
-    while (progress.can_send_to()) {
+    while (progress.can_send_to(_clock.now())) {
         index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.stable_idx()) {
             next_idx = index_t(0);
@@ -498,9 +495,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         send_to(progress.id, std::move(req));
 
-        if (progress.state == follower_progress::state::PROBE) {
-            progress.probe_sent = true;
-        } else {
+        if (progress.state != follower_progress::state::PROBE) {
             progress.in_flight++;
             // Optimistically update next send index. In case
             // a message is lost there will be negative reply that
@@ -600,7 +595,6 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
             } else if (follower_progress.state == follower_progress::state::PIPELINE) {
                 os << "PIPELINE, ";
             }
-            // probe_sent
             os << follower_progress.in_flight;
             os << "; ";
         }
