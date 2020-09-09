@@ -23,7 +23,6 @@
 #include <seastar/core/condition-variable.hh>
 #include "raft.hh"
 #include "progress.hh"
-#include "logical_clock.hh"
 #include "log.hh"
 
 namespace raft {
@@ -235,13 +234,6 @@ public:
     bool is_candidate() const {
         return std::holds_alternative<candidate>(_state);
     }
-
-    // 3.4 Leader election
-    // If a follower receives no communication over a period of
-    // time called the election timeout, then it assumes there is
-    // no viable leader and begins an election to choose a new
-    // leader
-    static constexpr logical_clock::duration ELECTION_TIMEOUT = logical_clock::duration{10};
 
     void become_leader();
 
