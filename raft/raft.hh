@@ -150,6 +150,7 @@ struct append_request_recv : public append_request_base {
     // message owns the entries.
     std::vector<log_entry> entries;
 };
+
 struct append_reply {
     struct rejected {
         // Index of non matching entry that caused the request
@@ -180,6 +181,12 @@ struct keep_alive {
     server_id leader_id;
     // The leader's commit_idx.
     index_t leader_commit_idx;
+};
+
+// Use this reply for idle cluster, if follower's
+// current_term/leader_id/leader_commit_idx match ones received
+// from the leader.
+struct keep_alive_reply {
 };
 
 struct vote_request {
