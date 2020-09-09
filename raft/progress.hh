@@ -84,11 +84,13 @@ using progress = std::unordered_map<server_id, follower_progress>;
 class tracker: private progress {
     // Copy of this server's id
     server_id _my_id;
+    // The state machine's logical clock
+    logical_clock& _clock;
 public:
     using progress::begin, progress::end, progress::cbegin, progress::cend;
 
-    tracker(server_id my_id)
-            : _my_id(my_id)
+    tracker(server_id my_id, logical_clock& clock)
+            : _my_id(my_id), _clock(clock)
     {}
 
     // Return progress for a follower

@@ -86,7 +86,7 @@ void fsm::become_leader() {
     _state = leader{};
     _current_leader = _my_id;
     _votes = std::nullopt;
-    _tracker.emplace(_my_id);
+    _tracker.emplace(_my_id, _clock);
     _tracker->set_configuration(_current_config.servers, _log.next_idx());
     replicate();
 }
