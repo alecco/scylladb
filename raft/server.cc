@@ -43,8 +43,8 @@ future<> server::start() {
     auto log_entries = co_await _storage->load_log();
     auto log = raft::log(std::move(snapshot), std::move(log_entries));
     index_t stable_idx = log.stable_idx();
-    _fsm = fsm(_id, term, vote, std::move(log));
-    assert(_fsm.get_current_term() != term_t(0));
+    _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log));
+    assert(_fsm->get_current_term() != term_t(0));
 
     if (snp_id) {
         co_await _state_machine->load_snapshot(snp_id);
@@ -57,7 +57,7 @@ future<> server::start() {
 
     _ticker.arm_periodic(100ms);
     _ticker.set_callback([this] {
-        _fsm.tick();
+        _fsm->tick();
     });
 
     co_return;
@@ -71,7 +71,7 @@ future<> server::add_entry_internal(T command, wait_type type) {
 
     // @todo: ensure the reference to the entry is stable between
     // yields, before removing _log_lock.
-    const log_entry& e = _fsm.add_entry(std::move(command));
+    const log_entry& e = _fsm->add_entry(std::move(command));
 
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
 
@@ -89,19 +89,19 @@ future<> server::apply_dummy_entry() {
     return add_entry_internal(log_entry::dummy(), wait_type::applied);
 }
 void server::append_entries(server_id from, append_request_recv append_request) {
-    _fsm.step(from, std::move(append_request));
+    _fsm->step(from, std::move(append_request));
 }
 
 void server::append_entries_reply(server_id from, append_reply reply) {
-    _fsm.step(from, std::move(reply));
+    _fsm->step(from, std::move(reply));
 }
 
 void server::request_vote(server_id from, vote_request vote_request) {
-    _fsm.step(from, std::move(vote_request));
+    _fsm->step(from, std::move(vote_request));
 }
 
 void server::request_vote_reply(server_id from, vote_reply vote_reply) {
-    _fsm.step(from, std::move(vote_reply));
+    _fsm->step(from, std::move(vote_reply));
 }
 
 void server::notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries) {
@@ -167,7 +167,7 @@ future<> server::io_fiber(index_t last_stable) {
     logger.trace("[{}] io_fiber start", _id);
     try {
         while (true) {
-            auto batch = co_await _fsm.poll_output();
+            auto batch = co_await _fsm->poll_output();
 
             if (batch.term != term_t{}) {
                 // Current term and vote are always persisted
@@ -225,10 +225,10 @@ void server::send_snapshot(server_id dst, install_snapshot&& snp) {
         _snapshot_transfers.erase(dst);
         if (f.failed()) {
             logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
-            _fsm.snapshot_status(dst, false);
+            _fsm->snapshot_status(dst, false);
         } else {
             logger.trace("[{}] Transferred snapshot to {}", _id, dst);
-            _fsm.snapshot_status(dst, true);
+            _fsm->snapshot_status(dst, true);
         }
 
     });
@@ -238,7 +238,7 @@ void server::send_snapshot(server_id dst, install_snapshot&& snp) {
 }
 
 future<> server::apply_snapshot(server_id from, install_snapshot snp) {
-    _fsm.step(from, std::move(snp));
+    _fsm->step(from, std::move(snp));
     // Only one snapshot can be received at a time
     assert(! _snapshot_application_done);
     _snapshot_application_done = promise<snapshot_reply>();
@@ -277,7 +277,7 @@ future<> server::applier_fiber() {
 }
 
 future<> server::read_barrier() {
-    if (_fsm.can_read()) {
+    if (_fsm->can_read()) {
         co_return;
     }
 
@@ -287,7 +287,7 @@ future<> server::read_barrier() {
 
 future<> server::abort() {
     logger.trace("abort() called");
-    _fsm.stop();
+    _fsm->stop();
     {
         // there is not explicit close for the pipe!
         auto tmp = std::move(_apply_entries.writer);
@@ -317,7 +317,7 @@ future<> server::abort() {
 }
 
 void server::make_me_leader() {
-    _fsm.become_leader();
+    _fsm->become_leader();
 }
 
 std::ostream& operator<<(std::ostream& os, const server& s) {

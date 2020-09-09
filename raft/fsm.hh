@@ -223,7 +223,6 @@ class fsm {
     }
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log);
-    fsm() = default;
 
     bool is_leader() const {
         return std::holds_alternative<leader>(_state);

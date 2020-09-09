@@ -107,10 +107,10 @@ private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
     std::unique_ptr<storage> _storage;
+    // Protocol deterministic finite-state machine
+    std::unique_ptr<fsm> _fsm;
     // id of this server
     server_id _id;
-    // Protocol deterministic finite-state machine
-    fsm _fsm;
     seastar::timer<lowres_clock> _ticker;
 
     seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
