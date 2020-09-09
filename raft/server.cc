@@ -302,6 +302,10 @@ future<> server::abort() {
     _awaited_applies.clear();
     _ticker.cancel();
 
+    if (_snapshot_application_done) {
+        _snapshot_application_done->set_exception(std::runtime_error("Snapshot application aborted"));
+    }
+
     auto snp_futures = std::views::values(_snapshot_transfers);
     // For c++20 ranges iterator to an end is of a different type, so adaptor is needed
     // since seastar primitives are not c++20 ready.
