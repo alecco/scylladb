@@ -248,7 +248,7 @@ void fsm::tick() {
     if (is_leader()) {
         for (auto& [id, progress] : *_tracker) {
             if (progress.id != _my_id) {
-                if (progress.state != follower_progress::state::PROBE &&
+                if (progress.state == follower_progress::state::PIPELINE &&
                     progress.in_flight == follower_progress::max_in_flight) {
 
                     progress.in_flight--; // allow one more packet to be sent
@@ -495,7 +495,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         send_to(progress.id, std::move(req));
 
-        if (progress.state != follower_progress::state::PROBE) {
+        if (progress.state == follower_progress::state::PIPELINE) {
             progress.in_flight++;
             // Optimistically update next send index. In case
             // a message is lost there will be negative reply that

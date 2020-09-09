@@ -65,20 +65,21 @@ void follower_progress::become_snapshot() {
 }
 
 bool follower_progress::can_send_to(logical_clock::time_point now) {
-    if (state == state::SNAPSHOT) {
+    switch (state) {
+    case state::PROBE:
+        return now - last_append_time >= logical_clock::duration{1};
+    case state::PIPELINE:
+        // allow `max_in_flight` outstanding indexes
+        // FIXME: make it smarter
+        return in_flight < follower_progress::max_in_flight;
+    case state::SNAPSHOT:
         // In this state we are waiting
         // for a snapshot to be transferred
         // before starting to sync the log.
         return false;
     }
-
-    if (state == state::PROBE && now - last_append_time < logical_clock::duration{1}) {
-        return false;
-    }
-
-    // allow `max_in_flight` outstanding indexes
-    // FIXME: make it smarter
-    return in_flight < follower_progress::max_in_flight;
+    assert(false);
+    return false;
 }
 
 void tracker::set_configuration(const std::vector<server_address>& servers, index_t next_idx) {
