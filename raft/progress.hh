@@ -59,9 +59,10 @@ public:
     size_t in_flight = 0;
     static constexpr size_t max_in_flight = 10;
 
-    // Set when a message is sent to the follower
-    // reset on a tick. Used to decide if keep alive is needed.
-    bool sent_append = false;
+    // Set when a message is sent to the follower.
+    // Used to decide if a separate keep alive message is needed
+    // within this tick.
+    logical_clock::time_point last_append_time = logical_clock::min();
 
     // check if a reject packet should be ignored because it was delayed
     // or reordered

@@ -88,11 +88,6 @@ void tracker::set_configuration(const std::vector<server_address>& servers, inde
             continue;
         }
         this->progress::emplace(s.id, follower_progress{s.id, next_idx});
-        auto i = this->progress::emplace(s.id, follower_progress{s.id, next_idx});
-        if (s.id == _my_id) {
-            // The leader itself is always active.
-            i.first->second.sent_append = true;
-        }
     }
 }
 
@@ -100,7 +95,7 @@ bool tracker::is_quorum_active() const {
     size_t active = 0;
     for (const auto& [id, p] : *this) {
         // FIXME: we should count replies, not sends
-        if (p.sent_append) {
+        if (p.id == _my_id || _clock.now() - p.last_append_time < ELECTION_TIMEOUT) {
             active++;
         }
     }

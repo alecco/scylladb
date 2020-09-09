@@ -261,7 +261,7 @@ void fsm::tick() {
                         _my_id, progress.id, progress.match_idx, _log.stable_idx());
                     replicate_to(progress, true);
                 }
-                if (!progress.sent_append) {
+                if (_clock.now() - progress.last_append_time >= logical_clock::duration{1}) {
                     keep_alive ka {
                         .current_term = _current_term,
                         .leader_id = _current_leader,
@@ -273,7 +273,6 @@ void fsm::tick() {
                     logger.trace("tick[{}]: send keep aplive to {}", _my_id, progress.id);
                     send_to(progress.id, std::move(ka));
                 }
-                progress.sent_append = false;
             }
         }
     } else if (is_past_election_timeout()) {
@@ -508,7 +507,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             // will re-send idx.
             progress.next_idx++;
         }
-        progress.sent_append = true;
+        progress.last_append_time = _clock.now();
     }
 }
 
