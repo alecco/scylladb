@@ -269,28 +269,29 @@ using update = std::variant<entries, new_leader>;
 struct test_case {
     const std::string name;
     const size_t nodes;
-    raft::term_t term;
-    const size_t leader;
+    raft::term_t initial_term;
+    const size_t initial_leader;
     const std::vector<std::initializer_list<log_entry>> initial_states;
     // const std::vector<raft::command> updates;
     const std::vector<update> updates;
-    test_case(std::string name, size_t nodes, int term, size_t leader,
+    test_case(std::string name, size_t nodes, int initial_term, size_t initial_leader,
             std::vector<std::initializer_list<log_entry>> initial_states,
             std::vector<update> updates) : name(name),
-            nodes(nodes), term(raft::term_t(term)), leader(leader), initial_states(initial_states), updates(updates) {
-        assert(leader < nodes && "Leader higher than total nodes");
+            nodes(nodes), initial_term(raft::term_t(initial_term)), initial_leader(initial_leader),
+            initial_states(initial_states), updates(updates) {
+        assert(initial_leader < nodes && "Leader higher than total nodes");
     }
 };
 
 // Run test case (name, nodes, leader, initial logs, updates)
 future<int> run_test(test_case test) {
-    auto leader = test.leader;
+    auto leader = test.initial_leader;
 
     std::vector<initial_state> states(test.nodes);       // Server initial states
     std::vector<std::vector<int>> committed(test.nodes); // Actual outputs for each server
-    states[leader].term = test.term;
+    states[leader].term = test.initial_term;
 fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial log size {}\n",
-            test.name, test.nodes, test.term, test.initial_states.size(),
+            test.name, test.nodes, test.initial_term, test.initial_states.size(),
             leader, leader < test.initial_states.size()?
             test.initial_states[leader].size() : 0);
 
@@ -299,7 +300,7 @@ fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial 
     if (leader < test.initial_states.size()) {
         for (auto log_initializer: test.initial_states[leader]) {
             log_entry le(log_initializer);
-            if (le.term > test.term) {
+            if (le.term > test.initial_term) {
                 break;
             }
 fmt::print("run_test: pushing expected value {}\n", le.value);
@@ -386,24 +387,30 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
-        // name, servers, current term, leader, initial logs (each), updates
-        {"simple_3_01", 3, 2, 1, {{{1,99}},{{2,10}}},
-            {entries{1,2},new_leader{1},new_leader{2},entries{3,4},new_leader{0},entries{5,6}},},
-#if 0
-        {"simple_1_1_0_e*_1", 1, 1, 0, {{}},
-            {entries{1,2}}},
-        {"simple_1_1_0_1_2", 1, 1, 0, {{{1,10}}},
-            {entries{1,2}},},
-        {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
-            {entries{1,2}},},
-        {"simple_2_1_0_1_2", 2, 1, 0, {{{1,10}}},
-            {entries{1,2},new_leader{1},entries{3,4}},},
+        {.name = "simple_3_01", .nodes = 3, .initial_term = 2, .initial_leader = 1,
+            .initial_states = {{{1,99}},{{2,10}}},
+            .updates = {entries{1,2},new_leader{1},new_leader{2},entries{3,4},new_leader{0},entries{5,6}},},
+        {.name = "simple_1_1_0_e*_1", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+            .initial_states = {{}},
+            .updates = {entries{1,2}}},
+        {.name = "simple_1_1_0_1_2", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+            .initial_states = {{{1,10}}},
+            .updates = {entries{1,2}},},
+        {.name = "simple_2_1_0_1_2", .nodes = 2, .initial_term = 1, .initial_leader = 0,
+            .initial_states = {{{1,10}}},
+            .updates = {entries{1,2}},},
+        {.name = "simple_2_1_0_1_2", .nodes = 2, .initial_term = 1, .initial_leader = 0,
+            .initial_states = {{{1,10}}},
+            .updates = {entries{1,2},new_leader{1},entries{3,4}},},
         // Follower has to remove old entry
-        {"simple_3_2_1_1_2", 3, 2, 1, {{{1,10}}},
-            {entries{1,2}},},
+        {.name = "simple_3_2_1_1_2", .nodes = 3, .initial_term = 2, .initial_leader = 1,
+            .initial_states = {{{1,10}}},
+            .updates = {entries{1,2}},},
+#if 0
         // TODO: hangs as 1 and 2 don't want to vote for 1
-        {"simple_3_3_0_0_1_1", 3, 3, 0, {{},{{1,10}},{{2,30}}},
-            {entries{1,2,3}},},
+        {.name = "simple_3_3_0_0_1_1", .nodes = 3, .initial_term = 3, .initial_leader = 0,
+            .initial_states = {{},{{1,10}},{{2,30}}},
+            .updates = {entries{1,2,3}},},
 #endif
     };
 
