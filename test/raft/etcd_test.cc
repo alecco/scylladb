@@ -278,7 +278,6 @@ future<int> run_test(test_case test) {
     auto leader = test.leader;
 
     std::vector<initial_state> states(test.nodes);       // Server initial states
-    std::vector<int> expected;                           // Expected output for Raft
     std::vector<std::vector<int>> committed(test.nodes); // Actual outputs for each server
     states[leader].term = test.term;
 fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial log size {}\n",
@@ -286,6 +285,8 @@ fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial 
             leader, leader < test.initial_states.size()?
             test.initial_states[leader].size() : 0);
 
+    // Build expected result log as initial leader log and subsequent updates
+    std::vector<int> expected;                           // Expected output for Raft
     if (leader < test.initial_states.size()) {
         for (auto log_initializer: test.initial_states[leader]) {
             log_entry le(log_initializer);
@@ -361,6 +362,7 @@ fmt::print("run_test: {} checking committed\n", test.name);
     for (size_t i = 0; i < committed.size(); ++i) {
 fmt::print("run_test: {}  server[{}] {} vs expected {} \n", test.name, i, committed[i], expected);
         if (committed[i] != expected) {
+fmt::print("Failed\n");
             co_return 1;
         }
     }
