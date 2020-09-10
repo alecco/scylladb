@@ -7,6 +7,29 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 
+
+// Test Raft library with declarative test definitions
+//
+//  For each test defined by
+//      (replication_tests)
+//      - Name
+//      - Number of servers (nodes)
+//      - Current term
+//      - Initial leader
+//      - Initial states for each server (log entries)
+//      - Updates to be procesed
+//          - append to log (trickles from leader to the rest)
+//          - leader change
+//          - configuration change
+//
+//      (run_test)
+//      - Create the servers and initialize
+//      - Create expected final log state
+//      - Process updates one by one
+//      - Wait until all servers have logs of size of expected entries
+//      - Check server logs
+//
+
 // TODO
 //      - Snapshots
 
@@ -262,6 +285,7 @@ fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial 
             test.name, test.nodes, test.term, test.initial_states.size(),
             leader, leader < test.initial_states.size()?
             test.initial_states[leader].size() : 0);
+
     if (leader < test.initial_states.size()) {
         for (auto log_initializer: test.initial_states[leader]) {
             log_entry le(log_initializer);
