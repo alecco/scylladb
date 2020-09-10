@@ -387,10 +387,7 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
-        {.name = "simple_3_01", .nodes = 3, .initial_term = 2, .initial_leader = 1,
-            .initial_states = {{{1,99}},{{2,10}}},
-            .updates = {entries{1,2},new_leader{1},new_leader{2},entries{3,4},new_leader{0},entries{5,6}},},
-        {.name = "simple_1_1_0_e*_1", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+        {.name = "simple_1_01", .nodes = 1, .initial_term = 1, .initial_leader = 0,
             .initial_states = {{}},
             .updates = {entries{1,2}}},
         {.name = "simple_1_1_0_1_2", .nodes = 1, .initial_term = 1, .initial_leader = 0,
@@ -403,9 +400,12 @@ int main(int argc, char* argv[]) {
             .initial_states = {{{1,10}}},
             .updates = {entries{1,2},new_leader{1},entries{3,4}},},
         // Follower has to remove old entry
-        {.name = "simple_3_2_1_1_2", .nodes = 3, .initial_term = 2, .initial_leader = 1,
+        {.name = "simple_3_01", .nodes = 3, .initial_term = 2, .initial_leader = 1,
             .initial_states = {{{1,10}}},
             .updates = {entries{1,2}},},
+        {.name = "simple_3_01", .nodes = 3, .initial_term = 2, .initial_leader = 1,
+            .initial_states = {{{1,99}},{{2,10}}},   // 99 removed, 10 kept
+            .updates = {entries{1,2},new_leader{1},new_leader{2},entries{3,4}}},
 #if 0
         // TODO: hangs as 1 and 2 don't want to vote for 1
         {.name = "simple_3_3_0_0_1_1", .nodes = 3, .initial_term = 3, .initial_leader = 0,
