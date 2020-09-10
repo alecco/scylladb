@@ -7,6 +7,9 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 
+// TODO
+//      - Snapshots
+
 using namespace std::chrono_literals;
 using namespace std::placeholders;
 
@@ -28,12 +31,16 @@ public:
     future<> apply(const std::vector<raft::command_cref> commands) override {
         return _apply(_id, _done, commands);
     }
-    future<raft::snapshot_id> take_snaphot() override {
+    // TODO
+    virtual future<raft::snapshot_id> take_snaphot() override {
         return make_ready_future<raft::snapshot_id>(raft::snapshot_id());
     }
-    void drop_snapshot(raft::snapshot_id id) override {}
-    future<> load_snapshot(raft::snapshot_id id) override {
-        return make_ready_future<>();
+    // TODO
+    virtual void drop_snapshot(raft::snapshot_id id) override {
+    }
+    // TODO
+    virtual future<> load_snapshot(raft::snapshot_id id) override {
+         return make_ready_future<>();
     };
     future<> abort() override {
         return make_ready_future<>();
@@ -161,6 +168,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::node>, state_machine*>>> crea
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
         states[i].snapshot.config = config;
+// XXX        snapshots[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, states[i])).first;
         co_await raft.start();
     }
@@ -173,14 +181,14 @@ struct log_entry {
     int value;
 };
 
-std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list) {
+std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list, unsigned start_idx = 1) {
     std::vector<raft::log_entry> log;
 
-    unsigned i = 0;
+    unsigned i = start_idx;
     for (auto e : list) {
         raft::command command;
         ser::serialize(command, e.value);
-        log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(++i), std::move(command)});
+        log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++), std::move(command)});
     }
 
     return log;
