@@ -405,24 +405,29 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
+        // 1 nodes gets 2 client entries
         {.name = "simple_1_01", .nodes = 1, .initial_term = 1, .initial_leader = 0,
             .initial_states = {{}},
             .updates = {entries{1,2}}},
-        {.name = "simple_1_1_0_1_2", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+        // 1 nodes and 1 entry in the log gets 2 client entries
+        {.name = "simple_02", .nodes = 1, .initial_term = 1, .initial_leader = 0,
             .initial_states = {{{1,10}}},
             .updates = {entries{1,2}},},
-        {.name = "simple_2_1_0_1_2", .nodes = 2, .initial_term = 1, .initial_leader = 0,
+        // 2 nodes and 1 entry in leader's log gets 2 client entries
+        {.name = "simple_03", .nodes = 2, .initial_term = 1, .initial_leader = 0,
             .initial_states = {{{1,10}}},
             .updates = {entries{1,2}},},
-        {.name = "simple_2_1_0_1_2", .nodes = 2, .initial_term = 1, .initial_leader = 0,
+        // 2 nodes and 1 entry in the log gets 2 client entries
+        {.name = "simple_04", .nodes = 2, .initial_term = 1, .initial_leader = 0,
             .initial_states = {{{1,10}}},
             .updates = {entries{1,2},new_leader{1},entries{3,4}},},
-        // Follower has to remove old entry
-        {.name = "simple_3_01", .nodes = 3, .initial_term = 2, .initial_leader = 1,
+        // 3 nodes, follower has spurious entry
+        {.name = "simple_05", .nodes = 3, .initial_term = 2, .initial_leader = 1,
             .initial_states = {{{1,10}}},
             .updates = {entries{1,2}},},
-        {.name = "simple_3_01", .nodes = 3, .initial_term = 2, .initial_leader = 1,
-            .initial_states = {{{1,99}},{{2,10}}},   // 99 removed, 10 kept
+        // 3 nodes, term 2, follower has spurious entry
+        {.name = "simple_06", .nodes = 3, .initial_term = 2, .initial_leader = 1,
+            .initial_states = {{{1,99}},{{2,10}}},
             .updates = {entries{1,2},new_leader{1},new_leader{2},entries{3,4}}},
 #if 0
         // TODO: hangs as 1 and 2 don't want to vote for 1
