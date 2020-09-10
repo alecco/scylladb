@@ -405,8 +405,8 @@ int main(int argc, char* argv[]) {
 
     std::vector<test_case> replication_tests = {
         // name, servers, current term, leader, initial logs (each), updates
-        {"simple_3_01", 3, 1, 1, {{},{{1,10}}},
-            {entries{1,2},new_leader{1},new_leader{2},entries{3,4}},},
+        {"simple_3_01", 3, 2, 1, {{{1,99}},{{2,10}}},
+            {entries{1,2},new_leader{1},new_leader{2},entries{3,4},new_leader{0},entries{5,6}},},
 #if 0
         {"simple_1_1_0_e*_1", 1, 1, 0, {{}},
             {entries{1,2}}},
