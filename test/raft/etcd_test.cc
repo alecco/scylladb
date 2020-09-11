@@ -269,18 +269,11 @@ using update = std::variant<entries, new_leader>;
 struct test_case {
     const std::string name;
     const size_t nodes;
-    raft::term_t initial_term;
-    const size_t initial_leader;
+    uint64_t initial_term;
+    const uint64_t initial_leader;
     const std::vector<std::initializer_list<log_entry>> initial_states;
     // const std::vector<raft::command> updates;
     const std::vector<update> updates;
-    test_case(std::string name, size_t nodes, int initial_term, size_t initial_leader,
-            std::vector<std::initializer_list<log_entry>> initial_states,
-            std::vector<update> updates) : name(name),
-            nodes(nodes), initial_term(raft::term_t(initial_term)), initial_leader(initial_leader),
-            initial_states(initial_states), updates(updates) {
-        assert(initial_leader < nodes && "Leader higher than total nodes");
-    }
 };
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -289,7 +282,8 @@ future<int> run_test(test_case test) {
 
     std::vector<initial_state> states(test.nodes);       // Server initial states
     std::vector<std::vector<int>> committed(test.nodes); // Actual outputs for each server
-    states[leader].term = test.initial_term;
+
+    states[leader].term = raft::term_t{test.initial_term};
 fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial log size {}\n",
             test.name, test.nodes, test.initial_term, test.initial_states.size(),
             leader, leader < test.initial_states.size()?
