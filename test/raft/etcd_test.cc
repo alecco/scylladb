@@ -265,6 +265,7 @@ struct test_case {
     const std::vector<std::initializer_list<log_entry>> initial_states;
     // const std::vector<raft::command> updates;
     const std::vector<update> updates;
+    const std::optional<std::vector<int>> expected;
 };
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -288,21 +289,24 @@ fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial 
 
     // Build expected result log as initial leader log and subsequent updates
     std::vector<int> expected;                           // Expected output for Raft
-    if (leader < test.initial_states.size()) {
-        for (auto log_initializer: test.initial_states[leader]) {
-            log_entry le(log_initializer);
-            if (le.term > test.initial_term) {
-                break;
-            }
+    if (test.expected) {
+        expected = *test.expected;
+    } else {
+        if (leader < test.initial_states.size()) {
+            for (auto log_initializer: test.initial_states[leader]) {
+                log_entry le(log_initializer);
+                if (le.term > test.initial_term) {
+                    break;
+                }
 fmt::print("run_test: pushing expected value {}\n", le.value);
-            expected.push_back(le.value);
+                expected.push_back(le.value);
+            }
         }
-    }
-fmt::print("run_test: XXX 1\n");
-    for (auto update: test.updates) {
-        if (std::holds_alternative<entries>(update)) {
-            auto updates = std::get<entries>(update);
-            expected.insert(expected.end(), updates.begin(), updates.end());
+        for (auto update: test.updates) {
+            if (std::holds_alternative<entries>(update)) {
+                auto updates = std::get<entries>(update);
+                expected.insert(expected.end(), updates.begin(), updates.end());
+            }
         }
     }
     size_t expected_entries = expected.size();
@@ -378,10 +382,12 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
-        // 1 nodes gets 2 client entries
+        // 1 nodes gets 2 client entries, custom expected result
         {.name = "simple_1_01", .nodes = 1, .initial_term = 1, .initial_leader = 0,
             .initial_states = {{}},
-            .updates = {entries{1,2}}},
+            .updates = {entries{1,2}},
+            .expected = {{1,2}},
+        },
         // 1 nodes and 1 entry in the log gets 2 client entries
         {.name = "simple_02", .nodes = 1, .initial_term = 1, .initial_leader = 0,
             .initial_states = {{{1,10}}},
