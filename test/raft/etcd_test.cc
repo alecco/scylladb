@@ -270,7 +270,7 @@ struct test_case {
     const std::string name;
     const size_t nodes;
     uint64_t initial_term;
-    const uint64_t initial_leader;
+    const std::optional<uint64_t> initial_leader;
     const std::vector<std::initializer_list<log_entry>> initial_states;
     // const std::vector<raft::command> updates;
     const std::vector<update> updates;
@@ -278,10 +278,16 @@ struct test_case {
 
 // Run test case (name, nodes, leader, initial logs, updates)
 future<int> run_test(test_case test) {
-    auto leader = test.initial_leader;
-
     std::vector<initial_state> states(test.nodes);       // Server initial states
     std::vector<std::vector<int>> committed(test.nodes); // Actual outputs for each server
+
+    size_t leader;
+    if (test.initial_leader) {
+        leader = *test.initial_leader;
+    } else {
+        // TODO: trigger election
+        leader = 0;
+    }
 
     states[leader].term = raft::term_t{test.initial_term};
 fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial log size {}\n",
