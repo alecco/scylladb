@@ -1,3 +1,4 @@
+#include <random>
 #include <fmt/format.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
@@ -14,6 +15,23 @@ static seastar::logger tlogger("test");
 struct snapshot_value {
     int value = -1;
 };
+
+std::mt19937 random_generator() {
+    std::random_device rd;
+    // In case of errors, replace the seed with a fixed value to get a deterministic run.
+    auto seed = rd();
+    std::cout << "Random seed: " << seed << "\n";
+    return std::mt19937(seed);
+}
+
+int rand() {
+    static thread_local std::uniform_int_distribution<int> dist(0, std::numeric_limits<uint8_t>::max());
+    static thread_local auto gen = random_generator();
+
+    return dist(gen);
+}
+
+bool drop_replication = false;
 
 // lets assume one snaoshot per server
 std::unordered_map<raft::server_id, snapshot_value> snapshots;
@@ -96,6 +114,9 @@ public:
         return net[id]->_server->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
+        if (drop_replication && !(rand() % 5)) {
+            return make_ready_future<>();
+        }
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
@@ -110,6 +131,9 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+        if (drop_replication && !(rand() % 5)) {
+            return make_ready_future<>();
+        }
         net[id]->_server->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
@@ -348,6 +372,8 @@ int main(int argc, char* argv[]) {
 
     seastar::app_template::config cfg;
     seastar::app_template app(cfg);
+    app.add_options()
+        ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
 
     using test_fn = std::function<future<>()>;
 
@@ -365,7 +391,9 @@ int main(int argc, char* argv[]) {
         test_simple_snapshot
     };
 
-    return app.run(argc, argv, [&tests] () -> future<> {
+    return app.run(argc, argv, [&tests, &app] () -> future<> {
+        drop_replication = app.configuration()["drop-replication"].as<bool>();
+
         int i = 0;
         for (auto& t : tests) {
             tlogger.debug("test: {}", i++);
