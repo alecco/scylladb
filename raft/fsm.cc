@@ -473,19 +473,20 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             req.entries.push_back(std::cref(entry));
             logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
                 _my_id, progress.id, entry.idx, entry.term);
+
+            if (progress.state == follower_progress::state::PIPELINE) {
+                progress.in_flight++;
+                // Optimistically update next send index. In case
+                // a message is lost there will be negative reply that
+                // will re-send idx.
+                progress.next_idx++;
+            }
         } else {
             logger.trace("replicate_to[{}->{}]: send empty", _my_id, progress.id);
         }
 
         send_to(progress.id, std::move(req));
 
-        if (progress.state == follower_progress::state::PIPELINE) {
-            progress.in_flight++;
-            // Optimistically update next send index. In case
-            // a message is lost there will be negative reply that
-            // will re-send idx.
-            progress.next_idx++;
-        }
         progress.last_append_time = _clock.now();
     }
 }
