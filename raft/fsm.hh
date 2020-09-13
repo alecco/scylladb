@@ -305,7 +305,7 @@ void fsm::step(server_id from, Message&& msg) {
     } else if (msg.current_term < _current_term) {
         if constexpr (std::is_same_v<Message, append_request_recv>) {
             // Instructs the leader to step down.
-            append_reply reply{_current_term, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
+            append_reply reply{_current_term, _commit_idx, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
             send_to(from, std::move(reply));
         } else if constexpr (std::is_same_v<Message, install_snapshot>) {
             send_to(from, snapshot_reply{ .success = false });

@@ -167,26 +167,8 @@ struct append_reply {
     };
     // Current term, for leader to update itself.
     term_t current_term;
+    index_t commit_idx;
     std::variant<rejected, accepted> result;
-};
-
-// This is an extension of Raft used for keepalive aggregation
-// between multiple groups.
-struct keep_alive {
-    // The leader's term.
-    term_t current_term;
-    // So that the follower can redirect clients.
-    // Here it has to be included since this will be sent not as
-    // a point to point message but as part of an aggregated one.
-    server_id leader_id;
-    // The leader's commit_idx.
-    index_t leader_commit_idx;
-};
-
-// Use this reply for idle cluster, if follower's
-// current_term/leader_id/leader_commit_idx match ones received
-// from the leader.
-struct keep_alive_reply {
 };
 
 struct vote_request {
@@ -216,7 +198,7 @@ struct snapshot_reply {
     bool success;
 };
 
-using rpc_message = std::variant<keep_alive, append_request_send, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply>;
+using rpc_message = std::variant<append_request_send, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply>;
 
 // we need something that can be truncated form both sides.
 // std::deque move constructor is not nothrow hence cannot be used
@@ -303,15 +285,6 @@ public:
     // resolves when message is sent. It does not mean it was
     // received.
     virtual future<> send_vote_reply(server_id id, const vote_reply& vote_reply) = 0;
-
-    // This is an extension of Raft used for keepalive aggregation
-    // between multiple groups This RPC does not return anything
-    // since it will be aggregated for many groups but this means
-    // that it cannot reply with larger term and convert a leader
-    // that sends it to a follower. A new leader that detects
-    // stale leader by processing this message needs to contact it
-    // explicitly by issuing empty send_append_entries call.
-    virtual void send_keepalive(server_id id, const keep_alive& keep_alive) = 0;
 
     // When a new server is learn this function is called with the
     // info about the server.

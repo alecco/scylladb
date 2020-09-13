@@ -235,9 +235,6 @@ future<> server::send_message(server_id id, Message m) {
         using T = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<T, append_reply>) {
               return _rpc->send_append_entries_reply(id, m);
-          } else if constexpr (std::is_same_v<T, keep_alive>) {
-              _rpc->send_keepalive(id, m);
-              return make_ready_future<>();
           } else if constexpr (std::is_same_v<T, append_request_send>) {
               return _rpc->send_append_entries(id, m);
           } else if constexpr (std::is_same_v<T, vote_request>) {

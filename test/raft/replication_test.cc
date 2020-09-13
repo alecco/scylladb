@@ -121,15 +121,6 @@ public:
         net[id]->_server->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
-    void send_keepalive(raft::server_id id, const raft::keep_alive& keep_alive) {
-        raft::append_request_recv req;
-        req.current_term = keep_alive.current_term;
-        req.leader_id = keep_alive.leader_id;
-        req.prev_log_idx = raft::index_t(0);
-        req.prev_log_term = raft::term_t(0);
-        req.leader_commit_idx = keep_alive.leader_commit_idx;
-        net[id]->_server->append_entries(_id, std::move(req));
-    }
     virtual void add_server(raft::server_id id, bytes node_info) {}
     virtual void remove_server(raft::server_id id) {}
     virtual future<> abort() { return make_ready_future<>(); }
