@@ -329,7 +329,7 @@ future<int> run_test(test_case test) {
             leader = std::get<new_leader>(update);
 
             // co_await new_leader.read_barrier();
-            co_await rafts[leader].first->make_leader();
+            co_await rafts[leader].first->make_me_leader();
         }
     }
 
