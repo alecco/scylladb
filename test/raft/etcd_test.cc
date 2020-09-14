@@ -305,7 +305,7 @@ future<int> run_test(test_case test) {
 
     auto rafts = co_await create_cluster(states);
 
-    co_await rafts[leader].first->make_me_leader();
+    rafts[leader].first->make_me_leader();
 
     // Process all updates in order
     for (auto update: test.updates) {
@@ -320,7 +320,7 @@ future<int> run_test(test_case test) {
             leader = std::get<new_leader>(update);
 
             // co_await new_leader.read_barrier();
-            co_await rafts[leader].first->make_leader();
+            co_await rafts[leader].first->elect_me_leader();
         }
     }
 
