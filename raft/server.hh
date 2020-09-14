@@ -101,7 +101,7 @@ public:
 
     // Ad hoc functions for testing
 
-    virtual void make_me_leader() = 0;
+    virtual future<> make_me_leader() = 0;
 };
 
 std::unique_ptr<node> create_server(server_id uuid, std::unique_ptr<rpc> rpc, std::unique_ptr<state_machine> state_machine,
