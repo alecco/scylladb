@@ -123,7 +123,6 @@ public:
         return net[id]->_server->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
-fmt::print("XXX [{}] send_append_entries: to {}\n", short_id(_id), short_id(id));
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
@@ -142,12 +141,10 @@ fmt::print("XXX [{}] send_append_entries: to {}\n", short_id(_id), short_id(id))
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-fmt::print("XXX [{}] send_vote_request: to {}\n", short_id(_id), short_id(id));
         net[id]->_server->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-fmt::print("XXX [{}] send_vote_reply: to {}\n", short_id(_id), short_id(id));
         net[id]->_server->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
@@ -213,7 +210,7 @@ future<std::vector<std::pair<std::unique_ptr<server>, state_machine*>>> create_c
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
         states[i].snapshot.config = config;
-// XXX        snapshots[s.id] = states[i].snp_value;
+// TODO     snapshots[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, states[i])).first;
         co_await raft.start();
     }
@@ -256,24 +253,14 @@ std::vector<raft::command> create_commands(std::vector<T> list) {
 future<> apply_changes(std::vector<int> &res, size_t expected, raft::server_id id, promise<>& done,
         const std::vector<raft::command_cref>& commands) {
     tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
-// fmt::print("apply_changes: start\n");
-std::vector<int> vals;
-for (auto&& d : commands) {
-    auto is = ser::as_input_stream(d);
-    int n = ser::deserialize(is, boost::type<int>());
-    vals.push_back(n);
-}
-fmt::print("apply_changes[{}]: got {} entries: {}\n", short_id(id), commands.size(), vals);
+
     for (auto&& d : commands) {
         auto is = ser::as_input_stream(d);
         int n = ser::deserialize(is, boost::type<int>());
         res.push_back(n);
-// fmt::print("apply_changes[{}]: pushed {}\n", short_id(id), n);
         tlogger.debug("{}: apply_changes {}", id, n);
     }
-// fmt::print("apply_changes[{}]: committed {} expected {}\n", short_id(id), res.size(), expected);
     if (res.size() >= expected) {
-// fmt::print("apply_changes[{}]: done\n", short_id(id));
         done.set_value();
     }
     return make_ready_future<>();
@@ -308,15 +295,11 @@ future<int> run_test(test_case test) {
     if (test.initial_leader) {
         leader = *test.initial_leader;
     } else {
-        // TODO: trigger election
+        // TODO: trigger election (deterministic)
         leader = 0;
     }
 
     states[leader].term = raft::term_t{test.initial_term};
-fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial log size {}\n",
-            test.name, test.nodes, test.initial_term, test.initial_states.size(),
-            leader, leader < test.initial_states.size()?
-            test.initial_states[leader].size() : 0);
 
     // Build expected result log as initial leader log and subsequent updates
     std::vector<int> expected;                           // Expected output for Raft
@@ -329,7 +312,6 @@ fmt::print("run_test: {} servers {} term {} initial states {} leader {} initial 
                 if (le.term > test.initial_term) {
                     break;
                 }
-fmt::print("run_test: pushing expected value {}\n", le.value);
                 expected.push_back(le.value);
             }
         }
@@ -357,45 +339,34 @@ fmt::print("run_test: pushing expected value {}\n", le.value);
     co_await rafts[leader].first->make_leader();
 
     // Process all updates in order
-    // XXX here pick
     for (auto update: test.updates) {
-        //
         if (std::holds_alternative<entries>(update)) {
             auto updates = std::get<entries>(update);
             std::vector<raft::command> commands = create_commands<int>(updates);
             co_await seastar::parallel_for_each(commands, [&] (const raft::command cmd) {
                 tlogger.debug("Adding command entry on leader");
-fmt::print("[{}] XXX adding new command\n", leader);
                 return rafts[leader].first->add_entry(std::move(cmd), raft::server::wait_type::committed);
             });
         } else if (std::holds_alternative<new_leader>(update)) {
             leader = std::get<new_leader>(update);
-fmt::print("[{}] XXX new leader\n", leader);
 
             // co_await new_leader.read_barrier();
             co_await rafts[leader].first->make_leader();
-fmt::print("[{}] XXX new leader confirmed\n", leader);
-
         }
     }
 
-fmt::print("run_test: {} done, waiting\n", test.name);
     // Wait for all state_machine s to finish processing commands
     for (auto& r:  rafts) {
         co_await r.second->done();
     }
 
-fmt::print("run_test: {} finishing\n", test.name);
     for (auto& r: rafts) {
         co_await r.first->abort(); // Stop servers
     }
 
     // Check final state of committed is fine
-fmt::print("run_test: {} checking committed\n", test.name);
     for (size_t i = 0; i < committed.size(); ++i) {
-fmt::print("run_test: {}  server[{}] {} vs expected {} \n", test.name, i, committed[i], expected);
         if (committed[i] != expected) {
-fmt::print("Failed\n");
             co_return 1;
         }
     }
@@ -448,12 +419,9 @@ int main(int argc, char* argv[]) {
         std::stringstream ss;
         for (auto test: replication_tests) {
             if (co_await run_test(test) != 0) {
-fmt::print("main: test {} failed\n", test.name);
                 co_return 1; // Fail
             }
-fmt::print("------------------------------------------------------\n");
         }
-fmt::print("main: done\n");
         co_return 0;
     });
 }

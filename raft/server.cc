@@ -141,13 +141,10 @@ future<> server::send_message(server_id id, Message m) {
               _rpc->send_keepalive(id, m);
               return make_ready_future<>();
           } else if constexpr (std::is_same_v<T, append_request_send>) {
-fmt::print("[{}] io_fiber batch messages append req\n", short_id(_id));
               return _rpc->send_append_entries(id, m);
           } else if constexpr (std::is_same_v<T, vote_request>) {
-fmt::print("[{}] io_fiber batch messages vote req\n", short_id(_id));
               return _rpc->send_vote_request(id, m);
           } else if constexpr (std::is_same_v<T, vote_reply>) {
-fmt::print("[{}] io_fiber batch messages vote reply req\n", short_id(_id));
               return _rpc->send_vote_reply(id, m);
           } else if constexpr (std::is_same_v<T, install_snapshot>) {
               // Send in the background.
@@ -174,7 +171,6 @@ future<> server::io_fiber(index_t last_stable) {
             auto batch = co_await _fsm->poll_output();
 
             if (batch.term != term_t{}) {
-fmt::print("[{}] io_fiber batch has new term {}\n", short_id(_id), batch.term);
                 // Current term and vote are always persisted
                 // together. A vote may change independently of
                 // term, but it's safe to update both in this
@@ -191,7 +187,6 @@ fmt::print("[{}] io_fiber batch has new term {}\n", short_id(_id), batch.term);
             }
 
             if (batch.log_entries.size()) {
-fmt::print("[{}] io_fiber batch has new log entries {}\n", short_id(_id), batch.log_entries.size());
                 auto& entries = batch.log_entries;
 
                 if (last_stable > entries[0]->idx) {
@@ -206,7 +201,6 @@ fmt::print("[{}] io_fiber batch has new log entries {}\n", short_id(_id), batch.
             }
 
             if (batch.messages.size()) {
-fmt::print("[{}] io_fiber batch has new log entries {}\n", short_id(_id), batch.log_entries.size());
                 // after entries are persisted we can send messages
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
                     return send_message(message.first, std::move(message.second));
@@ -215,7 +209,6 @@ fmt::print("[{}] io_fiber batch has new log entries {}\n", short_id(_id), batch.
 
             // process committed entries
             if (batch.committed.size()) {
-fmt::print("[{}] io_fiber batch has new committed {}\n", short_id(_id), batch.committed.size());
                 notify_waiters(_awaited_commits, batch.committed);
                 co_await _apply_entries.writer.write(std::move(batch.committed));
             }
