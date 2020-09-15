@@ -1,3 +1,4 @@
+#include <random>
 #include <fmt/format.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
@@ -30,9 +31,6 @@
 //      - Check server logs
 //
 
-// TODO
-//      - Snapshots
-
 using namespace std::chrono_literals;
 using namespace std::placeholders;
 
@@ -41,6 +39,27 @@ static seastar::logger tlogger("test");
 struct snapshot_value {
     int value = -1;
 };
+
+std::mt19937 random_generator() {
+    std::random_device rd;
+    // In case of errors, replace the seed with a fixed value to get a deterministic run.
+    auto seed = rd();
+    std::cout << "Random seed: " << seed << "\n";
+    return std::mt19937(seed);
+}
+
+int rand() {
+    static thread_local std::uniform_int_distribution<int> dist(0, std::numeric_limits<uint8_t>::max());
+    static thread_local auto gen = random_generator();
+
+    return dist(gen);
+}
+
+bool drop_replication = false;
+
+// lets assume one snapshot per server
+std::unordered_map<raft::server_id, snapshot_value> snapshots;
+std::unordered_map<raft::server_id, int> sums;
 
 class state_machine : public raft::state_machine {
 public:
@@ -54,20 +73,18 @@ public:
     future<> apply(const std::vector<raft::command_cref> commands) override {
         return _apply(_id, _done, commands);
     }
-    // TODO
-    virtual future<raft::snapshot_id> take_snaphot() override {
+    future<raft::snapshot_id> take_snaphot() override {
+        snapshots[_id].value = sums[_id];
         return make_ready_future<raft::snapshot_id>(raft::snapshot_id());
     }
-    // TODO
-    virtual void drop_snapshot(raft::snapshot_id id) override {
+    void drop_snapshot(raft::snapshot_id id) override {
+        snapshots.erase(_id);
     }
-    // TODO
-    virtual future<> load_snapshot(raft::snapshot_id id) override {
+    future<> load_snapshot(raft::snapshot_id id) override {
+        sums[_id] = snapshots[_id].value;
          return make_ready_future<>();
     };
-    future<> abort() override {
-        return make_ready_future<>();
-    }
+    future<> abort() override { return make_ready_future<>(); }
 
     future<> done() {
         return _done.get_future();
@@ -80,35 +97,34 @@ struct initial_state {
     std::vector<raft::log_entry> log;
     raft::snapshot snapshot;
     snapshot_value snp_value;
-    raft::configuration config;
+    raft::configuration config;    // TODO
     state_machine::apply_fn apply;
 };
-
 
 class storage : public raft::storage {
     initial_state _conf;
 public:
     storage(initial_state conf) : _conf(std::move(conf)) {}
     storage() {}
-    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) { co_return seastar::sleep(1us); }
-    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() {
+    future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override { co_return seastar::sleep(1us); }
+    future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) { return make_ready_future<>(); }
-    virtual future<raft::snapshot> load_snapshot() override {
+    future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) override { return make_ready_future<>(); }
+    future<raft::snapshot> load_snapshot() override {
         return make_ready_future<raft::snapshot>(_conf.snapshot);
     }
-    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { co_return seastar::sleep(1us); };
-    virtual future<raft::log_entries> load_log() {
+    future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override { co_return seastar::sleep(1us); };
+    future<raft::log_entries> load_log() override {
         raft::log_entries log;
         for (auto&& e : _conf.log) {
             log.emplace_back(make_lw_shared(std::move(e)));
         }
         return make_ready_future<raft::log_entries>(std::move(log));
     }
-    virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
-    virtual future<> abort() { return make_ready_future<>(); }
+    future<> truncate_log(raft::index_t idx) override { return make_ready_future<>(); }
+    future<> abort() override { return make_ready_future<>(); }
 };
 
 class rpc : public raft::rpc {
@@ -118,11 +134,14 @@ public:
     rpc(raft::server_id id) : _id(id) {
         net[_id] = this;
     }
-    virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) override {
-        // snapshots[id] = snapshots[_id];
+    virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
+        snapshots[id] = snapshots[_id];
         return net[id]->_server->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
+        if (drop_replication && !(rand() % 5)) {
+            return make_ready_future<>();
+        }
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
@@ -137,6 +156,9 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+        if (drop_replication && !(rand() % 5)) {
+            return make_ready_future<>();
+        }
         net[id]->_server->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
@@ -179,7 +201,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::node>, state_machine*>>> crea
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
         states[i].snapshot.config = config;
-// TODO     snapshots[s.id] = states[i].snp_value;
+        snapshots[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, states[i])).first;
         co_await raft.start();
     }
