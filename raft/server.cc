@@ -46,6 +46,7 @@ public:
     void request_vote(server_id from, vote_request vote_request) override;
     void request_vote_reply(server_id from, vote_reply vote_reply) override;
 
+    // node interface
     future<> add_entry(command command, wait_type type);
     future<> apply_snapshot(server_id from, install_snapshot snp) override;
     future<> add_server(server_id id, bytes node_info, clock_type::duration timeout) override;
