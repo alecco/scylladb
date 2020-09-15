@@ -214,11 +214,11 @@ struct log_entry {
     int value;
 };
 
-std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list, unsigned start_idx = 1) {
+std::vector<raft::log_entry> create_log(std::pair<std::initializer_list<log_entry>, unsigned> list) {
     std::vector<raft::log_entry> log;
 
-    unsigned i = start_idx;
-    for (auto e : list) {
+    unsigned i = list.second;
+    for (auto e : list.first) {
         raft::command command;
         ser::serialize(command, e.value);
         log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++), std::move(command)});
@@ -271,11 +271,10 @@ struct test_case {
     const size_t nodes;
     uint64_t initial_term;
     const std::optional<uint64_t> initial_leader;
-    const std::vector<std::initializer_list<log_entry>> initial_states;
-    // const std::vector<raft::command> updates;
+    const std::vector<std::pair<std::initializer_list<log_entry>,unsigned>> initial_states;
     const std::vector<update> updates;
     const std::optional<std::vector<int>> expected;
-    const std::vector<raft::snapshot> initial_snapshots;
+    const std::vector<std::pair<raft::snapshot, int>> initial_snapshots;
 };
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -299,7 +298,8 @@ future<int> run_test(test_case test) {
         expected = *test.expected;
     } else {
         if (leader < test.initial_states.size()) {
-            for (auto log_initializer: test.initial_states[leader]) {
+            // XXX is it OK to ignore starting idx? (for expected log)
+            for (auto log_initializer: test.initial_states[leader].first) {
                 log_entry le(log_initializer);
                 if (le.term > test.initial_term) {
                     break;
@@ -316,12 +316,16 @@ future<int> run_test(test_case test) {
     }
     size_t expected_entries = expected.size();
 
-    // Server initial logs
+    // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
         if (i < test.initial_states.size()) {
             states[i].log = create_log(test.initial_states[i]);
         } else {
             states[i].log = {};
+        }
+        if (i < test.initial_snapshots.size()) {
+            states[i].snapshot = test.initial_snapshots[i].first;
+            states[i].snp_value.value = test.initial_snapshots[i].second;
         }
         states[i].apply = std::bind(apply_changes, std::ref(committed[i]), expected_entries, _1, _2, _3);
     }
@@ -358,6 +362,7 @@ future<int> run_test(test_case test) {
 
     // Check final state of committed is fine
     for (size_t i = 0; i < committed.size(); ++i) {
+fmt::print("XXX [{}] checking committed {} == expected {}\n", i, committed, expected);
         if (committed[i] != expected) {
             co_return 1;
         }
@@ -375,42 +380,38 @@ int main(int argc, char* argv[]) {
     std::vector<test_case> replication_tests = {
         // 2 nodes and ? entries... snapshot port TODO
         {.name = "snap_01", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{1,10}}},
+         .initial_states = {{{{1, 10}, {1, 11}, {1, 12}, {1, 13}, {1, 14}, {1, 15}, {1, 16}}, 11}},
          .updates = {entries{1,2}},
-#if 0
-         .initial_snapshots = {{.idx = raft::index_t(10),
-                        .term = raft::term_t(1),
-                        .id = utils::make_random_uuid()}}
-#endif
-        },
-#if 0
+         .initial_snapshots = {{{.idx = raft::index_t(10),
+                                 .term = raft::term_t(1),
+                                 .id = utils::UUID(0, 0)},
+                                ((10 - 1) * 10)/2}}},
         // 1 nodes gets 2 client entries, custom expected result
         {.name = "simple_1_01", .nodes = 1, .initial_term = 1, .initial_leader = 0,
-            .initial_states = {{}},
-            .updates = {entries{1,2}},
-            .expected = {{1,2}},
+         .initial_states = {},
+         .updates = {entries{1,2}},
+         .expected = {{1,2}},
         },
         // 1 nodes and 1 entry in the log gets 2 client entries
-        {.name = "simple_02", .nodes = 1, .initial_term = 1, .initial_leader = 0,
-            .initial_states = {{{1,10}}},
-            .updates = {entries{1,2}},},
+        {.name = "simple_1_02", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+         .initial_states = {{{{1, 10}}, 1}},
+         .updates = {entries{1,2}},},
         // 2 nodes and 1 entry in leader's log gets 2 client entries
         {.name = "simple_03", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-            .initial_states = {{{1,10}}},
-            .updates = {entries{1,2}},},
+         .initial_states = {{{{1, 10}}, 1}},
+         .updates = {entries{1,2}},},
         // 2 nodes and 1 entry in the log gets 2 client entries
         {.name = "simple_04", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-            .initial_states = {{{1,10}}},
-            .updates = {entries{1,2},new_leader{1},entries{3,4}},},
+         .initial_states = {{{{1, 10}}, 1}},
+         .updates = {entries{1,2},new_leader{1},entries{3,4}},},
         // 3 nodes, follower has spurious entry
         {.name = "simple_05", .nodes = 3, .initial_term = 2, .initial_leader = 1,
-            .initial_states = {{{1,10}}},
-            .updates = {entries{1,2}},},
+         .initial_states = {{{{1, 10}}, 1}},
+         .updates = {entries{1,2}},},
         // 3 nodes, term 2, follower has spurious entry
         {.name = "simple_06", .nodes = 3, .initial_term = 2, .initial_leader = 1,
-            .initial_states = {{{1,99}},{{2,10}}},
-            .updates = {entries{1,2},new_leader{1},new_leader{2},entries{3,4}}},
-#endif
+         .initial_states = {{{{1, 99},{2,10}}, 1}},
+         .updates = {entries{1,2},new_leader{1},new_leader{2},entries{3,4}}},
 #if 0
         // TODO: hangs as 1 and 2 don't want to vote for 1
         {.name = "simple_3_3_0_0_1_1", .nodes = 3, .initial_term = 3, .initial_leader = 0,
