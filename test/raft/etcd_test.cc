@@ -275,6 +275,7 @@ struct test_case {
     // const std::vector<raft::command> updates;
     const std::vector<update> updates;
     const std::optional<std::vector<int>> expected;
+    const std::vector<raft::snapshot> initial_snapshots;
 };
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -372,6 +373,17 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
+        // 2 nodes and ? entries... snapshot port TODO
+        {.name = "snap_01", .nodes = 2, .initial_term = 1, .initial_leader = 0,
+         .initial_states = {{{1,10}}},
+         .updates = {entries{1,2}},
+#if 0
+         .initial_snapshots = {{.idx = raft::index_t(10),
+                        .term = raft::term_t(1),
+                        .id = utils::make_random_uuid()}}
+#endif
+        },
+#if 0
         // 1 nodes gets 2 client entries, custom expected result
         {.name = "simple_1_01", .nodes = 1, .initial_term = 1, .initial_leader = 0,
             .initial_states = {{}},
@@ -398,6 +410,7 @@ int main(int argc, char* argv[]) {
         {.name = "simple_06", .nodes = 3, .initial_term = 2, .initial_leader = 1,
             .initial_states = {{{1,99}},{{2,10}}},
             .updates = {entries{1,2},new_leader{1},new_leader{2},entries{3,4}}},
+#endif
 #if 0
         // TODO: hangs as 1 and 2 don't want to vote for 1
         {.name = "simple_3_3_0_0_1_1", .nodes = 3, .initial_term = 3, .initial_leader = 0,
