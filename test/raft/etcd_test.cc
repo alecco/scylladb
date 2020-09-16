@@ -270,13 +270,18 @@ struct initial_log {
     unsigned start_idx;
 };
 
+struct initial_snapshot {
+    raft::snapshot snap;
+    int value;
+};
+
 struct test_case {
     const std::string name;
     const size_t nodes;
     uint64_t initial_term;
     const std::optional<uint64_t> initial_leader;
     const std::vector<struct initial_log> initial_states;
-    const std::vector<std::pair<raft::snapshot, int>> initial_snapshots;
+    const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<update> updates;
     const std::optional<std::vector<int>> expected;
 };
@@ -329,8 +334,8 @@ future<int> run_test(test_case test) {
             states[i].log = {};
         }
         if (i < test.initial_snapshots.size()) {
-            states[i].snapshot = test.initial_snapshots[i].first;
-            states[i].snp_value.value = test.initial_snapshots[i].second;
+            states[i].snapshot = test.initial_snapshots[i].snap;
+            states[i].snp_value.value = test.initial_snapshots[i].value;
         }
         states[i].apply = std::bind(apply_changes, std::ref(committed[i]), expected_entries, _1, _2, _3);
     }
@@ -451,10 +456,10 @@ int main(int argc, char* argv[]) {
         // 2 nodes, leader with 6 entries, initial snapshot
         {.name = "simple_snapshot", .nodes = 2, .initial_term = 1, .initial_leader = 0,
          .initial_states = {{{{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, 11}},
-         .initial_snapshots = {{{.idx = raft::index_t(10),
+         .initial_snapshots = {{.snap = {.idx = raft::index_t(10),
                                  .term = raft::term_t(1),
                                  .id = utils::UUID(0, 0)},
-                                ((10 - 1) * 10)/2}},
+                                .value = ((10 - 1) * 10)/2}},
          .updates = {entries{7,8}}},
     };
 
