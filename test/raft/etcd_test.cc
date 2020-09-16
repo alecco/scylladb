@@ -1,5 +1,4 @@
 #include <random>
-#include <fmt/format.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
@@ -217,7 +216,7 @@ struct log_entry {
 std::vector<raft::log_entry> create_log(std::pair<std::initializer_list<log_entry>, unsigned> list) {
     std::vector<raft::log_entry> log;
 
-    unsigned i = list.second;
+    unsigned i = list.second;  // Start index
     for (auto e : list.first) {
         raft::command command;
         ser::serialize(command, e.value);
@@ -272,9 +271,9 @@ struct test_case {
     uint64_t initial_term;
     const std::optional<uint64_t> initial_leader;
     const std::vector<std::pair<std::initializer_list<log_entry>,unsigned>> initial_states;
+    const std::vector<std::pair<raft::snapshot, int>> initial_snapshots;
     const std::vector<update> updates;
     const std::optional<std::vector<int>> expected;
-    const std::vector<std::pair<raft::snapshot, int>> initial_snapshots;
 };
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -298,7 +297,7 @@ future<int> run_test(test_case test) {
         expected = *test.expected;
     } else {
         if (leader < test.initial_states.size()) {
-            // XXX is it OK to ignore starting idx? (for expected log)
+            // Ignore index as it's internal and not part of output
             for (auto log_initializer: test.initial_states[leader].first) {
                 log_entry le(log_initializer);
                 if (le.term > test.initial_term) {
@@ -362,7 +361,6 @@ future<int> run_test(test_case test) {
 
     // Check final state of committed is fine
     for (size_t i = 0; i < committed.size(); ++i) {
-fmt::print("XXX [{}] checking committed {} == expected {}\n", i, committed, expected);
         if (committed[i] != expected) {
             co_return 1;
         }
@@ -378,40 +376,76 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
-        // 2 nodes and ? entries... snapshot port TODO
-        {.name = "snap_01", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{{1, 10}, {1, 11}, {1, 12}, {1, 13}, {1, 14}, {1, 15}, {1, 16}}, 11}},
-         .updates = {entries{1,2}},
+        // 1 nodes, 2 client entries, automatic expected result
+        {.name = "simple_1_auto", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+         .initial_states = {}, .updates = {entries{0,1}},
+        },
+        // 1 nodes, 2 client entries, custom expected result
+        {.name = "simple_1_expected", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+         .initial_states = {},
+         .updates = {entries{0,1}},
+         .expected = {{0,1}}},
+        // 1 nodes, 1 leader entry, 2 client entries
+        {.name = "simple_1_pre", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+         .initial_states = {{{{1,0}}, 1}},
+         .updates = {entries{1,2}},},
+        // 2 nodes, 1 leader entry, 2 client entries
+        {.name = "simple_2_pre", .nodes = 2, .initial_term = 1, .initial_leader = 0,
+         .initial_states = {{{{1,0}}, 1}},
+         .updates = {entries{1,2}},},
+        // 2 nodes, 1 leader entry, 2 client entries, change leader, 2 client entries
+        {.name = "simple_02_pre_chg", .nodes = 2, .initial_term = 1, .initial_leader = 0,
+         .initial_states = {{{{1,0}}, 1}},
+         .updates = {entries{1,2},new_leader{1},entries{3,4}},},
+        // 3 nodes, follower has spurious entry
+        {.name = "simple_3_spurious", .nodes = 3, .initial_term = 2, .initial_leader = 0,
+         .initial_states = {{{{1,0},{1,1},{1,2}}, 1},{{{2,10}}, 1}},
+         .updates = {entries{3,4}},},
+        // 3 nodes, term 2, follower has spurious entry, multiple leader changes
+        {.name = "simple_3_spurious_multi_leaders", .nodes = 3, .initial_term = 2, .initial_leader = 0,
+         .initial_states = {{},{{{1,10},{2,20}}, 1}},
+         .updates = {entries{0,1},new_leader{1},entries{2,3},new_leader{2},entries{4,5}}},
+
+        // 2 nodes, term 2, leader has 1 entry, follower has 3 spurious entry
+        {.name = "simple_2_spurious", .nodes = 2, .initial_term = 2, .initial_leader = 0,
+         .initial_states = {{{{1,0},}, 1},{{{2,10},{2,20},{2,30}}, 1}},
+         .updates = {entries{1,2}},},
+        // 2 nodes, term 2, leader has 1 entry, follower has 1 good and 3 spurious entries
+        {.name = "simple_2_follower_4_1", .nodes = 2, .initial_term = 3, .initial_leader = 0,
+         .initial_states = {{{{1,0},{1,1}}, 1},{{{1,0},{2,20},{2,30},{2,40}}, 1}},
+         .updates = {entries{2,3}},},
+        // A follower and a leader have matching logs but leader's is shorter
+        // 2 nodes, term 2, leader has 2 entries, follower has same 2 and 2 extra entries (good)
+        {.name = "simple_2_short_leader", .nodes = 2, .initial_term = 3, .initial_leader = 0,
+         .initial_states = {{{{1,0},{1,1}}, 1},{{{1,0},{1,1},{1,2},{1,3}}, 1}},
+         .updates = {entries{4,5}},},
+        // A follower and a leader have no common entries
+        // 2 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
+        {.name = "follower_not_matching", .nodes = 2, .initial_term = 3, .initial_leader = 0,
+         .initial_states = {{{{1,0},{1,1},{1,2}}, 1},
+                            {{{2,10},{2,11},{2,12}}, 1}},
+         .updates = {entries{3,4}},},
+        // A follower and a leader have one common entry
+        // 2 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
+        {.name = "follower_one_common", .nodes = 2, .initial_term = 4, .initial_leader = 0,
+         .initial_states = {{{{1,0},{1,1},{1,2}}, 1},
+                            {{{1,0},{2,11},{2,12},{2,13}}, 1}},
+         .updates = {entries{3,4}},},
+        // A follower and a leader have 2 common entries in different terms
+        // 2 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
+        {.name = "follower_one_common", .nodes = 2, .initial_term = 5, .initial_leader = 0,
+         .initial_states = {{{{1,0},{2,1},{3,2},{3,3}}, 1},
+                            {{{1,0},{2,1},{2,12},{2,13}}, 1}},
+         .updates = {entries{4,5}},},
+
+        // 2 nodes, leader with 6 entries, initial snapshot
+        {.name = "simple_snapshot", .nodes = 2, .initial_term = 1, .initial_leader = 0,
+         .initial_states = {{{{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, 11}},
          .initial_snapshots = {{{.idx = raft::index_t(10),
                                  .term = raft::term_t(1),
                                  .id = utils::UUID(0, 0)},
-                                ((10 - 1) * 10)/2}}},
-        // 1 nodes gets 2 client entries, custom expected result
-        {.name = "simple_1_01", .nodes = 1, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {},
-         .updates = {entries{1,2}},
-         .expected = {{1,2}},
-        },
-        // 1 nodes and 1 entry in the log gets 2 client entries
-        {.name = "simple_1_02", .nodes = 1, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{{1, 10}}, 1}},
-         .updates = {entries{1,2}},},
-        // 2 nodes and 1 entry in leader's log gets 2 client entries
-        {.name = "simple_03", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{{1, 10}}, 1}},
-         .updates = {entries{1,2}},},
-        // 2 nodes and 1 entry in the log gets 2 client entries
-        {.name = "simple_04", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{{1, 10}}, 1}},
-         .updates = {entries{1,2},new_leader{1},entries{3,4}},},
-        // 3 nodes, follower has spurious entry
-        {.name = "simple_05", .nodes = 3, .initial_term = 2, .initial_leader = 1,
-         .initial_states = {{{{1, 10}}, 1}},
-         .updates = {entries{1,2}},},
-        // 3 nodes, term 2, follower has spurious entry
-        {.name = "simple_06", .nodes = 3, .initial_term = 2, .initial_leader = 1,
-         .initial_states = {{{{1, 99},{2,10}}, 1}},
-         .updates = {entries{1,2},new_leader{1},new_leader{2},entries{3,4}}},
+                                ((10 - 1) * 10)/2}},
+         .updates = {entries{7,8}}},
 #if 0
         // TODO: hangs as 1 and 2 don't want to vote for 1
         {.name = "simple_3_3_0_0_1_1", .nodes = 3, .initial_term = 3, .initial_leader = 0,
