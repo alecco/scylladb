@@ -213,11 +213,11 @@ struct log_entry {
     int value;
 };
 
-std::vector<raft::log_entry> create_log(std::pair<std::initializer_list<log_entry>, unsigned> list) {
+std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list, unsigned start_idx) {
     std::vector<raft::log_entry> log;
 
-    unsigned i = list.second;  // Start index
-    for (auto e : list.first) {
+    unsigned i = start_idx;
+    for (auto e : list) {
         raft::command command;
         ser::serialize(command, e.value);
         log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++), std::move(command)});
@@ -265,12 +265,17 @@ using new_leader = int;
 // TODO: config change
 using update = std::variant<entries, new_leader>;
 
+struct initial_log {
+    std::initializer_list<log_entry> le;
+    unsigned start_idx;
+};
+
 struct test_case {
     const std::string name;
     const size_t nodes;
     uint64_t initial_term;
     const std::optional<uint64_t> initial_leader;
-    const std::vector<std::pair<std::initializer_list<log_entry>,unsigned>> initial_states;
+    const std::vector<struct initial_log> initial_states;
     const std::vector<std::pair<raft::snapshot, int>> initial_snapshots;
     const std::vector<update> updates;
     const std::optional<std::vector<int>> expected;
@@ -298,7 +303,7 @@ future<int> run_test(test_case test) {
     } else {
         if (leader < test.initial_states.size()) {
             // Ignore index as it's internal and not part of output
-            for (auto log_initializer: test.initial_states[leader].first) {
+            for (auto log_initializer: test.initial_states[leader].le) {
                 log_entry le(log_initializer);
                 if (le.term > test.initial_term) {
                     break;
@@ -318,7 +323,8 @@ future<int> run_test(test_case test) {
     // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
         if (i < test.initial_states.size()) {
-            states[i].log = create_log(test.initial_states[i]);
+            auto state = test.initial_states[i];
+            states[i].log = create_log(state.le, state.start_idx);
         } else {
             states[i].log = {};
         }
