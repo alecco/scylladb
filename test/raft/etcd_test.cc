@@ -96,7 +96,7 @@ struct initial_state {
     std::vector<raft::log_entry> log;
     raft::snapshot snapshot;
     snapshot_value snp_value;
-    raft::configuration config;    // TODO
+    raft::configuration config;    // TODO: custom initial configs
     state_machine::apply_fn apply;
 };
 
@@ -458,8 +458,8 @@ int main(int argc, char* argv[]) {
         {.name = "simple_snapshot", .nodes = 2, .initial_term = 1, .initial_leader = 0,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 11}},
          .initial_snapshots = {{.snap = {.idx = raft::index_t(10),
-                                 .term = raft::term_t(1),
-                                 .id = utils::UUID(0, 0)},
+                                .term = raft::term_t(1),
+                                .id = utils::UUID(0, 0)},
                                 .value = ((10 - 1) * 10)/2}},
          .updates = {entries{7,8}}},
     };
