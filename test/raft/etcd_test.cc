@@ -450,12 +450,6 @@ int main(int argc, char* argv[]) {
                                  .id = utils::UUID(0, 0)},
                                 ((10 - 1) * 10)/2}},
          .updates = {entries{7,8}}},
-#if 0
-        // TODO: hangs as 1 and 2 don't want to vote for 1
-        {.name = "simple_3_3_0_0_1_1", .nodes = 3, .initial_term = 3, .initial_leader = 0,
-            .initial_states = {{},{{1,10}},{{2,30}}},
-            .updates = {entries{1,2,3}},},
-#endif
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {
