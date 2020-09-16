@@ -398,64 +398,65 @@ int main(int argc, char* argv[]) {
          .expected = {{0,1}}},
         // 1 nodes, 1 leader entry, 2 client entries
         {.name = "simple_1_pre", .nodes = 1, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{{1,0}}, 1}},
+         .initial_states = {{.le = {{1,0}}, .start_idx = 1}},
          .updates = {entries{1,2}},},
         // 2 nodes, 1 leader entry, 2 client entries
         {.name = "simple_2_pre", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{{1,0}}, 1}},
+         .initial_states = {{.le = {{1,0}}, .start_idx = 1}},
          .updates = {entries{1,2}},},
         // 2 nodes, 1 leader entry, 2 client entries, change leader, 2 client entries
         {.name = "simple_02_pre_chg", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{{1,0}}, 1}},
+         .initial_states = {{.le = {{1,0}}, .start_idx = 1}},
          .updates = {entries{1,2},new_leader{1},entries{3,4}},},
         // 3 nodes, follower has spurious entry
         {.name = "simple_3_spurious", .nodes = 3, .initial_term = 2, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1},{1,2}}, 1},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2}}, .start_idx = 1},
                             {{{2,10}}, 1}},
          .updates = {entries{3,4}},},
         // 3 nodes, term 2, follower has spurious entry, multiple leader changes
         {.name = "simple_3_spurious_multi_leaders", .nodes = 3, .initial_term = 2, .initial_leader = 0,
-         .initial_states = {{},{{{1,10},{2,20}}, 1}},
+         .initial_states = {{},
+                            {.le = {{1,10},{2,20}}, .start_idx = 1}},
          .updates = {entries{0,1},new_leader{1},entries{2,3},new_leader{2},entries{4,5}}},
 
         // 2 nodes, term 2, leader has 1 entry, follower has 3 spurious entry
         {.name = "simple_2_spurious", .nodes = 2, .initial_term = 2, .initial_leader = 0,
-         .initial_states = {{{{1,0},}, 1},
-                            {{{2,10},{2,20},{2,30}}, 1}},
+         .initial_states = {{.le = {{1,0},}, .start_idx = 1},
+                            {.le = {{2,10},{2,20},{2,30}}, .start_idx = 1}},
          .updates = {entries{1,2}},},
         // 2 nodes, term 2, leader has 1 entry, follower has 1 good and 3 spurious entries
         {.name = "simple_2_follower_4_1", .nodes = 2, .initial_term = 3, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1}}, 1},
-                            {{{1,0},{2,20},{2,30},{2,40}}, 1}},
+         .initial_states = {{.le = {{1,0},{1,1}}, .start_idx = 1},
+                            {.le = {{1,0},{2,20},{2,30},{2,40}}, .start_idx = 1}},
          .updates = {entries{2,3}},},
         // A follower and a leader have matching logs but leader's is shorter
         // 2 nodes, term 2, leader has 2 entries, follower has same 2 and 2 extra entries (good)
         {.name = "simple_2_short_leader", .nodes = 2, .initial_term = 3, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1}}, 1},
-                            {{{1,0},{1,1},{1,2},{1,3}}, 1}},
+         .initial_states = {{.le = {{1,0},{1,1}}, .start_idx = 1},
+                            {.le = {{1,0},{1,1},{1,2},{1,3}}, .start_idx = 1}},
          .updates = {entries{4,5}},},
         // A follower and a leader have no common entries
         // 2 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
         {.name = "follower_not_matching", .nodes = 2, .initial_term = 3, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1},{1,2}}, 1},
-                            {{{2,10},{2,11},{2,12}}, 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2}}, .start_idx = 1},
+                            {.le = {{2,10},{2,11},{2,12}}, .start_idx = 1}},
          .updates = {entries{3,4}},},
         // A follower and a leader have one common entry
         // 2 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
         {.name = "follower_one_common", .nodes = 2, .initial_term = 4, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1},{1,2}}, 1},
-                            {{{1,0},{2,11},{2,12},{2,13}}, 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2}}, .start_idx = 1},
+                            {.le = {{1,0},{2,11},{2,12},{2,13}}, .start_idx = 1}},
          .updates = {entries{3,4}},},
         // A follower and a leader have 2 common entries in different terms
         // 2 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
         {.name = "follower_one_common", .nodes = 2, .initial_term = 5, .initial_leader = 0,
-         .initial_states = {{{{1,0},{2,1},{3,2},{3,3}}, 1},
-                            {{{1,0},{2,1},{2,12},{2,13}}, 1}},
+         .initial_states = {{.le = {{1,0},{2,1},{3,2},{3,3}}, .start_idx = 1},
+                            {.le = {{1,0},{2,1},{2,12},{2,13}}, .start_idx = 1}},
          .updates = {entries{4,5}},},
 
         // 2 nodes, leader with 6 entries, initial snapshot
         {.name = "simple_snapshot", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, 11}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 11}},
          .initial_snapshots = {{.snap = {.idx = raft::index_t(10),
                                  .term = raft::term_t(1),
                                  .id = utils::UUID(0, 0)},
