@@ -399,7 +399,8 @@ int main(int argc, char* argv[]) {
          .updates = {entries{1,2},new_leader{1},entries{3,4}},},
         // 3 nodes, follower has spurious entry
         {.name = "simple_3_spurious", .nodes = 3, .initial_term = 2, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1},{1,2}}, 1},{{{2,10}}, 1}},
+         .initial_states = {{{{1,0},{1,1},{1,2}}, 1},
+                            {{{2,10}}, 1}},
          .updates = {entries{3,4}},},
         // 3 nodes, term 2, follower has spurious entry, multiple leader changes
         {.name = "simple_3_spurious_multi_leaders", .nodes = 3, .initial_term = 2, .initial_leader = 0,
@@ -408,16 +409,19 @@ int main(int argc, char* argv[]) {
 
         // 2 nodes, term 2, leader has 1 entry, follower has 3 spurious entry
         {.name = "simple_2_spurious", .nodes = 2, .initial_term = 2, .initial_leader = 0,
-         .initial_states = {{{{1,0},}, 1},{{{2,10},{2,20},{2,30}}, 1}},
+         .initial_states = {{{{1,0},}, 1},
+                            {{{2,10},{2,20},{2,30}}, 1}},
          .updates = {entries{1,2}},},
         // 2 nodes, term 2, leader has 1 entry, follower has 1 good and 3 spurious entries
         {.name = "simple_2_follower_4_1", .nodes = 2, .initial_term = 3, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1}}, 1},{{{1,0},{2,20},{2,30},{2,40}}, 1}},
+         .initial_states = {{{{1,0},{1,1}}, 1},
+                            {{{1,0},{2,20},{2,30},{2,40}}, 1}},
          .updates = {entries{2,3}},},
         // A follower and a leader have matching logs but leader's is shorter
         // 2 nodes, term 2, leader has 2 entries, follower has same 2 and 2 extra entries (good)
         {.name = "simple_2_short_leader", .nodes = 2, .initial_term = 3, .initial_leader = 0,
-         .initial_states = {{{{1,0},{1,1}}, 1},{{{1,0},{1,1},{1,2},{1,3}}, 1}},
+         .initial_states = {{{{1,0},{1,1}}, 1},
+                            {{{1,0},{1,1},{1,2},{1,3}}, 1}},
          .updates = {entries{4,5}},},
         // A follower and a leader have no common entries
         // 2 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
