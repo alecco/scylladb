@@ -59,6 +59,7 @@ public:
     future<> abort() override;
     term_t get_current_term() const override;
     future<> read_barrier() override;
+    future<> elect_me_leader() override;
     void make_me_leader() override;
 private:
     std::unique_ptr<rpc> _rpc;
@@ -441,6 +442,18 @@ future<> server_impl::remove_server(server_id id, clock_type::duration timeout) 
 
 void server_impl::make_me_leader() {
     _fsm->become_leader();
+}
+
+future<> server_impl::elect_me_leader() {
+    for (int i = 0; i < 2 * raft::ELECTION_TIMEOUT.count(); i++) {
+        if (_fsm->is_candidate()) {
+            break;
+        }
+        _fsm->tick();
+    }
+    do {
+        co_await seastar::sleep(150us);
+    } while (!_fsm->is_leader());
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
