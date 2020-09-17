@@ -49,7 +49,7 @@ public:
     virtual future<> apply(const std::vector<raft::command_cref> commands) {
         return _apply(_id, _done, commands);
     }
-    virtual future<raft::snapshot_id> take_snaphot() {
+    virtual future<raft::snapshot_id> take_snapshot() {
         snapshots[_id].value = sums[_id];
         return make_ready_future<raft::snapshot_id>(raft::snapshot_id());
     }
