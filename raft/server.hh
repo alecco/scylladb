@@ -111,7 +111,7 @@ public:
     virtual future<> read_barrier() = 0;
 
     // Ad hoc functions for testing
-
+    virtual future<> elect_me_leader() = 0;
     virtual void make_me_leader() = 0;
 };
 
