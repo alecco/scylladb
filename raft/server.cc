@@ -59,6 +59,7 @@ public:
     future<> abort() override;
     term_t get_current_term() const override;
     future<> read_barrier() override;
+    future<> elect_me_leader() override;
     void make_me_leader() override;
 private:
     std::unique_ptr<rpc> _rpc;
@@ -248,14 +249,18 @@ future<> server_impl::send_message(server_id id, Message m) {
           } else if constexpr (std::is_same_v<T, append_request_send>) {
               return _rpc->send_append_entries(id, m);
           } else if constexpr (std::is_same_v<T, vote_request>) {
+fmt::print("{} send_message to {}: send vote req\n", _id, id);
               return _rpc->send_vote_request(id, m);
           } else if constexpr (std::is_same_v<T, vote_reply>) {
+fmt::print("{} send_message to {}: send vote reply\n", _id, id);
               return _rpc->send_vote_reply(id, m);
           } else if constexpr (std::is_same_v<T, install_snapshot>) {
+fmt::print("{} send_message to {}: send snapshot\n", _id, id);
               // Send in the background.
               send_snapshot(id, std::move(m));
               return make_ready_future<>();
           } else if constexpr (std::is_same_v<T, snapshot_reply>) {
+fmt::print("{} send_message to {}: snapshot reply\n", _id, id);
               assert(_snapshot_application_done);
               // send reply to install_snapshot here
               _snapshot_application_done->set_value(std::move(m));
@@ -441,6 +446,18 @@ future<> server_impl::remove_server(server_id id, clock_type::duration timeout) 
 
 void server_impl::make_me_leader() {
     _fsm->become_leader();
+}
+
+future<> server_impl::elect_me_leader() {
+    for (int i = 0; i < 2 * raft::ELECTION_TIMEOUT.count(); i++) {
+        if (_fsm->is_candidate()) {
+            break;
+        }
+        _fsm->tick();
+    }
+    do {
+        co_await seastar::sleep(150us);
+    } while (!_fsm->is_leader());
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
