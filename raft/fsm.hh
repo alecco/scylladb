@@ -386,7 +386,7 @@ void fsm::step(server_id from, Message&& msg) {
                 // snapshot can be installed only in follower
                 send_to(from, snapshot_reply{ .success = false });
             } else {
-                // apply snaphot and reply with success
+                // apply snapshot and reply with success
                 _log.apply_snapshot(std::move(msg.snp));
                 send_to(from, snapshot_reply{ .success = true });
             }
