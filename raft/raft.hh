@@ -227,7 +227,7 @@ public:
     // The function suppose to take a snapshot of a state machine
     // To be called during log compaction or when a leader brings
     // a lagging follower up-to-date
-    virtual future<snapshot_id> take_snaphot() = 0;
+    virtual future<snapshot_id> take_snapshot() = 0;
 
     // The function drops a snapshot with a provided id
     virtual void drop_snapshot(snapshot_id id) = 0;

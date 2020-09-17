@@ -36,7 +36,7 @@ using namespace std::placeholders;
 static seastar::logger tlogger("test");
 
 struct snapshot_value {
-    int value = -1;
+    int32_t value = -1;
 };
 
 std::mt19937 random_generator() {
@@ -56,9 +56,29 @@ int rand() {
 
 bool drop_replication = false;
 
-// lets assume one snapshot per server
+// Positional checksum to verify seen values and order
+struct fletcher_32 {
+    int32_t _sum1 = 0;
+    int32_t _sum2 = 0;
+    void update(const unsigned val) {
+        assert(val < 65535);
+        _sum1 = (_sum1 + val)   % 65535;
+        _sum2 = (_sum2 + _sum1) % 65535;
+    }
+    int32_t checksum() const {
+        return _sum2 << 16 | _sum1;
+    }
+    static int32_t make_checksum(std::vector<int> vals) {
+        fletcher_32 c;
+        for (auto v: vals) {
+            c.update(v);
+        }
+        return c.checksum();
+    }
+};
+
+// Lets assume one snapshot per server
 std::unordered_map<raft::server_id, snapshot_value> snapshots;
-std::unordered_map<raft::server_id, int> sums;
 
 class state_machine : public raft::state_machine {
 public:
@@ -66,22 +86,24 @@ public:
 private:
     raft::server_id _id;
     apply_fn _apply;
+    std::shared_ptr<fletcher_32> _checksum;
     promise<> _done;
 public:
-    state_machine(raft::server_id id, apply_fn apply) : _id(id), _apply(std::move(apply)) {}
+    state_machine(raft::server_id id, apply_fn apply, std::shared_ptr<fletcher_32> checksum) :
+        _id(id), _apply(std::move(apply)), _checksum(checksum) { }
     future<> apply(const std::vector<raft::command_cref> commands) override {
         return _apply(_id, _done, commands);
     }
-    future<raft::snapshot_id> take_snaphot() override {
-        snapshots[_id].value = sums[_id];
+    future<raft::snapshot_id> take_snapshot() override {
+        snapshots[_id].value = _checksum->checksum();
         return make_ready_future<raft::snapshot_id>(raft::snapshot_id());
     }
     void drop_snapshot(raft::snapshot_id id) override {
         snapshots.erase(_id);
     }
     future<> load_snapshot(raft::snapshot_id id) override {
-        sums[_id] = snapshots[_id].value;
-         return make_ready_future<>();
+        _checksum->update(snapshots[_id].value);
+        return make_ready_future<>();
     };
     future<> abort() override { return make_ready_future<>(); }
 
@@ -98,6 +120,7 @@ struct initial_state {
     snapshot_value snp_value;
     raft::configuration config;    // TODO: custom initial configs
     state_machine::apply_fn apply;
+    std::shared_ptr<fletcher_32> checksum;
 };
 
 class storage : public raft::storage {
@@ -176,10 +199,11 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
+// The initial state should be kept alive
 std::pair<std::unique_ptr<raft::node>, state_machine*>
 create_raft_server(raft::server_id uuid, initial_state state) {
 
-    auto sm = std::make_unique<state_machine>(uuid, std::move(state.apply));
+    auto sm = std::make_unique<state_machine>(uuid, std::move(state.apply), state.checksum);
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
@@ -240,14 +264,15 @@ std::vector<raft::command> create_commands(std::vector<T> list) {
     return commands;
 }
 
-future<> apply_changes(std::vector<int> &res, size_t expected, raft::server_id id, promise<>& done,
-        const std::vector<raft::command_cref>& commands) {
+future<> apply_changes(std::vector<int> &res, size_t expected, std::shared_ptr<fletcher_32> checksum,
+        raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
     tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
 
     for (auto&& d : commands) {
         auto is = ser::as_input_stream(d);
         int n = ser::deserialize(is, boost::type<int>());
-        res.push_back(n);
+        res.push_back(n);       // seen committed values (output)
+        checksum->update(n);    // running checksum (values and snapshots)
         tlogger.debug("{}: apply_changes {}", id, n);
     }
     if (res.size() >= expected) {
@@ -272,7 +297,7 @@ struct initial_log {
 
 struct initial_snapshot {
     raft::snapshot snap;
-    int value;
+    int32_t value;
 };
 
 struct test_case {
@@ -284,6 +309,7 @@ struct test_case {
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<update> updates;
     const std::optional<std::vector<int>> expected;
+    const int32_t expected_checksum;
 };
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -337,7 +363,9 @@ future<int> run_test(test_case test) {
             states[i].snapshot = test.initial_snapshots[i].snap;
             states[i].snp_value.value = test.initial_snapshots[i].value;
         }
-        states[i].apply = std::bind(apply_changes, std::ref(committed[i]), expected_entries, _1, _2, _3);
+        states[i].checksum = std::make_shared<fletcher_32>();
+        states[i].apply = std::bind(apply_changes, std::ref(committed[i]), expected_entries,
+                states[i].checksum, _1, _2, _3);
     }
 
     auto rafts = co_await create_cluster(states);
@@ -370,10 +398,17 @@ future<int> run_test(test_case test) {
         co_await r.first->abort(); // Stop servers
     }
 
-    // Check final state of committed is fine
+    // Check committed entries match expected entries  (apply called)
     for (size_t i = 0; i < committed.size(); ++i) {
         if (committed[i] != expected) {
             co_return 1;
+        }
+    }
+
+    // Verify total checksum matches expected (snapshot and apply calls)
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (states[i].checksum->checksum() != test.expected_checksum) {
+            co_return -1;
         }
     }
 
@@ -454,14 +489,15 @@ int main(int argc, char* argv[]) {
                             {.le = {{1,0},{2,1},{2,12},{2,13}}, .start_idx = 1}},
          .updates = {entries{4,5}},},
 
-        // 2 nodes, leader with 6 entries, initial snapshot
+        // 2 nodes, leader with snapshot (1) and log (2,3,4), gets updates (5,6)
         {.name = "simple_snapshot", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 11}},
-         .initial_snapshots = {{.snap = {.idx = raft::index_t(10),
-                                .term = raft::term_t(1),
-                                .id = utils::UUID(0, 0)},
-                                .value = ((10 - 1) * 10)/2}},
-         .updates = {entries{7,8}}},
+         .initial_states = {{.le = {{1,2},{1,3},{1,4}}, .start_idx = 11}},
+         .initial_snapshots = {{.snap = {.idx = raft::index_t(10),   // log idx - 1
+                                         .term = raft::term_t(1),
+                                         .id = utils::UUID(0, 1)},   // must be 1+
+                                .value = 1}},
+         .updates = {entries{5,6}},
+         .expected_checksum = fletcher_32::make_checksum({1,2,3,4,5,6}) },
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {
