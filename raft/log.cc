@@ -70,7 +70,7 @@ void log::truncate_tail(index_t idx) {
     auto diff = std::min(index_t(_log.size()), idx - start_idx());
 
     if (diff) {
-        _log.erase(_log.begin(), _log.begin() + diff);
+        _log.erase(_log.begin(), _log.begin() + diff + 1);
     }
     _stable_idx = std::max(idx, _stable_idx);
 }

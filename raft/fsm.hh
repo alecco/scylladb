@@ -294,6 +294,8 @@ public:
 
     void snapshot_status(server_id id, bool success);
 
+    void apply_snapshot(snapshot snp);
+
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
@@ -387,7 +389,7 @@ void fsm::step(server_id from, Message&& msg) {
                 send_to(from, snapshot_reply{ .success = false });
             } else {
                 // apply snapshot and reply with success
-                _log.apply_snapshot(std::move(msg.snp));
+                apply_snapshot(std::move(msg.snp));
                 send_to(from, snapshot_reply{ .success = true });
             }
         }

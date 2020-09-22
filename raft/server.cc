@@ -38,7 +38,7 @@ class server_impl : public rpc_client, public server {
 public:
     explicit server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
-        seastar::shared_ptr<failure_detector> failure_detector);
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config);
 
     server_impl(server_impl&&) = delete;
 
@@ -71,6 +71,7 @@ private:
     // id of this server
     server_id _id;
     seastar::timer<lowres_clock> _ticker;
+    server::configuration _config;
 
     seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
 
@@ -91,7 +92,7 @@ private:
     std::unordered_map<server_id, future<>> _snapshot_transfers;
 
     // The optional is engaged when incomming snapshot is received
-    // And signalled when it is successfully applied or there was an error
+    // And the promise signalled when it is successfully applied or there was an error
     std::optional<promise<snapshot_reply>> _snapshot_application_done;
 
     // Called to commit entries (on a leader or otherwise).
@@ -138,10 +139,10 @@ private:
 
 server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
-        seastar::shared_ptr<failure_detector> failure_detector) :
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) :
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
                     _storage(std::move(storage)), _failure_detector(failure_detector),
-                    _id(uuid) {
+                    _id(uuid), _config(config) {
     set_rpc_client(_rpc.get());
 }
 
@@ -358,6 +359,8 @@ future<> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
 
 future<> server_impl::applier_fiber() {
     logger.trace("applier_fiber start");
+    size_t applied_since_snapshot = 0;
+
     try {
         while (true) {
             auto opt_batch = co_await _apply_entries.reader.read();
@@ -365,8 +368,13 @@ future<> server_impl::applier_fiber() {
                 // EOF
                 break;
             }
+
+            applied_since_snapshot += opt_batch->size();
+
             std::vector<command_cref> commands;
             commands.reserve(opt_batch->size());
+
+            index_t last_idx = opt_batch->back()->idx;
 
             std::ranges::copy(
                     *opt_batch |
@@ -376,9 +384,19 @@ future<> server_impl::applier_fiber() {
 
             co_await _state_machine->apply(std::move(commands));
             notify_waiters(_awaited_applies, *opt_batch);
+
+            if (applied_since_snapshot >= _config.snapshot_threashold) {
+                snapshot snp;
+                snp.term = get_current_term();
+                snp.idx = last_idx;
+                logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
+                snp.id = co_await _state_machine->take_snapshot();
+                _fsm->apply_snapshot(snp);
+                applied_since_snapshot = 0;
+            }
         }
     } catch (...) {
-        logger.error("applier fiber {} stopped because of the error: {}", _id, std::current_exception());
+        logger.error("[{}] applier fiber stopped because of the error: {}", _id, std::current_exception());
     }
     co_return;
 }
@@ -458,10 +476,10 @@ future<> server_impl::elect_me_leader() {
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
     std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
-    seastar::shared_ptr<failure_detector> failure_detector) {
+    seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) {
     assert(uuid != raft::server_id{utils::UUID(0, 0)});
     return std::make_unique<raft::server_impl>(uuid, std::move(rpc), std::move(state_machine),
-        std::move(storage), failure_detector);
+        std::move(storage), failure_detector, config);
 }
 
 std::ostream& operator<<(std::ostream& os, const server_impl& s) {
