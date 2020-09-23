@@ -368,6 +368,7 @@ void fsm::step(server_id from, Message&& msg) {
             if constexpr (std::is_same_v<State, candidate>) {
                 become_follower(from);
             }
+            _current_leader = from;
             append_entries(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, append_reply>) {
             if constexpr (!std::is_same_v<State, leader>) {
@@ -388,6 +389,7 @@ void fsm::step(server_id from, Message&& msg) {
                 // snapshot can be installed only in follower
                 send_to(from, snapshot_reply{ .success = false });
             } else {
+                _current_leader = from;
                 // apply snapshot and reply with success
                 apply_snapshot(std::move(msg.snp));
                 send_to(from, snapshot_reply{ .success = true });
