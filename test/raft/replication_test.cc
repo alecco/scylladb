@@ -309,7 +309,6 @@ using update = std::variant<entries, new_leader>;
 
 struct initial_log {
     std::initializer_list<log_entry> le;
-    unsigned start_idx;
 };
 
 struct initial_snapshot {
@@ -353,15 +352,17 @@ future<int> run_test(test_case test) {
 
     // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
-        if (i < test.initial_states.size()) {
-            auto state = test.initial_states[i];
-            states[i].log = create_log(state.le, state.start_idx);
-        } else {
-            states[i].log = {};
-        }
+        size_t start_idx = 1;
         if (i < test.initial_snapshots.size()) {
             states[i].snapshot = test.initial_snapshots[i].snap;
             states[i].snp_value.value = fletcher_32::mksum_range(test.initial_snapshots[i].snap.idx);
+            start_idx = states[i].snapshot.idx + 1;
+        }
+        if (i < test.initial_states.size()) {
+            auto state = test.initial_states[i];
+            states[i].log = create_log(state.le, start_idx);
+        } else {
+            states[i].log = {};
         }
         states[i].checksum = std::make_shared<fletcher_32>();
         states[i].apply = std::bind(apply_changes, std::ref(committed[i]), states[i].checksum,
@@ -440,7 +441,7 @@ int main(int argc, char* argv[]) {
         {.name = "simple_replication", .nodes = 1, .initial_term = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
         {.name = "non_empty_leader_log", .nodes = 2, .initial_term = 1,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}},
          .updates = {entries{4}}},
         // 1 nodes, 12 client entries
         {.name = "simple_1_auto_12", .nodes = 1, .initial_term = 1,
@@ -451,11 +452,11 @@ int main(int argc, char* argv[]) {
          .updates = {entries{4}}},
         // 1 nodes, 7 leader entries, 12 client entries
         {.name = "simple_1_pre", .nodes = 1, .initial_term = 1,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}},},
         // 2 nodes, 7 leader entries, 12 client entries
         {.name = "simple_2_pre", .nodes = 2, .initial_term = 1,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}},},
         // 3 nodes, 2 leader changes with 4 client entries each
         {.name = "leader_changes", .nodes = 3, .initial_term = 1,
@@ -467,54 +468,54 @@ int main(int argc, char* argv[]) {
         //
         // 3 nodes, 7 leader entries, 12 client entries, change leader, 12 client entries
         {.name = "simple_3_pre_chg", .nodes = 3, .initial_term = 2,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12},new_leader{1},entries{12}},},
         // 2 nodes, leader empoty, follower has 3 spurious entries
         {.name = "replace_log_leaders_log_empty", .nodes = 3, .initial_term = 2,
-         .initial_states = {{}, {{{2,10},{2,20},{2,30}}, 1}},
+         .initial_states = {{}, {{{2,10},{2,20},{2,30}}}},
          .updates = {entries{4}}},
         // 3 nodes, 7 leader entries, follower has 9 spurious entries
         {.name = "simple_3_spurious", .nodes = 3, .initial_term = 2,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1},
-                            {{{2,10},{2,11},{2,12},{2,13},{2,14},{2,15},{2,16},{2,17},{2,18}}, 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
+                            {{{2,10},{2,11},{2,12},{2,13},{2,14},{2,15},{2,16},{2,17},{2,18}}}},
          .updates = {entries{4}},},
         // 3 nodes, term 3, leader has 9 entries, follower has 5 spurious entries, 4 client entries
         {.name = "simple_3_spurious", .nodes = 3, .initial_term = 3,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1},
-                            {{{2,10},{2,11},{2,12},{2,13},{2,14}}, 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
+                            {{{2,10},{2,11},{2,12},{2,13},{2,14}}}},
          .updates = {entries{4}},},
         // 3 nodes, term 2, leader has 7 entries, follower has 3 good and 3 spurious entries
         {.name = "simple_3_follower_4_1", .nodes = 3, .initial_term = 3,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1},
-                            {.le = {{1,0},{1,1},{1,2},{2,20},{2,30},{2,40}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
+                            {.le = {{1,0},{1,1},{1,2},{2,20},{2,30},{2,40}}}},
          .updates = {entries{4}}},
         // A follower and a leader have matching logs but leader's is shorter
         // 3 nodes, term 2, leader has 2 entries, follower has same and 5 more, 12 updates
         {.name = "simple_3_short_leader", .nodes = 3, .initial_term = 3,
-         .initial_states = {{.le = {{1,0},{1,1}}, .start_idx = 1},
-                            {.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{1,1}}},
+                            {.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}}},
         // A follower and a leader have no common entries
         // 3 nodes, term 2, leader has 7 entries, follower has non-matching 6 entries, 12 updates
         {.name = "follower_not_matching", .nodes = 3, .initial_term = 3,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1},
-                            {.le = {{2,10},{2,20},{2,30},{2,40},{2,50},{2,60}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
+                            {.le = {{2,10},{2,20},{2,30},{2,40},{2,50},{2,60}}}},
          .updates = {entries{12}},},
         // A follower and a leader have one common entry
         // 3 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries, 12 updates
         {.name = "follower_one_common", .nodes = 3, .initial_term = 4,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2}}, .start_idx = 1},
-                            {.le = {{1,0},{2,11},{2,12},{2,13}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{1,1},{1,2}}},
+                            {.le = {{1,0},{2,11},{2,12},{2,13}}}},
          .updates = {entries{12}}},
         // A follower and a leader have 2 common entries in different terms
         // 3 nodes, term 2, leader has 4 entries, follower has matching but in different term
         {.name = "follower_one_common", .nodes = 3, .initial_term = 5,
-         .initial_states = {{.le = {{1,0},{2,1},{3,2},{3,3}}, .start_idx = 1},
-                            {.le = {{1,0},{2,1},{2,2},{2,13}}, .start_idx = 1}},
+         .initial_states = {{.le = {{1,0},{2,1},{3,2},{3,3}}},
+                            {.le = {{1,0},{2,1},{2,2},{2,13}}}},
          .updates = {entries{4}}},
         // 3 nodes, leader with snapshot (1) and log (2,3,4), gets updates (5,6)
         {.name = "simple_snapshot", .nodes = 3, .initial_term = 1,
-         .initial_states = {{.le = {{1,10},{1,11},{1,12},{1,13}}, .start_idx = 11}},
+         .initial_states = {{.le = {{1,10},{1,11},{1,12},{1,13}}}},
          .initial_snapshots = {{.snap = {.idx = raft::index_t(10),   // log idx - 1
                                          .term = raft::term_t(1),
                                          .id = utils::UUID(0, 1)}}},   // must be 1+
