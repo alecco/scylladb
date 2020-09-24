@@ -73,6 +73,10 @@ struct snapshot_digest {
     digest64 value = -1;
 };
 
+// Lets assume one snapshot per server
+std::unordered_map<raft::server_id, snapshot_digest> snapshots;
+std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_digest>> persisted_snapshots;
+
 class state_machine : public raft::state_machine {
 public:
     using apply_fn = std::function<void(raft::server_id id,
@@ -112,6 +116,9 @@ struct initial_state {
     std::vector<raft::log_entry> log;
     size_t total_entries = 100;       // Total entries including initial snapshot
     raft::snapshot snapshot;
+    snapshot_digest snp_digest;
+    raft::configuration config;    // TODO: custom initial configs
+    raft::server::configuration server_config = raft::server::configuration();
 };
 
 class storage : public raft::storage {
@@ -125,8 +132,12 @@ public:
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) { return make_ready_future<>(); }
-    virtual future<raft::snapshot> load_snapshot() {
+    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
+        persisted_snapshots[_id] = std::make_pair(snap, snapshots[_id]);
+        tlogger.debug("sm[{}] persists snapshot {}", _id, snapshots[_id].value);
+        return make_ready_future<>();
+    }
+    future<raft::snapshot> load_snapshot() override {
         return make_ready_future<raft::snapshot>(_conf.snapshot);
     }
     virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { co_return seastar::sleep(1us); };
@@ -206,7 +217,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
     auto fd = seastar::make_shared<failure_detector>();
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage),
-        std::move(fd), raft::server::configuration());
+        std::move(fd), state.server_config);
 
     return std::make_pair(std::move(raft), &rsm);
 }
@@ -223,6 +234,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
         states[i].snapshot.config = config;
+        snapshots[s.id] = states[i].snp_digest;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries)).first;
         co_await raft.start();
     }
@@ -299,6 +311,7 @@ struct test_case {
     const std::optional<uint64_t> initial_leader;
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
+    const std::vector<raft::server::configuration> config;
     const std::vector<update> updates;
 };
 
@@ -332,6 +345,7 @@ future<int> run_test(test_case test) {
         size_t start_idx = 1;
         if (i < test.initial_snapshots.size()) {
             states[i].snapshot = test.initial_snapshots[i].snap;
+            states[i].snp_digest.value = hasher_int::digest_range(test.initial_snapshots[i].snap.idx);
             start_idx = states[i].snapshot.idx + 1;
         }
         if (i < test.initial_states.size()) {
@@ -339,6 +353,9 @@ future<int> run_test(test_case test) {
             states[i].log = create_log(state.le, start_idx);
         } else {
             states[i].log = {};
+        }
+        if (i < test.config.size()) {
+            states[i].server_config = test.config[i];
         }
     }
 
@@ -406,6 +423,18 @@ future<int> run_test(test_case test) {
             break;
         }
     }
+
+    // TODO: check that snapshot is taken when it should be
+    for (auto& s : persisted_snapshots) {
+        auto& [snp, val] = s.second;
+        if (val.value != hasher_int::digest_range(snp.idx)) {
+            fail = -1;
+            break;
+        }
+   }
+
+    snapshots.clear();
+    persisted_snapshots.clear();
 
     co_return fail;
 }
@@ -489,6 +518,22 @@ int main(int argc, char* argv[]) {
          .initial_states = {{.le = {{1,0},{1,1},{1,2}}},
                             {.le = {{1,0},{2,11},{2,12},{2,13}}}},
          .updates = {entries{12}}},
+        // A follower and a leader have 2 common entries in different terms
+        // 3 nodes, term 2, leader has 4 entries, follower has matching but in different term
+        {.name = "follower_one_common", .nodes = 3, .initial_term = 5,
+         .initial_states = {{.le = {{1,0},{2,1},{3,2},{3,3}}},
+                            {.le = {{1,0},{2,1},{2,2},{2,13}}}},
+         .updates = {entries{4}}},
+        // 3 nodes, leader with snapshot (1) and log (2,3,4), gets updates (5,6)
+        {.name = "simple_snapshot", .nodes = 3, .initial_term = 1,
+         .initial_states = {{.le = {{1,10},{1,11},{1,12},{1,13}}}},
+         .initial_snapshots = {{.snap = {.idx = raft::index_t(10),   // log idx - 1
+                                         .term = raft::term_t(1),
+                                         .id = utils::UUID(0, 1)}}},   // must be 1+
+         .updates = {entries{12}}},
+        {.name = "take_snapshot", .nodes = 2, .initial_term = 1,
+         .config = {{.snapshot_threashold = 10}, {.snapshot_threashold = 20}},
+         .updates = {entries{100}}},
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
