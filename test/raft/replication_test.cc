@@ -26,21 +26,17 @@
 //      (run_test)
 //      - Create the servers and initialize
 //      - Set up checksum
-//      - Create expected final log state
 //      - Process updates one by one
-//      - Wait until all servers have logs of size of expected entries
-//      - Check output data matches expected (apply() calls)
-//      - If provided, verify checksum
-//
+//      - Wait until all servers have logs of size of TOTAL_VALUES entries
+//      - Verify checksum
+
 
 using namespace std::chrono_literals;
 using namespace std::placeholders;
 
 static seastar::logger tlogger("test");
 
-struct snapshot_value {
-    int32_t value = -1;
-};
+const int TOTAL_VALUES = 100;   // Total test entries including snapshot
 
 std::mt19937 random_generator() {
     std::random_device rd;
@@ -60,24 +56,33 @@ int rand() {
 bool drop_replication = false;
 
 // Positional checksum to verify seen values and order
+using checksum32 = uint32_t;
 struct fletcher_32 {
     int32_t _sum1 = 0;
     int32_t _sum2 = 0;
+    void set(const checksum32 cksum) {
+        _sum1 = cksum & 0xFFFF;
+        _sum2 = cksum >> 16;
+    }
     void update(const unsigned val) {
         assert(val < 65535);
         _sum1 = (_sum1 + val)   % 65535;
         _sum2 = (_sum2 + _sum1) % 65535;
     }
-    int32_t checksum() const {
+    checksum32 checksum() const {
         return _sum2 << 16 | _sum1;
     }
-    static int32_t make_checksum(std::vector<int> vals) {
+    static checksum32 mksum_range(const int max) {
         fletcher_32 c;
-        for (auto v: vals) {
-            c.update(v);
+        for (int i = 0; i < max; ++i) {
+            c.update(i);
         }
         return c.checksum();
     }
+};
+
+struct snapshot_value {
+    checksum32 value = -1;
 };
 
 // Lets assume one snapshot per server
@@ -105,7 +110,7 @@ public:
         snapshots.erase(_id);
     }
     future<> load_snapshot(raft::snapshot_id id) override {
-        _checksum->update(snapshots[_id].value);
+        _checksum->set(snapshots[_id].value);
         return make_ready_future<>();
     };
     future<> abort() override { return make_ready_future<>(); }
@@ -200,9 +205,10 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
+std::unordered_set<raft::server_id> SERVER_DISCONNECTED;
 class failure_detector : public raft::failure_detector {
     bool is_alive(raft::server_id server) override {
-        return true;
+        return SERVER_DISCONNECTED.find(server) == SERVER_DISCONNECTED.end();
     }
 };
 
@@ -216,6 +222,7 @@ create_raft_server(raft::server_id uuid, initial_state state) {
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
     auto fd = seastar::make_shared<failure_detector>();
+
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage),
         std::move(fd), raft::server::configuration());
 
@@ -274,7 +281,7 @@ std::vector<raft::command> create_commands(std::vector<T> list) {
     return commands;
 }
 
-future<> apply_changes(std::vector<int> &res, size_t expected, std::shared_ptr<fletcher_32> checksum,
+future<> apply_changes(std::vector<int> &res, std::shared_ptr<fletcher_32> checksum, unsigned apply_entries,
         raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
     tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
 
@@ -285,7 +292,7 @@ future<> apply_changes(std::vector<int> &res, size_t expected, std::shared_ptr<f
         checksum->update(n);    // running checksum (values and snapshots)
         tlogger.debug("{}: apply_changes {}", id, n);
     }
-    if (res.size() >= expected) {
+    if (res.size() >= apply_entries) {
         done.set_value();
     }
     return make_ready_future<>();
@@ -295,7 +302,7 @@ future<> apply_changes(std::vector<int> &res, size_t expected, std::shared_ptr<f
 //  - Entries
 //  - Leader change
 //  - Configuration change
-using entries = std::vector<int>;
+using entries = unsigned;
 using new_leader = int;
 // TODO: config change
 using update = std::variant<entries, new_leader>;
@@ -307,7 +314,6 @@ struct initial_log {
 
 struct initial_snapshot {
     raft::snapshot snap;
-    int32_t value;
 };
 
 struct test_case {
@@ -318,8 +324,6 @@ struct test_case {
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<update> updates;
-    const std::optional<std::vector<int>> expected;
-    const int32_t expected_checksum;
 };
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -331,35 +335,21 @@ future<int> run_test(test_case test) {
     if (test.initial_leader) {
         leader = *test.initial_leader;
     } else {
-        // TODO: trigger election (deterministic)
         leader = 0;
     }
 
     states[leader].term = raft::term_t{test.initial_term};
 
-    // Build expected result log as initial leader log and subsequent updates
-    std::vector<int> expected;                           // Expected output for Raft
-    if (test.expected) {
-        expected = *test.expected;
-    } else {
-        if (leader < test.initial_states.size()) {
-            // Ignore index as it's internal and not part of output
-            for (auto log_initializer: test.initial_states[leader].le) {
-                log_entry le(log_initializer);
-                if (le.term > test.initial_term) {
-                    break;
-                }
-                expected.push_back(le.value);
-            }
-        }
-        for (auto update: test.updates) {
-            if (std::holds_alternative<entries>(update)) {
-                auto updates = std::get<entries>(update);
-                expected.insert(expected.end(), updates.begin(), updates.end());
-            }
-        }
+    int leader_initial_entries = 0;
+    if (leader < test.initial_states.size()) {
+        leader_initial_entries += test.initial_states[leader].le.size();  // Count existing leader entries
     }
-    size_t expected_entries = expected.size();
+    int leader_snap_skipped = 0; // Next value to write
+    if (leader < test.initial_snapshots.size()) {
+        leader_snap_skipped = test.initial_snapshots[leader].snap.idx;  // Count existing leader entries
+    }
+
+    unsigned apply_entries = TOTAL_VALUES - leader_snap_skipped;
 
     // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
@@ -371,11 +361,11 @@ future<int> run_test(test_case test) {
         }
         if (i < test.initial_snapshots.size()) {
             states[i].snapshot = test.initial_snapshots[i].snap;
-            states[i].snp_value.value = test.initial_snapshots[i].value;
+            states[i].snp_value.value = fletcher_32::mksum_range(test.initial_snapshots[i].snap.idx);
         }
         states[i].checksum = std::make_shared<fletcher_32>();
-        states[i].apply = std::bind(apply_changes, std::ref(committed[i]), expected_entries,
-                states[i].checksum, _1, _2, _3);
+        states[i].apply = std::bind(apply_changes, std::ref(committed[i]), states[i].checksum,
+                apply_entries, _1, _2, _3);
     }
 
     auto rafts = co_await create_cluster(states);
@@ -384,22 +374,39 @@ future<int> run_test(test_case test) {
     co_await rafts[leader].first->elect_me_leader();
 
     // Process all updates in order
+    int next_val = leader_snap_skipped + leader_initial_entries;
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
-            auto updates = std::get<entries>(update);
-            std::vector<raft::command> commands = create_commands<int>(updates);
+            auto n = std::get<entries>(update);
+            std::vector<int> values(n);
+            std::iota(values.begin(), values.end(), next_val);
+            std::vector<raft::command> commands = create_commands<int>(values);
             co_await seastar::parallel_for_each(commands, [&] (const raft::command cmd) {
                 tlogger.debug("Adding command entry on leader {}", leader);
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
+            next_val += n;
         } else if (std::holds_alternative<new_leader>(update)) {
-            auto next_leader = std::get<new_leader>(update);
-
+            unsigned next_leader = std::get<new_leader>(update);
+            assert(next_leader < rafts.size());
             // co_await rafts[leader].first->read_barrier();
+            SERVER_DISCONNECTED.insert(raft::server_id{utils::UUID(0, leader + 1)});
             co_await rafts[next_leader].first->elect_me_leader();
-            tlogger.debug("confirmed leader on {}\n", next_leader);
+            SERVER_DISCONNECTED.erase(raft::server_id{utils::UUID(0, leader + 1)});
+            tlogger.debug("confirmed leader on {}", next_leader);
             leader = next_leader;
         }
+    }
+
+    if (next_val < TOTAL_VALUES) {
+        // Send remaining updates
+        std::vector<int> values(TOTAL_VALUES - next_val);
+        std::iota(values.begin(), values.end(), next_val);
+        std::vector<raft::command> commands = create_commands<int>(values);
+        tlogger.debug("Adding remaining {} entries on leader {}", values.size(), leader);
+        co_await seastar::parallel_for_each(commands, [&] (const raft::command cmd) {
+            return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+        });
     }
 
     // Wait for all state_machine s to finish processing commands
@@ -411,19 +418,11 @@ future<int> run_test(test_case test) {
         co_await r.first->abort(); // Stop servers
     }
 
-    // Check committed entries match expected entries  (apply called)
-    for (size_t i = 0; i < committed.size(); ++i) {
-        if (committed[i] != expected) {
-            co_return 1;  // Fail
-        }
-    }
-
     // Verify total checksum matches expected (snapshot and apply calls)
-    if (test.expected_checksum) {
-        for (size_t i = 0; i < states.size(); ++i) {
-            if (states[i].checksum->checksum() != test.expected_checksum) {
-                co_return -1;  // Fail
-            }
+    auto expected = fletcher_32::mksum_range(TOTAL_VALUES);
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (states[i].checksum->checksum() != expected) {
+            co_return -1;  // Fail
         }
     }
 
@@ -437,79 +436,89 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
-        // 1 nodes, 2 client entries, automatic expected result
-        {.name = "simple_1_auto", .nodes = 1, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {}, .updates = {entries{0,1}}},
-        // 1 nodes, 2 client entries, custom expected result
-        {.name = "simple_1_expected", .nodes = 1, .initial_term = 1, .initial_leader = 0,
+        // 1 nodes, simple replication, empty, no updates
+        {.name = "simple_replication", .nodes = 1, .initial_term = 1},
+        // 2 nodes, 4 existing leader entries, 4 updates
+        {.name = "non_empty_leader_log", .nodes = 2, .initial_term = 1,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}, .start_idx = 1}},
+         .updates = {entries{4}}},
+        // 1 nodes, 12 client entries
+        {.name = "simple_1_auto_12", .nodes = 1, .initial_term = 1,
+         .initial_states = {}, .updates = {entries{12}}},
+        // 1 nodes, 12 client entries
+        {.name = "simple_1_expected", .nodes = 1, .initial_term = 1,
          .initial_states = {},
-         .updates = {entries{0,1}},
-         .expected = {{0,1}}},
-        // 1 nodes, 1 leader entry, 2 client entries
-        {.name = "simple_1_pre", .nodes = 1, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{.le = {{1,0}}, .start_idx = 1}},
-         .updates = {entries{1,2}},},
-        // 2 nodes, 1 leader entry, 2 client entries
-        {.name = "simple_2_pre", .nodes = 2, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{.le = {{1,0}}, .start_idx = 1}},
-         .updates = {entries{1,2}},},
+         .updates = {entries{4}}},
+        // 1 nodes, 7 leader entries, 12 client entries
+        {.name = "simple_1_pre", .nodes = 1, .initial_term = 1,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1}},
+         .updates = {entries{12}},},
+        // 2 nodes, 7 leader entries, 12 client entries
+        {.name = "simple_2_pre", .nodes = 2, .initial_term = 1,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1}},
+         .updates = {entries{12}},},
+        // 3 nodes, 2 leader changes with 4 client entries each
+        {.name = "leader_changes", .nodes = 3, .initial_term = 1,
+         .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}},
         //
         // NOTE: due to disrupting candidates protection leader doesn't vote for others, and
         //       servers with entries vote for themselves, so some tests use 3 servers instead of
         //       2 for simplicity and to avoid a stalemate. This behaviour can be disabled.
         //
-        // 3 nodes, 1 leader entry, 2 client entries, change leader, 2 client entries
-        {.name = "simple_3_pre_chg", .nodes = 3, .initial_term = 2, .initial_leader = 0,
-         .initial_states = {{.le = {{1,0}}, .start_idx = 1}},
-         .updates = {entries{1,2},new_leader{1},entries{3,4}},},
-        // 3 nodes, follower has spurious entry
-        {.name = "simple_3_spurious", .nodes = 3, .initial_term = 2, .initial_leader = 0,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2}}, .start_idx = 1},
-                            {{{2,10}}, 1}},
-         .updates = {entries{3,4}},},
-        // 3 nodes, term 3, leader has 1 entry, follower has 2 spurious entries
-        {.name = "simple_3_spurious", .nodes = 3, .initial_term = 3, .initial_leader = 0,
-         .initial_states = {{.le = {{1,0},}, .start_idx = 1},
-                            {.le = {{2,10},{2,20}}, .start_idx = 1}},
-         .updates = {entries{1,2}},},
-        // 3 nodes, term 2, leader has 1 entry, follower has 1 good and 3 spurious entries
-        {.name = "simple_3_follower_4_1", .nodes = 3, .initial_term = 3, .initial_leader = 0,
-         .initial_states = {{.le = {{1,0},{1,1}}, .start_idx = 1},
-                            {.le = {{1,0},{2,20},{2,30},{2,40}}, .start_idx = 1}},
-         .updates = {entries{2,3}},},
+        // 3 nodes, 7 leader entries, 12 client entries, change leader, 12 client entries
+        {.name = "simple_3_pre_chg", .nodes = 3, .initial_term = 2,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1}},
+         .updates = {entries{12},new_leader{1},entries{12}},},
+        // 2 nodes, leader empoty, follower has 3 spurious entries
+        {.name = "replace_log_leaders_log_empty", .nodes = 3, .initial_term = 2,
+         .initial_states = {{}, {{{2,10},{2,20},{2,30}}, 1}},
+         .updates = {entries{4}}},
+        // 3 nodes, 7 leader entries, follower has 9 spurious entries
+        {.name = "simple_3_spurious", .nodes = 3, .initial_term = 2,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1},
+                            {{{2,10},{2,11},{2,12},{2,13},{2,14},{2,15},{2,16},{2,17},{2,18}}, 1}},
+         .updates = {entries{4}},},
+        // 3 nodes, term 3, leader has 9 entries, follower has 5 spurious entries, 4 client entries
+        {.name = "simple_3_spurious", .nodes = 3, .initial_term = 3,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1},
+                            {{{2,10},{2,11},{2,12},{2,13},{2,14}}, 1}},
+         .updates = {entries{4}},},
+        // 3 nodes, term 2, leader has 7 entries, follower has 3 good and 3 spurious entries
+        {.name = "simple_3_follower_4_1", .nodes = 3, .initial_term = 3,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1},
+                            {.le = {{1,0},{1,1},{1,2},{2,20},{2,30},{2,40}}, .start_idx = 1}},
+         .updates = {entries{4}}},
         // A follower and a leader have matching logs but leader's is shorter
-        // 3 nodes, term 2, leader has 2 entries, follower has same 2 and 2 extra entries (good)
-        {.name = "simple_3_short_leader", .nodes = 3, .initial_term = 3, .initial_leader = 0,
+        // 3 nodes, term 2, leader has 2 entries, follower has same and 5 more, 12 updates
+        {.name = "simple_3_short_leader", .nodes = 3, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1}}, .start_idx = 1},
-                            {.le = {{1,0},{1,1},{1,2},{1,3}}, .start_idx = 1}},
-         .updates = {entries{4,5}},},
+                            {.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1}},
+         .updates = {entries{12}}},
         // A follower and a leader have no common entries
-        // 3 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
-        {.name = "follower_not_matching", .nodes = 3, .initial_term = 3, .initial_leader = 0,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2}}, .start_idx = 1},
-                            {.le = {{2,10},{2,11},{2,12}}, .start_idx = 1}},
-         .updates = {entries{3,4}},},
+        // 3 nodes, term 2, leader has 7 entries, follower has non-matching 6 entries, 12 updates
+        {.name = "follower_not_matching", .nodes = 3, .initial_term = 3,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}, .start_idx = 1},
+                            {.le = {{2,10},{2,20},{2,30},{2,40},{2,50},{2,60}}, .start_idx = 1}},
+         .updates = {entries{12}},},
         // A follower and a leader have one common entry
-        // 3 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
-        {.name = "follower_one_common", .nodes = 3, .initial_term = 4, .initial_leader = 0,
+        // 3 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries, 12 updates
+        {.name = "follower_one_common", .nodes = 3, .initial_term = 4,
          .initial_states = {{.le = {{1,0},{1,1},{1,2}}, .start_idx = 1},
                             {.le = {{1,0},{2,11},{2,12},{2,13}}, .start_idx = 1}},
-         .updates = {entries{3,4}},},
+         .updates = {entries{12}}},
         // A follower and a leader have 2 common entries in different terms
-        // 3 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries
-        {.name = "follower_one_common", .nodes = 3, .initial_term = 5, .initial_leader = 0,
+        // 3 nodes, term 2, leader has 4 entries, follower has matching but in different term
+        {.name = "follower_one_common", .nodes = 3, .initial_term = 5,
          .initial_states = {{.le = {{1,0},{2,1},{3,2},{3,3}}, .start_idx = 1},
-                            {.le = {{1,0},{2,1},{2,12},{2,13}}, .start_idx = 1}},
-         .updates = {entries{4,5}},},
+                            {.le = {{1,0},{2,1},{2,2},{2,13}}, .start_idx = 1}},
+         .updates = {entries{4}}},
         // 3 nodes, leader with snapshot (1) and log (2,3,4), gets updates (5,6)
-        {.name = "simple_snapshot", .nodes = 3, .initial_term = 1, .initial_leader = 0,
-         .initial_states = {{.le = {{1,2},{1,3},{1,4}}, .start_idx = 11}},
+        {.name = "simple_snapshot", .nodes = 3, .initial_term = 1,
+         .initial_states = {{.le = {{1,10},{1,11},{1,12},{1,13}}, .start_idx = 11}},
          .initial_snapshots = {{.snap = {.idx = raft::index_t(10),   // log idx - 1
                                          .term = raft::term_t(1),
-                                         .id = utils::UUID(0, 1)},   // must be 1+
-                                .value = 1}},
-         .updates = {entries{5,6}},
-         .expected_checksum = fletcher_32::make_checksum({1,2,3,4,5,6}) },
+                                         .id = utils::UUID(0, 1)}}},   // must be 1+
+         .updates = {entries{12}}},
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {
