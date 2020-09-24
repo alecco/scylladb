@@ -523,7 +523,6 @@ int main(int argc, char* argv[]) {
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {
-        std::stringstream ss;
         for (auto test: replication_tests) {
             if (co_await run_test(test) != 0) {
                 co_return 1; // Fail
