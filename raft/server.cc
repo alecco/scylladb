@@ -463,10 +463,7 @@ void server_impl::make_me_leader() {
 }
 
 future<> server_impl::elect_me_leader() {
-    for (int i = 0; i < 2 * raft::ELECTION_TIMEOUT.count(); i++) {
-        if (_fsm->is_candidate()) {
-            break;
-        }
+    for (int i = 0; i <= 2 * raft::ELECTION_TIMEOUT.count(); i++) {
         _fsm->tick();
     }
     do {
