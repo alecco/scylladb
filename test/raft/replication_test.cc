@@ -87,6 +87,7 @@ struct snapshot_value {
 
 // Lets assume one snapshot per server
 std::unordered_map<raft::server_id, snapshot_value> snapshots;
+std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_value>> persisted_snapshots;
 
 class state_machine : public raft::state_machine {
 public:
@@ -104,13 +105,15 @@ public:
     }
     future<raft::snapshot_id> take_snapshot() override {
         snapshots[_id].value = _checksum->checksum();
-        return make_ready_future<raft::snapshot_id>(raft::snapshot_id());
+        tlogger.debug("sm[{}] takes snapshot {}", _id, snapshots[_id].value);
+        return make_ready_future<raft::snapshot_id>(utils::make_random_uuid());
     }
     void drop_snapshot(raft::snapshot_id id) override {
         snapshots.erase(_id);
     }
     future<> load_snapshot(raft::snapshot_id id) override {
         _checksum->set(snapshots[_id].value);
+        tlogger.debug("sm[{}] loads snapshot {}", _id, snapshots[_id].value);
         return make_ready_future<>();
     };
     future<> abort() override { return make_ready_future<>(); }
@@ -127,21 +130,27 @@ struct initial_state {
     raft::snapshot snapshot;
     snapshot_value snp_value;
     raft::configuration config;    // TODO: custom initial configs
+    raft::server::configuration server_config = raft::server::configuration();
     state_machine::apply_fn apply;
     std::shared_ptr<fletcher_32> checksum;
 };
 
 class storage : public raft::storage {
+    raft::server_id _id;
     initial_state _conf;
 public:
-    storage(initial_state conf) : _conf(std::move(conf)) {}
+    storage(raft::server_id id, initial_state conf) : _id(id), _conf(std::move(conf)) {}
     storage() {}
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override { co_return seastar::sleep(1us); }
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) override { return make_ready_future<>(); }
+    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
+        persisted_snapshots[_id] = std::make_pair(snap, snapshots[_id]);
+        tlogger.debug("sm[{}] persists snapshot {}", _id, snapshots[_id].value);
+        return make_ready_future<>();
+    }
     future<raft::snapshot> load_snapshot() override {
         return make_ready_future<raft::snapshot>(_conf.snapshot);
     }
@@ -220,11 +229,11 @@ create_raft_server(raft::server_id uuid, initial_state state) {
     auto sm = std::make_unique<state_machine>(uuid, std::move(state.apply), state.checksum);
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
-    auto mstorage = std::make_unique<storage>(state);
+    auto mstorage = std::make_unique<storage>(uuid, state);
     auto fd = seastar::make_shared<failure_detector>();
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage),
-        std::move(fd), raft::server::configuration());
+        std::move(fd), state.server_config);
 
     return std::make_pair(std::move(raft), &rsm);
 }
@@ -322,6 +331,7 @@ struct test_case {
     const std::optional<uint64_t> initial_leader;
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
+    const std::vector<raft::server::configuration> config;
     const std::vector<update> updates;
 };
 
@@ -330,6 +340,7 @@ future<int> run_test(test_case test) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
     std::vector<std::vector<int>> committed(test.nodes); // Actual outputs for each server
 
+    tlogger.debug("running test {}:", test.name);
     size_t leader;
     if (test.initial_leader) {
         leader = *test.initial_leader;
@@ -367,6 +378,9 @@ future<int> run_test(test_case test) {
         states[i].checksum = std::make_shared<fletcher_32>();
         states[i].apply = std::bind(apply_changes, std::ref(committed[i]), states[i].checksum,
                 apply_entries, _1, _2, _3);
+        if (i < test.config.size()) {
+            states[i].server_config = test.config[i];
+        }
     }
 
     auto rafts = co_await create_cluster(states);
@@ -419,15 +433,30 @@ future<int> run_test(test_case test) {
         co_await r.first->abort(); // Stop servers
     }
 
+    int fail = 0;
+
     // Verify total checksum matches expected (snapshot and apply calls)
-    auto expected = fletcher_32::mksum_range(TOTAL_VALUES);
+    static const auto expected = fletcher_32::mksum_range(TOTAL_VALUES);
     for (size_t i = 0; i < states.size(); ++i) {
         if (states[i].checksum->checksum() != expected) {
-            co_return -1;  // Fail
+            fail = -1;  // Fail
+            break;
         }
     }
 
-    co_return 0;
+    // TODO: check that snapshot is taken when it should be
+    for (auto& s : persisted_snapshots) {
+        auto& [snp, val] = s.second;
+        if (val.value != fletcher_32::mksum_range(snp.idx)) {
+            fail = -1;
+            break;
+        }
+   }
+
+    snapshots.clear();
+    persisted_snapshots.clear();
+
+    co_return fail;
 }
 
 int main(int argc, char* argv[]) {
@@ -520,6 +549,9 @@ int main(int argc, char* argv[]) {
                                          .term = raft::term_t(1),
                                          .id = utils::UUID(0, 1)}}},   // must be 1+
          .updates = {entries{12}}},
+        {.name = "take_snapshot", .nodes = 2, .initial_term = 1,
+         .config = {{.snapshot_threashold = 10}, {.snapshot_threashold = 20}},
+         .updates = {entries{100}}},
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {
