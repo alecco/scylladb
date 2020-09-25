@@ -202,6 +202,10 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
     auto reply = std::get<raft::vote_reply>(output.messages.back().second);
     BOOST_CHECK(!reply.vote_granted);
 
+    // Follower doesn't become candidate if leader is alive
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_follower());
+
     // Run out of steam for this term. Start a new one.
     fd.alive = false;
     election_timeout(fsm);
