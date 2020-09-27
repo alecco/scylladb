@@ -464,6 +464,8 @@ int main(int argc, char* argv[]) {
 
     seastar::app_template::config cfg;
     seastar::app_template app(cfg);
+    app.add_options()
+        ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
 
     std::vector<test_case> replication_tests = {
         // 1 nodes, simple replication, empty, no updates
@@ -554,7 +556,9 @@ int main(int argc, char* argv[]) {
          .updates = {entries{100}}},
     };
 
-    return app.run(argc, argv, [&replication_tests] () -> future<int> {
+    return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
+        drop_replication = app.configuration()["drop-replication"].as<bool>();
+
         for (auto test: replication_tests) {
             if (co_await run_test(test) != 0) {
                 co_return 1; // Fail
