@@ -1,4 +1,5 @@
 #include <random>
+#include <algorithm>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
@@ -133,6 +134,7 @@ struct initial_state {
     raft::server::configuration server_config = raft::server::configuration();
     state_machine::apply_fn apply;
     std::shared_ptr<fletcher_32> checksum;
+    std::vector<bool> unreachable;
 };
 
 class storage : public raft::storage {
@@ -313,8 +315,9 @@ future<> apply_changes(std::vector<int> &res, std::shared_ptr<fletcher_32> check
 //  - Configuration change
 using entries = unsigned;
 using new_leader = int;
+using partition = std::vector<std::unordered_set<int>>;
 // TODO: config change
-using update = std::variant<entries, new_leader>;
+using update = std::variant<entries, new_leader, partition>;
 
 struct initial_log {
     std::initializer_list<log_entry> le;
@@ -381,6 +384,7 @@ future<int> run_test(test_case test) {
         if (i < test.config.size()) {
             states[i].server_config = test.config[i];
         }
+        states[i].unreachable.reserve(test.nodes);
     }
 
     auto rafts = co_await create_cluster(states);
@@ -400,6 +404,7 @@ future<int> run_test(test_case test) {
                 tlogger.debug("Adding command entry on leader {}", leader);
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
+fmt::print("XXX Added {} entries on leader {}", n, leader);
             next_val += n;
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
@@ -408,9 +413,31 @@ future<int> run_test(test_case test) {
             SERVER_DISCONNECTED.insert(raft::server_id{utils::UUID(0, leader + 1)});
             co_await rafts[next_leader].first->elect_me_leader();
             SERVER_DISCONNECTED.erase(raft::server_id{utils::UUID(0, leader + 1)});
+fmt::print("XXX confirmed leader on {}", next_leader);
             tlogger.debug("confirmed leader on {}", next_leader);
             leader = next_leader;
+        } else if (std::holds_alternative<partition>(update)) {
+            auto partitions = std::get<partition>(update);
+fmt::print("XXX  partitioning\n");
+            for (unsigned s = 0; s < states.size(); ++s) {
+                std::fill(states[s].unreachable.begin(), states[s].unreachable.end(), 0);
+            }
+            // Mark node unreachable if in different partition
+            // Note: there could be more than 2 partitions
+            for (auto p: partitions) {
+                for (unsigned s = 0; s < states.size(); ++s) {
+                    bool s_in_partition = p.find(s) != p.end();
+                    for (unsigned other = 0; other < test.nodes; ++other) {
+                        bool other_in_partition = p.find(s) != p.end();
+                        if (other_in_partition != s_in_partition) { // XXX is this correct?
+                            states[s].unreachable[other] = true;  // One is in partition
+                        }
+                    }
+                }
+            }
+fmt::print("XXX: {}\n", partitions.size());
         }
+fmt::print("XXX: 2\n");
     }
 
     if (next_val < TOTAL_VALUES) {
@@ -466,6 +493,10 @@ int main(int argc, char* argv[]) {
     seastar::app_template app(cfg);
 
     std::vector<test_case> replication_tests = {
+        // 4 nodes, partition 2/2, add 2 entries, rejoin
+        {.name = "non_empty_leader_log", .nodes = 4, .initial_term = 1,
+         .updates = {partition{{0,1},{2,3}},entries{4},partition{}}},
+#if 0
         // 1 nodes, simple replication, empty, no updates
         {.name = "simple_replication", .nodes = 1, .initial_term = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
@@ -552,6 +583,7 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2, .initial_term = 1,
          .config = {{.snapshot_threashold = 10}, {.snapshot_threashold = 20}},
          .updates = {entries{100}}},
+#endif
     };
 
     return app.run(argc, argv, [&replication_tests] () -> future<int> {
