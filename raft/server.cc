@@ -145,7 +145,10 @@ future<> server_impl::start() {
     auto log_entries = co_await _storage->load_log();
     auto log = raft::log(std::move(snapshot), std::move(log_entries));
     index_t stable_idx = log.stable_idx();
-    _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector);
+    _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector,
+                                 fsm_config {
+                                     .append_request_threshold = _config.append_request_threshold
+                                 });
     assert(_fsm->get_current_term() != term_t(0));
 
     if (snp_id) {

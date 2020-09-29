@@ -38,6 +38,11 @@ struct fsm_output {
     std::optional<snapshot> snp;
 };
 
+struct fsm_config {
+    // max size of appended entries in bytes
+    size_t append_request_threshold;
+};
+
 // 3.4 Leader election
 // If a follower receives no communication over a period of
 // time called the election timeout, then it assumes there is
@@ -113,6 +118,8 @@ class fsm {
     log _log;
     // A possibly shared server failure detector.
     failure_detector& _failure_detector;
+    // fsm configuration
+    fsm_config _config;
 
     // Stores the last state observed by get_output().
     // Is updated with the actual state of the FSM after
@@ -240,7 +247,7 @@ class fsm {
     }
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
-            failure_detector& failure_detector);
+            failure_detector& failure_detector, fsm_config conf);
 
     bool is_leader() const {
         return std::holds_alternative<leader>(_state);
