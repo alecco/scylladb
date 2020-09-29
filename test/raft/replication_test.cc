@@ -130,7 +130,7 @@ struct initial_state {
     raft::snapshot snapshot;
     snapshot_digest snp_digest;
     raft::configuration config;    // TODO: custom initial configs
-    raft::server::configuration server_config = raft::server::configuration();
+    raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 1000};
 };
 
 class storage : public raft::storage {
