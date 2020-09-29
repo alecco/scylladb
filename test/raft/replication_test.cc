@@ -327,7 +327,7 @@ struct initial_snapshot {
 struct test_case {
     const std::string name;
     const size_t nodes;
-    uint64_t initial_term;
+    uint64_t initial_term = 1;
     const std::optional<uint64_t> initial_leader;
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
@@ -470,28 +470,28 @@ int main(int argc, char* argv[]) {
 
     std::vector<test_case> replication_tests = {
         // 1 nodes, simple replication, empty, no updates
-        {.name = "simple_replication", .nodes = 1, .initial_term = 1},
+        {.name = "simple_replication", .nodes = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
-        {.name = "non_empty_leader_log", .nodes = 2, .initial_term = 1,
+        {.name = "non_empty_leader_log", .nodes = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}},
          .updates = {entries{4}}},
         // 1 nodes, 12 client entries
-        {.name = "simple_1_auto_12", .nodes = 1, .initial_term = 1,
+        {.name = "simple_1_auto_12", .nodes = 1,
          .initial_states = {}, .updates = {entries{12}}},
         // 1 nodes, 12 client entries
-        {.name = "simple_1_expected", .nodes = 1, .initial_term = 1,
+        {.name = "simple_1_expected", .nodes = 1,
          .initial_states = {},
          .updates = {entries{4}}},
         // 1 nodes, 7 leader entries, 12 client entries
-        {.name = "simple_1_pre", .nodes = 1, .initial_term = 1,
+        {.name = "simple_1_pre", .nodes = 1,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}},},
         // 2 nodes, 7 leader entries, 12 client entries
-        {.name = "simple_2_pre", .nodes = 2, .initial_term = 1,
+        {.name = "simple_2_pre", .nodes = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}},},
         // 3 nodes, 2 leader changes with 4 client entries each
-        {.name = "leader_changes", .nodes = 3, .initial_term = 1,
+        {.name = "leader_changes", .nodes = 3,
          .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}},
         //
         // NOTE: due to disrupting candidates protection leader doesn't vote for others, and
@@ -546,13 +546,13 @@ int main(int argc, char* argv[]) {
                             {.le = {{1,0},{2,1},{2,2},{2,13}}}},
          .updates = {entries{4}}},
         // 3 nodes, leader with snapshot (1) and log (2,3,4), gets updates (5,6)
-        {.name = "simple_snapshot", .nodes = 3, .initial_term = 1,
+        {.name = "simple_snapshot", .nodes = 3,
          .initial_states = {{.le = {{1,10},{1,11},{1,12},{1,13}}}},
          .initial_snapshots = {{.snap = {.idx = raft::index_t(10),   // log idx - 1
                                          .term = raft::term_t(1),
                                          .id = utils::UUID(0, 1)}}},   // must be 1+
          .updates = {entries{12}}},
-        {.name = "take_snapshot", .nodes = 2, .initial_term = 1,
+        {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threashold = 10}, {.snapshot_threashold = 20}},
          .updates = {entries{100}}},
     };
