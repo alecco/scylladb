@@ -4,6 +4,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/log.hh>
+#include "raft/fsm.hh"               // XXX ELECTION_TIMEOUT
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
@@ -36,7 +37,7 @@ using namespace std::placeholders;
 
 static seastar::logger tlogger("test");
 
-const int TOTAL_VALUES = 100;   // Total test entries including snapshot
+const int TOTAL_VALUES = 20;   // Total test entries including snapshot
 
 std::mt19937 random_generator() {
     std::random_device rd;
@@ -178,6 +179,7 @@ public:
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
+fmt::print("rpc {} send append_entries {} ##################################################\n", _id, id); // XXX
         if (drop_replication && !(rand() % 5)) {
             return make_ready_future<>();
         }
@@ -195,6 +197,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+fmt::print("rpc {} append_entries_reply {} ##################################################\n", _id, id); // XXX
         if (drop_replication && !(rand() % 5)) {
             return make_ready_future<>();
         }
@@ -202,10 +205,12 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+fmt::print("rpc {} send vote request to {} ##################################################\n", _id, id); // XXX
         net[id]->_client->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+fmt::print("rpc {} send vote reply to {} ##################################################\n", _id, id); // XXX
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
@@ -301,6 +306,7 @@ future<> apply_changes(std::vector<int> &res, std::shared_ptr<fletcher_32> check
         checksum->update(n);    // running checksum (values and snapshots)
         tlogger.debug("{}: apply_changes {}", id, n);
     }
+fmt::print("{}: apply_changes {}/{}\n", id, res.size(), apply_entries);
     if (res.size() >= apply_entries) {
         done.set_value();
     }
@@ -312,7 +318,7 @@ future<> apply_changes(std::vector<int> &res, std::shared_ptr<fletcher_32> check
 //  - Leader change
 //  - Configuration change
 using entries = unsigned;
-using new_leader = int;
+using new_leader = long unsigned;
 // TODO: config change
 using update = std::variant<entries, new_leader>;
 
@@ -400,15 +406,27 @@ future<int> run_test(test_case test) {
                 tlogger.debug("Adding command entry on leader {}", leader);
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
+fmt::print("Added {} entries on leader 000{}\n", n, leader + 1); // XXX
             next_val += n;
         } else if (std::holds_alternative<new_leader>(update)) {
-            unsigned next_leader = std::get<new_leader>(update);
+            auto next_leader = std::get<new_leader>(update);
             assert(next_leader < rafts.size());
             // co_await rafts[leader].first->read_barrier();
-            co_await seastar::sleep(1ms);
+// XXX add sleep            co_await seastar::sleep(1ms);
+fmt::print("changing leader to [{}] 000{} ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n", next_leader, next_leader + 1);
             SERVER_DISCONNECTED.insert(raft::server_id{utils::UUID(0, leader + 1)});
+fmt::print("   ticking to election timeout all nodes\n");
+            for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
+                for (size_t s = 0; s < test.nodes; ++s) {
+                    if (s != leader && s != next_leader) {
+                        rafts[s].first->tick();
+                    }
+                }
+            }
+fmt::print("   calling elect_me_leader on 000{}\n", next_leader + 1);
             co_await rafts[next_leader].first->elect_me_leader();
             SERVER_DISCONNECTED.erase(raft::server_id{utils::UUID(0, leader + 1)});
+fmt::print("confirmed leader on 000{} ..................................................\n", next_leader + 1);
             tlogger.debug("confirmed leader on {}", next_leader);
             leader = next_leader;
         }
@@ -469,6 +487,7 @@ int main(int argc, char* argv[]) {
         ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
 
     std::vector<test_case> replication_tests = {
+#if 0
         // 1 nodes, simple replication, empty, no updates
         {.name = "simple_replication", .nodes = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
@@ -490,9 +509,13 @@ int main(int argc, char* argv[]) {
         {.name = "simple_2_pre", .nodes = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}},},
+#endif
         // 3 nodes, 2 leader changes with 4 client entries each
         {.name = "leader_changes", .nodes = 3,
-         .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}},
+         .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}
+         // .updates = {entries{1},new_leader{1},entries{1}}
+         },
+#if 0
         //
         // NOTE: due to disrupting candidates protection leader doesn't vote for others, and
         //       servers with entries vote for themselves, so some tests use 3 servers instead of
@@ -555,12 +578,15 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threashold = 10}, {.snapshot_threashold = 20}},
          .updates = {entries{100}}},
+#endif
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
         drop_replication = app.configuration()["drop-replication"].as<bool>();
+fmt::print("drop replication {}\n", drop_replication); // XXX
 
         for (auto test: replication_tests) {
+fmt::print("{} ================================================================================\n\n\n", test.name); // XXX
             if (co_await run_test(test) != 0) {
                 co_return 1; // Fail
             }

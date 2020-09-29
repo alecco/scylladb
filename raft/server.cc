@@ -60,6 +60,7 @@ public:
     term_t get_current_term() const override;
     future<> read_barrier() override;
     future<> elect_me_leader() override;
+    void tick() override;
     void make_me_leader() override;
 private:
     std::unique_ptr<rpc> _rpc;
@@ -246,15 +247,21 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
 
 template <typename Message>
 future<> server_impl::send_message(server_id id, Message m) {
+fmt::print("{} send_message enter\n", _id); // XXX
     return std::visit([this, id] (auto&& m) {
         using T = std::decay_t<decltype(m)>;
+fmt::print("{} send_message 1\n", _id); // XXX
         if constexpr (std::is_same_v<T, append_reply>) {
+fmt::print("{} send_message calling rpc send_append_entries_reply\n", _id); // XXX
               return _rpc->send_append_entries_reply(id, m);
           } else if constexpr (std::is_same_v<T, append_request_send>) {
+fmt::print("{} send_message calling rpc send_append_entries\n", _id); // XXX
               return _rpc->send_append_entries(id, m);
           } else if constexpr (std::is_same_v<T, vote_request>) {
+fmt::print("{} send_message calling rpc send_vote_request\n", _id); // XXX
               return _rpc->send_vote_request(id, m);
           } else if constexpr (std::is_same_v<T, vote_reply>) {
+fmt::print("{} send_message calling rpc send_vote_reply\n", _id); // XXX
               return _rpc->send_vote_reply(id, m);
           } else if constexpr (std::is_same_v<T, install_snapshot>) {
               // Send in the background.
@@ -268,6 +275,7 @@ future<> server_impl::send_message(server_id id, Message m) {
               return make_ready_future<>();
           }
 
+fmt::print("log fiber {} tried to send unknown message type\n", _id); // XXX
           logger.error("log fiber {} tried to send unknown message type", _id);
           ::abort();
           return make_ready_future<>();
@@ -310,9 +318,11 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 last_stable = (*entries.crbegin())->idx;
             }
 
+fmt::print("{} io_fiber batch.messages.size {}\n", _id, batch.messages.size()); // XXX
             if (batch.messages.size()) {
                 // after entries are persisted we can send messages
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
+fmt::print("{} io_fiber calling send_message to {}\n", _id, message.first); // XXX
                     return send_message(message.first, std::move(message.second));
                 });
             }
@@ -470,8 +480,12 @@ future<> server_impl::elect_me_leader() {
         _fsm->tick();
     }
     do {
-        co_await seastar::sleep(150us);
+        co_await seastar::sleep(150us); // XXX do we still need this
     } while (!_fsm->is_leader());
+}
+
+void server_impl::tick() {
+        _fsm->tick();
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

@@ -194,6 +194,7 @@ class fsm {
         static_assert(std::is_rvalue_reference<decltype(m)>::value, "must be rvalue");
         _messages.push_back(std::make_pair(to, std::move(m)));
         _sm_events.signal();
+fmt::print("{} send_to {}\n", _my_id, to);  // XXX
     }
 
     // A helper to update the FSM's current term.
@@ -323,10 +324,12 @@ void fsm::step(server_id from, Message&& msg) {
     // follower state. If a server receives a request with
     // a stale term number, it rejects the request.
     if (msg.current_term > _current_term) {
+fmt::print("{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term); // XXX
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
         if constexpr (std::is_same_v<Message, append_request_recv>) {
+fmt::print("{} got append request from {}, becomming follower\n", _my_id, from); // XXX
             become_follower(from);
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
@@ -336,16 +339,19 @@ void fsm::step(server_id from, Message&& msg) {
                     // within the minimum election timeout of
                     // hearing from a current leader, it does not
                     // update its term or grant its vote.
+fmt::print("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {}\n", _my_id, _current_term, election_elapsed()); // XXX
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {}",
                         _my_id, _current_term, election_elapsed());
                     return;
                 }
             }
+fmt::print("{} got ? from {}, becomming follower\n", _my_id, from); // XXX
             become_follower(server_id{});
         }
         update_current_term(msg.current_term);
 
     } else if (msg.current_term < _current_term) {
+fmt::print("{} [term: {}] received a message with lower term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term); // XXX
         if constexpr (std::is_same_v<Message, append_request_recv>) {
             // Instructs the leader to step down.
             append_reply reply{_current_term, _commit_idx, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
@@ -354,15 +360,18 @@ void fsm::step(server_id from, Message&& msg) {
             send_to(from, snapshot_reply{ .success = false });
         } else {
             // Ignore other cases
+fmt::print("{} [term: {}] ignored a message with lower term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term); // XXX
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
                 _my_id, _current_term, from, msg.current_term);
         }
         return;
 
     } else /* _current_term == msg.current_term */ {
+fmt::print("{} [term: {}] received a message with same term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term); // XXX
         if constexpr (std::is_same_v<Message, append_request_recv> ||
                       std::is_same_v<Message, install_snapshot>) {
             if (is_candidate()) {
+fmt::print("{} message from {} and I am candidate\n", _my_id, from); // XXX
                 // 3.4 Leader Election
                 // While waiting for votes, a candidate may receive an AppendEntries
                 // RPC from another server claiming to be leader. If the
@@ -371,6 +380,7 @@ void fsm::step(server_id from, Message&& msg) {
                 // leader as legitimate and returns to follower state.
                 become_follower(from);
             } else if (_current_leader == server_id{}) {
+fmt::print("{} message from {} and I am not candidate\n", _my_id, from); // XXX
                 // Earlier we changed our term to match a candidate's
                 // term. Now we get the first message from the
                 // newly elected leader. Keep track of the current
@@ -385,19 +395,26 @@ void fsm::step(server_id from, Message&& msg) {
     auto visitor = [this, from, msg = std::move(msg)](auto state) mutable {
         using State = decltype(state);
 
+fmt::print("{}: msg from {}\n", _my_id, from); // XXX
         if constexpr (std::is_same_v<Message, append_request_recv>) {
+fmt::print("{}: append_request_recv from {}\n", _my_id, from); // XXX
             // Got AppendEntries RPC from self
             append_entries(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, append_reply>) {
+fmt::print("{}: append_reply from {}\n", _my_id, from); // XXX
             if constexpr (!std::is_same_v<State, leader>) {
+fmt::print("{}: append_append_reply ignored from {}\n", _my_id, from); // XXX
                 // Ignore stray reply if we're not a leader.
                 return;
             }
             append_entries_reply(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, vote_request>) {
+fmt::print("{}: vote_request from {}\n", _my_id, from); // XXX
             request_vote(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, vote_reply>) {
+fmt::print("{}: vote_reply\n", _my_id); // XXX
             if constexpr (!std::is_same_v<State, candidate>) {
+fmt::print("{}: vote_reply ignored stray, we are not a candidate\n", _my_id); // XXX
                 // Ignore stray reply if we're not a candidate.
                 return;
             }
