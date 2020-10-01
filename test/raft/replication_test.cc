@@ -385,7 +385,6 @@ future<int> run_test(test_case test) {
 
     auto rafts = co_await create_cluster(states);
 
-    // rafts[leader].first->make_me_leader();
     co_await rafts[leader].first->elect_me_leader();
 
     // Process all updates in order
@@ -405,8 +404,12 @@ future<int> run_test(test_case test) {
             unsigned next_leader = std::get<new_leader>(update);
             assert(next_leader < rafts.size());
             // co_await rafts[leader].first->read_barrier();
-            co_await seastar::sleep(1ms);
             SERVER_DISCONNECTED.insert(raft::server_id{utils::UUID(0, leader + 1)});
+            for (size_t s = 0; s < test.nodes; ++s) {
+                if (s != leader) {
+                    rafts[s].first->elapse_election();
+                }
+            }
             co_await rafts[next_leader].first->elect_me_leader();
             SERVER_DISCONNECTED.erase(raft::server_id{utils::UUID(0, leader + 1)});
             tlogger.debug("confirmed leader on {}", next_leader);
