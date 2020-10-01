@@ -78,7 +78,18 @@ void fsm::update_current_term(term_t current_term)
     // change, even if we do not plan to campaign during this
     // term: the main purpose of the timeout is to avoid
     // starting our campaign simultaneously with other followers.
+#if 1
     _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
+fmt::print("{} new election timeout ET+{} @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n", _my_id, _randomized_election_timeout - ELECTION_TIMEOUT); // XXX
+if (ELECTION_TIMEOUT > _randomized_election_timeout) {
+    fmt::print("CUEC CUEC XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n\n\n");
+} // XXX
+assert(ELECTION_TIMEOUT < _randomized_election_timeout);
+#else
+    auto delta = logical_clock::duration{dist(re)};
+    _randomized_election_timeout = ELECTION_TIMEOUT + delta;
+fmt::print("{} new election timeout ET+ delta {} @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n", _my_id, delta); // XXX
+#endif
 }
 
 void fsm::become_leader() {

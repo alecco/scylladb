@@ -415,12 +415,10 @@ fmt::print("Added {} entries on leader 000{}\n", n, leader + 1); // XXX
 // XXX add sleep            co_await seastar::sleep(1ms);
 fmt::print("changing leader to [{}] 000{} ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n", next_leader, next_leader + 1);
             SERVER_DISCONNECTED.insert(raft::server_id{utils::UUID(0, leader + 1)});
-fmt::print("   ticking to election timeout all nodes\n");
-            for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
-                for (size_t s = 0; s < test.nodes; ++s) {
-                    if (s != leader && s != next_leader) {
-                        rafts[s].first->tick();
-                    }
+            for (size_t s = 0; s < test.nodes; ++s) {
+                if (s != leader) {
+fmt::print("   ticking to election elapsed {}\n", s);
+                    rafts[s].first->elapse_election();
                 }
             }
 fmt::print("   calling elect_me_leader on 000{}\n", next_leader + 1);

@@ -182,11 +182,6 @@ class fsm {
     bool is_past_election_timeout() const {
         return _clock.now() - _last_election_time >= _randomized_election_timeout;
     }
-    // How much time has passed since last election or last
-    // time we heard from a valid leader.
-    logical_clock::duration election_elapsed() const {
-        return _clock.now() - _last_election_time;
-    }
 
     // A helper to send any kind of RPC message.
     template <typename Message>
@@ -260,6 +255,12 @@ public:
     }
 
     void become_leader();
+
+    // How much time has passed since last election or last
+    // time we heard from a valid leader.
+    logical_clock::duration election_elapsed() const {
+        return _clock.now() - _last_election_time;
+    }
 
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
