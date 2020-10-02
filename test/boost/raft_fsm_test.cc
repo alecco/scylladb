@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifdef ENABLE_SCYLLA_RAFT
+
 #define BOOST_TEST_MODULE raft
 
 #include <boost/test/unit_test.hpp>
@@ -263,3 +265,4 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
     // is granted
     BOOST_CHECK(request_vote(term_t{15}, index_t{1001}, term_t{11}).vote_granted);
 }
+#endif // ENABLE_SCYLLA_RAFT
