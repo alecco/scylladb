@@ -13,6 +13,10 @@ using namespace std::chrono_literals;
 
 static seastar::logger tlogger("test");
 
+struct snapshot_value {
+    int value = -1;
+};
+
 std::mt19937 random_generator() {
     std::random_device rd;
     // In case of errors, replace the seed with a fixed value to get a deterministic run.
@@ -30,6 +34,10 @@ int rand() {
 
 bool drop_replication = false;
 
+// lets assume one snaoshot per server
+std::unordered_map<raft::server_id, snapshot_value> snapshots;
+std::unordered_map<raft::server_id, int> sums;
+
 class state_machine : public raft::state_machine {
 public:
     using apply_fn = std::function<future<>(raft::server_id id, promise<>&, const std::vector<raft::command_cref>& commands)>;
@@ -42,9 +50,17 @@ public:
     virtual future<> apply(const std::vector<raft::command_cref> commands) {
         return _apply(_id, _done, commands);
     }
-    virtual future<raft::snapshot_id> take_snaphot() { return make_ready_future<raft::snapshot_id>(raft::snapshot_id()); }
-    virtual void drop_snapshot(raft::snapshot_id id) {}
-    virtual future<> load_snapshot(raft::snapshot_id id) { return make_ready_future<>(); };
+    virtual future<raft::snapshot_id> take_snapshot() {
+        snapshots[_id].value = sums[_id];
+        return make_ready_future<raft::snapshot_id>(raft::snapshot_id());
+    }
+    virtual void drop_snapshot(raft::snapshot_id id) {
+        snapshots.erase(_id);
+    }
+    virtual future<> load_snapshot(raft::snapshot_id id) {
+        sums[_id] = snapshots[_id].value;
+         return make_ready_future<>();
+    };
     virtual future<> abort() { return make_ready_future<>(); }
 
     future<> done() {
@@ -57,6 +73,7 @@ struct initial_state {
     raft::server_id vote;
     std::vector<raft::log_entry> log;
     raft::snapshot snapshot;
+    snapshot_value snp_value;
 };
 
 
@@ -93,7 +110,10 @@ public:
     rpc(raft::server_id id) : _id(id) {
         net[_id] = this;
     }
-    virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) { return make_ready_future<>(); }
+    virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
+        snapshots[id] = snapshots[_id];
+        return net[id]->_client->apply_snapshot(_id, std::move(snap));
+    }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
         if (drop_replication && !(rand() % 5)) {
             return make_ready_future<>();
@@ -166,6 +186,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
         states[i].snapshot.config = config;
+        snapshots[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i])).first;
         co_await raft.start();
     }
@@ -192,7 +213,6 @@ std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list, u
 }
 
 constexpr int itr = 100;
-std::unordered_map<raft::server_id, int> sums;
 
 future<> apply(raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
         tlogger.debug("sm::apply got {} entries", commands.size());
@@ -342,6 +362,20 @@ future<> test_replace_two_common_entry_different_terms() {
     return test_helper(std::move(states), 7);
 }
 
+future<> test_simple_snapshot() {
+    std::vector<initial_state> states(2);
+    states[0].term = raft::term_t(1);
+    states[0].snapshot = raft::snapshot {
+        .idx = raft::index_t(10),
+        .term = raft::term_t(1),
+        .id = utils::make_random_uuid()
+    };
+    states[0].log = create_log({{1, 10}, {1, 11}, {1, 12}, {1, 13}, {1, 14}, {1, 15}, {1, 16}}, 11);
+    states[0].snp_value.value = ((10 - 1) * 10)/2;
+
+    return test_helper(std::move(states), 17);
+}
+
 int main(int argc, char* argv[]) {
     namespace bpo = boost::program_options;
 
@@ -363,6 +397,7 @@ int main(int argc, char* argv[]) {
         test_replace_no_common_entries,
         test_replace_one_common_entry,
         test_replace_two_common_entry_different_terms,
+        test_simple_snapshot
     };
 
     return app.run(argc, argv, [&tests, &app] () -> future<> {
