@@ -130,6 +130,7 @@ struct initial_state {
     snapshot_value snp_value;
     raft::configuration config;    // TODO: custom initial configs
     raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
+    std::shared_ptr<std::vector<bool>> unreachable;   // What nodes are unreachable
 };
 
 class storage : public raft::storage {
@@ -166,16 +167,29 @@ public:
 class rpc : public raft::rpc {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
+    std::shared_ptr<std::vector<bool>> _unreachable;
+    bool unreachable(raft::server_id id) {
+        int64_t uuid_low = id.id.get_least_significant_bits() - 1;
+        assert(uuid_low >= 0);
+        uint64_t s_id = static_cast<uint64_t>(uuid_low);
+        assert(s_id < _unreachable->size());
+fmt::print("unreachable? {}  {}\n", s_id, _unreachable->at(s_id)); // XXX
+        return _unreachable->at(s_id);
+    }
 public:
-    rpc(raft::server_id id) : _id(id) {
+    rpc(raft::server_id id, std::shared_ptr<std::vector<bool>> unreachable) : _id(id), _unreachable(unreachable) {
+fmt::print("{} rpc: unreachable {}\n", id, unreachable->size()); // XXX
         net[_id] = this;
     }
     virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
+        if (unreachable(id)) {
+            return make_ready_future<>();
+        }
         snapshots[id] = snapshots[_id];
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
-        if (drop_replication && !(rand() % 5)) {
+        if (unreachable(id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
         raft::append_request_recv req;
@@ -192,17 +206,23 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (drop_replication && !(rand() % 5)) {
+        if (unreachable(id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+        if (unreachable(id)) {
+            return make_ready_future<>();
+        }
         net[id]->_client->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+        if (unreachable(id)) {
+            return make_ready_future<>();
+        }
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
@@ -224,9 +244,10 @@ std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
         size_t apply_entries) {
 
+    // XXX XXX XXX    here pass unreachable to rpc and is_alive
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), apply_entries);
     auto& rsm = *sm;
-    auto mrpc = std::make_unique<rpc>(uuid);
+    auto mrpc = std::make_unique<rpc>(uuid, state.unreachable);
     auto mstorage = std::make_unique<storage>(uuid, state);
     auto fd = seastar::make_shared<failure_detector>();
 
@@ -305,9 +326,9 @@ void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& co
 //  - Leader change
 //  - Configuration change
 using entries = unsigned;
-using new_leader = int;
+using partition = std::vector<std::unordered_set<unsigned>>;
 // TODO: config change
-using update = std::variant<entries, new_leader>;
+using update = std::variant<entries, partition>;
 
 struct initial_log {
     std::initializer_list<log_entry> le;
@@ -322,26 +343,36 @@ struct test_case {
     const size_t nodes;
     const size_t total_values = 100;
     uint64_t initial_term = 1;
-    const std::optional<uint64_t> initial_leader;
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<raft::server::configuration> config;
     const std::vector<update> updates;
 };
 
+future<size_t> run_election(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+    for (auto& r: rafts) {
+        r.first->make_me_candidate();
+    }
+fmt::print("All candidates\n"); // XXX
+    while (true) {
+        co_await seastar::sleep(50us);
+        // XXX if any becomes leaader return id
+        for (size_t r = 0; r < rafts.size(); ++r) {
+            if (rafts[r].first->is_leader()) {
+fmt::print("new leader {}\n", r); // XXX
+                co_return r;
+            }
+        }
+    }
+}
+
 // Run test case (name, nodes, leader, initial logs, updates)
 future<int> run_test(test_case test) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
     tlogger.debug("running test {}:", test.name);
-    size_t leader;
-    if (test.initial_leader) {
-        leader = *test.initial_leader;
-    } else {
-        leader = 0;
-    }
+    size_t leader = 0;
 
-    states[leader].term = raft::term_t{test.initial_term};
 
     int leader_initial_entries = 0;
     if (leader < test.initial_states.size()) {
@@ -371,11 +402,15 @@ future<int> run_test(test_case test) {
         if (i < test.config.size()) {
             states[i].server_config = test.config[i];
         }
+        states[i].unreachable = std::make_shared<std::vector<bool>>(test.nodes);
     }
 
     auto rafts = co_await create_cluster(states, apply_changes, apply_entries);
 
-    co_await rafts[leader].first->elect_me_leader();
+    rafts[leader].first->make_me_leader();
+
+    // XXX ??? states[leader].term = raft::term_t{test.initial_term};
+
     // Process all updates in order
     size_t next_val = leader_snap_skipped + leader_initial_entries;
     for (auto update: test.updates) {
@@ -385,10 +420,12 @@ future<int> run_test(test_case test) {
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
             co_await seastar::parallel_for_each(commands, [&] (raft::command cmd) {
+fmt::print("Adding command entry on leader {}\n", leader);
                 tlogger.debug("Adding command entry on leader {}", leader);
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
+#if 0
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
             assert(next_leader < rafts.size());
@@ -402,6 +439,29 @@ future<int> run_test(test_case test) {
             SERVER_DISCONNECTED.erase(raft::server_id{utils::UUID(0, leader + 1)});
             tlogger.debug("confirmed leader on {}", next_leader);
             leader = next_leader;
+
+#endif
+        } else if (std::holds_alternative<partition>(update)) {
+            leader = co_await run_election(rafts);
+            auto partitions = std::get<partition>(update);
+fmt::print("XXX  partitioning\n");
+            for (unsigned s = 0; s < states.size(); ++s) {
+                std::fill(states[s].unreachable->begin(), states[s].unreachable->end(), 0);
+            }
+            // Mark node unreachable if in different partition
+            // Note: there could be more than 2 partitions
+            for (auto p: partitions) {
+fmt::print("----- partition: "); for (auto x: p) { fmt::print("{} ", x); } fmt::print("\n"); // XXX
+                for (auto s: p) {   // XXX here continue
+                    for (unsigned other = 0; other < test.nodes; ++other) {
+                        // XXX if the other is not in partition mark unreachable  in BOTH XXX XXX XXX
+                        if (other != s && p.find(other) == p.end()) {
+fmt::print("{} - {} unreachable\n", s, other); // XXX
+                            states[s].unreachable->at(other) = true;  // One is in partition
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -465,6 +525,7 @@ int main(int argc, char* argv[]) {
         ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
 
     std::vector<test_case> replication_tests = {
+#if 0
         // 1 nodes, simple replication, empty, no updates
         {.name = "simple_replication", .nodes = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
@@ -488,7 +549,7 @@ int main(int argc, char* argv[]) {
          .updates = {entries{12}},},
         // 3 nodes, 2 leader changes with 4 client entries each
         {.name = "leader_changes", .nodes = 3,
-         .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}},
+         .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}}, // XXX remove new_leader
         //
         // NOTE: due to disrupting candidates protection leader doesn't vote for others, and
         //       servers with entries vote for themselves, so some tests use 3 servers instead of
@@ -497,7 +558,7 @@ int main(int argc, char* argv[]) {
         // 3 nodes, 7 leader entries, 12 client entries, change leader, 12 client entries
         {.name = "simple_3_pre_chg", .nodes = 3, .initial_term = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12},new_leader{1},entries{12}},},
+         .updates = {entries{12},new_leader{1},entries{12}},}, // XXX remove new_leader
         // 2 nodes, leader empoty, follower has 3 spurious entries
         {.name = "replace_log_leaders_log_empty", .nodes = 3, .initial_term = 2,
          .initial_states = {{}, {{{2,10},{2,20},{2,30}}}},
@@ -551,6 +612,10 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threashold = 10, .snapshot_trailing = 5}, {.snapshot_threashold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+#endif
+        // Partition XXX
+        {.name = "partition_4", .nodes = 4,
+         .updates = {entries{4},partition{{0,},{1,2},{3,}},entries{4}}},
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
