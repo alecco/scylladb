@@ -457,7 +457,8 @@ future<> server_impl::elect_me_leader() {
         _fsm->tick();
     }
     do {
-        co_await seastar::sleep(50us);
+fmt::print("{} sleeping before leader check\n", _id); // XXX
+        co_await seastar::sleep(300ms); // XXX 50us
     } while (!_fsm->is_leader());
 }
 

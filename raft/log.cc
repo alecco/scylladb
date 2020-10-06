@@ -46,6 +46,7 @@ bool log::is_up_to_date(index_t idx, term_t term) const {
     // entries with different terms, then the log with the later term is more
     // up-to-date. If the logs end with the same term, then whichever log is
     // longer is more up-to-date.
+fmt::print("log::is_up_to_date: term {} > last_term() {}? {}, term == last_term()? {} idx >= last_idx() {}\n", term, last_term(), term > last_term(), term == last_term(), idx >= last_idx());
     return term > last_term() || (term == last_term() && idx >= last_idx());
 }
 
