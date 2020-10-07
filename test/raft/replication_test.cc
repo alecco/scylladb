@@ -56,6 +56,7 @@ struct initial_state {
     raft::server_id vote;
     std::vector<raft::log_entry> log;
     raft::snapshot snapshot;
+    state_machine::apply_fn apply;
 };
 
 
@@ -139,10 +140,9 @@ class failure_detector : public raft::failure_detector {
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
 std::pair<std::unique_ptr<raft::server>, state_machine*>
-create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
-        initial_state state) {
+create_raft_server(raft::server_id uuid, initial_state state) {
 
-    auto sm = std::make_unique<state_machine>(uuid, std::move(apply));
+    auto sm = std::make_unique<state_machine>(uuid, std::move(state.apply));
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(state);
@@ -153,7 +153,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
     return std::make_pair(std::move(raft), &rsm);
 }
 
-future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply) {
+future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states) {
     raft::configuration config;
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
@@ -165,7 +165,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = config.servers[i];
         states[i].snapshot.config = config;
-        auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i])).first;
+        auto& raft = *rafts.emplace_back(create_raft_server(s.id, states[i])).first;
         co_await raft.start();
     }
 
@@ -193,7 +193,7 @@ std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list, u
 constexpr int itr = 100;
 std::unordered_map<raft::server_id, int> sums;
 
-future<> apply(raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
+future<> apply_changes(raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
         tlogger.debug("sm::apply got {} entries", commands.size());
         for (auto&& d : commands) {
             auto is = ser::as_input_stream(d);
@@ -213,7 +213,10 @@ future<> apply(raft::server_id id, promise<>& done, const std::vector<raft::comm
 
 
 future<> test_helper(std::vector<initial_state> states, int start_itr = 0) {
-    auto rafts = co_await create_cluster(states, apply);
+    for (size_t i = 0; i < states.size(); ++i) {
+        states[i].apply = apply_changes;
+    }
+    auto rafts = co_await create_cluster(states);
 
     auto& leader = *rafts[0].first;
     leader.make_me_leader();
