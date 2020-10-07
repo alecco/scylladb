@@ -496,6 +496,7 @@ int main(int argc, char* argv[]) {
 
         for (auto test: replication_tests) {
             if (co_await run_test(test) != 0) {
+                tlogger.debug("Test {} failed", test.name);
                 co_return 1; // Fail
             }
         }
