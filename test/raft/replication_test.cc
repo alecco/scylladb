@@ -546,8 +546,8 @@ int main(int argc, char* argv[]) {
                                          .term = raft::term_t(1),
                                          .id = utils::UUID(0, 1)}}},   // must be 1+
          .updates = {entries{12}}},
-        {.name = "take_snapshot", .nodes = 2, .initial_term = 1,
-         .config = {{.snapshot_threashold = 10}, {.snapshot_threashold = 20}},
+        {.name = "take_snapshot", .nodes = 2,
+         .config = {{.snapshot_threashold = 10, .snapshot_trailing = 5, .append_request_threshold = 200}, {.snapshot_threashold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
     };
 
