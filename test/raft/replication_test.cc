@@ -7,6 +7,7 @@
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
+#include "xx_hasher.hh"
 
 
 // Test Raft library with declarative test definitions
@@ -25,6 +26,7 @@
 //
 //      (run_test)
 //      - Create the servers and initialize
+//      - Set up hasher
 //      - Process updates one by one
 //      - Wait until all servers have logs of size of total_values entries
 //      - Verify hash
@@ -52,16 +54,36 @@ int rand() {
 
 bool drop_replication = false;
 
+using digest64 = uint64_t;
+class hasher_int : public xx_hasher {
+public:
+    void update(const int val) noexcept {
+        xx_hasher::update(reinterpret_cast<const char *>(&val), sizeof(val));
+    }
+    static digest64 digest_range(const int max) {
+        hasher_int h;
+        for (int i = 0; i < max; ++i) {
+            h.update(i);
+        }
+        return h.finalize_uint64();
+    }
+};
+
+struct snapshot_digest {
+    digest64 value = -1;
+};
+
 class state_machine : public raft::state_machine {
 public:
     using apply_fn = std::function<future<>(raft::server_id id, promise<>&, const std::vector<raft::command_cref>& commands)>;
 private:
     raft::server_id _id;
     apply_fn _apply;
+    std::shared_ptr<hasher_int> _checksum;
     promise<> _done;
 public:
-    state_machine(raft::server_id id, apply_fn apply) :
-        _id(id), _apply(std::move(apply)) {}
+    state_machine(raft::server_id id, apply_fn apply, std::shared_ptr<hasher_int> checksum) :
+        _id(id), _apply(std::move(apply)), _checksum(checksum) { }
     future<> apply(const std::vector<raft::command_cref> commands) override {
         return _apply(_id, _done, commands);
     }
@@ -82,6 +104,7 @@ struct initial_state {
     std::vector<raft::log_entry> log;
     raft::snapshot snapshot;
     state_machine::apply_fn apply;
+    std::shared_ptr<hasher_int> hasher;
 };
 
 class storage : public raft::storage {
@@ -168,7 +191,7 @@ std::unordered_map<raft::server_id, rpc*> rpc::net;
 std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, initial_state state) {
 
-    auto sm = std::make_unique<state_machine>(uuid, std::move(state.apply));
+    auto sm = std::make_unique<state_machine>(uuid, std::move(state.apply), state.hasher);
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(uuid, state);
@@ -231,9 +254,7 @@ std::vector<raft::command> create_commands(std::vector<T> list) {
     return commands;
 }
 
-std::unordered_map<raft::server_id, int> sums;
-
-future<> apply_changes(std::vector<int> &res, unsigned apply_entries,
+future<> apply_changes(std::vector<int> &res, std::shared_ptr<hasher_int> hasher, unsigned apply_entries,
         raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
     tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
 
@@ -241,11 +262,7 @@ future<> apply_changes(std::vector<int> &res, unsigned apply_entries,
         auto is = ser::as_input_stream(d);
         int n = ser::deserialize(is, boost::type<int>());
         res.push_back(n);       // seen committed values (output)
-        auto it = sums.find(id);
-        if (it == sums.end()) {
-            sums[id] = 0;
-        }
-        sums[id] += n;
+        hasher->update(n);      // running hash (values and snapshots)
         tlogger.debug("{}: apply_changes {}", id, n);
     }
     if (res.size() >= apply_entries) {
@@ -321,7 +338,9 @@ future<int> run_test(test_case test) {
         } else {
             states[i].log = {};
         }
-        states[i].apply = std::bind(apply_changes, std::ref(committed[i]), apply_entries, _1, _2, _3);
+        states[i].hasher = std::make_shared<hasher_int>();
+        states[i].apply = std::bind(apply_changes, std::ref(committed[i]), states[i].hasher,
+                apply_entries, _1, _2, _3);
     }
 
     auto rafts = co_await create_cluster(states);
@@ -377,7 +396,18 @@ future<int> run_test(test_case test) {
         co_await r.first->abort(); // Stop servers
     }
 
-    co_return 0;
+    int fail = 0;
+
+    // Verify hash matches expected (snapshot and apply calls)
+    static const auto expected = hasher_int::digest_range(test.total_values);
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (states[i].hasher->finalize_uint64() != expected) {
+            fail = -1;  // Fail
+            break;
+        }
+    }
+
+    co_return fail;
 }
 
 int main(int argc, char* argv[]) {
