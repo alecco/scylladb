@@ -29,8 +29,6 @@ int rand() {
 
 bool drop_replication = false;
 
-std::unordered_map<raft::server_id, int> sums;
-
 class state_machine : public raft::state_machine {
 public:
     using apply_fn = std::function<future<>(raft::server_id id, promise<>&, const std::vector<raft::command_cref>& commands)>;
@@ -194,6 +192,7 @@ std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list, u
 }
 
 constexpr int itr = 100;
+std::unordered_map<raft::server_id, int> sums;
 
 future<> apply(raft::server_id id, promise<>& done, const std::vector<raft::command_cref>& commands) {
         tlogger.debug("sm::apply got {} entries", commands.size());
