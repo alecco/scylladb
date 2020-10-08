@@ -400,13 +400,14 @@ int main(int argc, char* argv[]) {
         test_simple_snapshot
     };
 
-    return app.run(argc, argv, [&tests, &app] () -> future<> {
+    return app.run(argc, argv, [&tests, &app] () -> future<int> {
         drop_replication = app.configuration()["drop-replication"].as<bool>();
 
         int i = 0;
         for (auto& t : tests) {
             tlogger.debug("test: {}", i++);
             co_await t();
+            co_return 0;
         }
     });
 }
