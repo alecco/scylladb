@@ -39,6 +39,10 @@ public:
         size_t snapshot_trailing = 200;
         // max size of appended entries in bytes
         size_t append_request_threshold = 100000;
+        // max legth of a log after which requests
+        // are stopped to be addmitted unill the log is shrunk
+        // back
+        size_t max_log_length = 5000;
     };
 
     virtual ~server() {}
