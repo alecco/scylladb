@@ -276,6 +276,11 @@ public:
     // max_log_length
     future<> wait();
 
+    // Return current configuration.
+    const configuration& get_configuration() const {
+        return _configuration;
+    }
+
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
     template<typename T> const log_entry& add_entry(T command);
