@@ -55,6 +55,7 @@ const log_entry& fsm::add_entry(T command) {
 }
 
 template const log_entry& fsm::add_entry(command command);
+template const log_entry& fsm::add_entry(configuration command);
 template const log_entry& fsm::add_entry(log_entry::dummy dummy);
 
 void fsm::advance_commit_idx(index_t leader_commit_idx) {
