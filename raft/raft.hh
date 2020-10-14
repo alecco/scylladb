@@ -21,6 +21,7 @@
 #pragma once
 
 #include <vector>
+#include <unordered_set>
 #include <functional>
 #include <boost/container/deque.hpp>
 #include <seastar/core/lowres_clock.hh>
@@ -64,15 +65,32 @@ using server_info = bytes;
 struct server_address {
     server_id id;
     server_info info;
+    bool operator==(const server_address& rhs) const {
+        return id == rhs.id;
+    }
 };
+
+} // end of namespace raft
+
+namespace std {
+
+template <> struct hash<raft::server_address> {
+    size_t operator()(const raft::server_address& address) const {
+        return std::hash<raft::server_id>{}(address.id);
+    }
+};
+
+} // end of namespace std
+
+namespace raft {
 
 struct configuration {
     // Used during the transitioning period of configuration
     // changes.
-    std::vector<server_address> previous;
+    std::unordered_set<server_address> previous;
     // Contains the current configuration. When configuration
     // change is in progress, contains the new configuration.
-    std::vector<server_address> current;
+    std::unordered_set<server_address> current;
     // True if we are transitioning through a configuration
     // change and should use both current and previous
     // configuration.
@@ -81,7 +99,7 @@ struct configuration {
     configuration(std::initializer_list<server_id> ids) {
         current.reserve(ids.size());
         for (auto&& id : ids) {
-            current.emplace_back(server_address{std::move(id)});
+            current.emplace(server_address{std::move(id)});
         }
     }
     configuration() = default;
@@ -92,7 +110,7 @@ struct configuration {
         return _is_joint;
     }
     // Enter a joint configuration given a new set of servers.
-    void enter_joint(std::vector<server_address> c_new) {
+    void enter_joint(std::unordered_set<server_address> c_new) {
         // @todo: validate that c_old & c_new are compatible.
         assert(c_new.size());
         previous = std::move(current);
