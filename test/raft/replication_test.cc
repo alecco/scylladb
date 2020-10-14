@@ -548,8 +548,13 @@ int main(int argc, char* argv[]) {
                                          .term = raft::term_t(1),
                                          .id = utils::UUID(0, 1)}}},   // must be 1+
          .updates = {entries{12}}},
+        // 2 nodes both taking smapshot while simple replication
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
+         .updates = {entries{100}}},
+        // 2 nodes doing simple replication/snapshoting while leader's log size is limited
+        {.name = "backpressure", .nodes = 2,
+         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_length = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
     };
 
