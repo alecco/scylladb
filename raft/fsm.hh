@@ -252,11 +252,11 @@ class fsm {
         _current_config = config;
         // We unconditionally access _current_config
         // to identify which entries are committed.
-        assert(_current_config.servers.size() > 0);
+        assert(_current_config.current.size() > 0);
         if (is_leader()) {
-            _tracker->set_configuration(_current_config.servers, _log.next_idx());
+            _tracker->set_configuration(_current_config.current, _log.next_idx());
         } else if (is_candidate()) {
-            _votes->set_configuration(_current_config.servers);
+            _votes->set_configuration(_current_config.current);
         }
     }
 public:

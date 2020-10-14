@@ -97,7 +97,7 @@ void fsm::become_leader() {
     _tracker.emplace(_my_id);
     _log_limiter_semaphore.emplace(this);
     _log_limiter_semaphore->sem.consume(_log.non_snapshoted_length());
-    _tracker->set_configuration(_current_config.servers, _log.next_idx());
+    _tracker->set_configuration(_current_config.current, _log.next_idx());
     _last_election_time = _clock.now();
     replicate();
 }
@@ -127,7 +127,7 @@ void fsm::become_candidate() {
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
     _votes.emplace();
-    _votes->set_configuration(_current_config.servers);
+    _votes->set_configuration(_current_config.current);
     _voted_for = _my_id;
 
     if (_votes->tally_votes() == vote_result::WON) {
@@ -136,7 +136,7 @@ void fsm::become_candidate() {
         return;
     }
 
-    for (const auto& server : _current_config.servers) {
+    for (const auto& server : _current_config.current) {
         if (server.id == _my_id) {
             continue;
         }
@@ -482,7 +482,7 @@ static size_t entry_size(const log_entry& e) {
         }
         size_t operator()(const configuration& c) {
             size_t size = 0;
-            for (auto& s : c.servers) {
+            for (auto& s : c.current) {
                 size += sizeof(s.id);
                 size += s.info.size();
             }
@@ -655,7 +655,7 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
     }
     os << "messages: " << f._messages.size() << ", ";
     os << "current_config (";
-    for (auto& server: f._current_config.servers) {
+    for (auto& server: f._current_config.current) {
         os << server.id << ", ";
     }
     os << "), ";
