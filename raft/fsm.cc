@@ -48,6 +48,13 @@ const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader.
     check_is_leader();
 
+    if constexpr (std::is_same_v<T, configuration>) {
+        if (_configuration.is_joint()) {
+            throw conf_change_in_progress();
+        }
+        _configuration.enter_joint(command.current);
+    }
+
     _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
     _sm_events.signal();
 
@@ -431,7 +438,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     assert(_current_term == request.current_term);
 
     bool can_vote =
-	    // We can vote if this is a repeat of a vote we've already cast...
+        // We can vote if this is a repeat of a vote we've already cast...
         _voted_for == from ||
         // ...we haven't voted and we don't think there's a leader yet in this term...
         (_voted_for == server_id{} && _current_leader == server_id{});
