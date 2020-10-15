@@ -30,7 +30,12 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
 
     _observed.advance(*this);
-    set_configuration(_log.get_snapshot().config);
+    // Switch to the latest persisted configuration
+    if (_log.last_conf_idx()) {
+        set_configuration(std::get<configuration>(_log[_log.last_conf_idx()]->data));
+    } else {
+        set_configuration(_log.get_snapshot().config);
+    }
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
 
     assert(!bool(_current_leader));
