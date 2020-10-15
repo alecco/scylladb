@@ -246,7 +246,9 @@ class fsm {
     // Tick implementation on a leader
     void tick_leader();
 
-    // Set cluster configuration
+    // Reconfigure this instance to use the provided configuration.
+    // Called on start, configuration change, or when restoring
+    // to the previous configuration.
     void set_configuration(const configuration& config) {
         _configuration = config;
         // We unconditionally access _configuration
