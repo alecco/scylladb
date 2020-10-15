@@ -56,10 +56,19 @@ const log_entry& fsm::add_entry(T command) {
         if (_tracker->get_configuration().is_joint()) {
             throw conf_change_in_progress();
         }
+        // Transform the user request to a joint configuration
+        // before persisting it.
+        configuration tmp(_tracker->get_configuration());
+        tmp.enter_joint(command.current);
+        command = tmp;
     }
 
     _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
     _sm_events.signal();
+
+    if constexpr (std::is_same_v<T, configuration>) {
+        set_configuration();
+    }
 
     return *_log[_log.last_idx()];
 }
