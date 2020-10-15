@@ -23,7 +23,6 @@
 //          - append to a leader
 //          - partition servers (isolating subsets)
 //          - new leader in partition
-//          - new leader in partition
 //
 //      (run_test)
 //      - Create the servers and initialize
@@ -176,7 +175,7 @@ class rpc : public raft::rpc {
         assert(id >= 0);
         uint64_t u_id = static_cast<uint64_t>(id);
         assert(u_id < _unreachable->size());
-// fmt::print("{} unreachable? {}\n", u_id + 1, _unreachable->at(u_id)); // XXX
+fmt::print("000{} unreachable? {}\n", u_id + 1, _unreachable->at(u_id)); // XXX
         return _unreachable->at(u_id);
     }
 public:
@@ -191,7 +190,7 @@ public:
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
-// fmt::print("{} send_append_entries ", _id); // XXX
+fmt::print("{} send_append_entries ", _id); // XXX
         if (unreachable(id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
@@ -209,7 +208,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-// fmt::print("{} send_append_entries_reply ", _id); // XXX
+fmt::print("{} send_append_entries_reply ", _id); // XXX
         if (unreachable(id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
@@ -217,7 +216,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-// fmt::print("{} send_vote_request ", _id); // XXX
+fmt::print("{} send_vote_request ", _id); // XXX
         if (unreachable(id)) {
             return make_ready_future<>();
         }
@@ -225,7 +224,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-// fmt::print("{} send_vote_request_reply ", _id); // XXX
+fmt::print("{} send_vote_request_reply ", _id); // XXX
         if (unreachable(id)) {
             return make_ready_future<>();
         }
@@ -264,7 +263,6 @@ std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
         size_t apply_entries) {
 
-    // XXX XXX XXX    here pass unreachable to rpc and is_alive
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), apply_entries);
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid, state.unreachable);
@@ -378,19 +376,6 @@ struct test_case {
     std::vector<update> updates;
 };
 
-future<> partition_new_leader(size_t new_leader, std::unordered_set<size_t> members,
-        std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
-fmt::print("partition_new_leader: new leader {} members {}  -------------\n", new_leader, members.size()); // XXX
-    for (auto s: members) {
-        if (s == new_leader) {
-            continue;
-        }
-        rafts[s].first->elapse_election();
-    }
-fmt::print("All election timeout-ed, electing new leader {}\n", new_leader); // XXX
-    co_return rafts[new_leader].first->elect_me_leader();
-}
-
 void partition_servers(partitions& partitions, 
         std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
         std::vector<initial_state>& states) {
@@ -404,7 +389,6 @@ fmt::print("----- partitioning ----------------------------------------\n"); // 
 fmt::print("--------- partition: "); for (auto& x: p) { fmt::print("{} ", x); } fmt::print("\n"); // XXX
         for (auto s: p) {   // XXX here continue
             for (size_t other = 0; other < rafts.size(); ++other) {
-                // If the other is not in partition mark unreachable in BOTH XXX XXX XXX
                 if (other != s && p.find(other) == p.end()) {
 fmt::print("000{} - 000{} unreachable\n", s + 1, other + 1); // XXX
                     states[s].unreachable->at(other) = true;  // One is in partition
@@ -454,16 +438,17 @@ future<int> run_test(test_case test) {
 
     auto rafts = co_await create_cluster(states, apply_changes, apply_entries);
 
-    co_await rafts[0].first->elect_me_leader();
+    co_await rafts[0].first->become_leader();
 
-    // XXX In the end join back all nodes so all updates get propagated to all nodes
+    // XXX In the end join back all nodes so all updates get propagated to everyone, leader 0
     partition all_nodes;
     for (size_t s = 0; s < test.nodes; ++s) {
         all_nodes.insert(s);
     }
     partitions all_nodes_partition{all_nodes};
-    test.updates.emplace_back(std::move(all_nodes_partition));
     partitions& current_partitions = all_nodes_partition;
+    test.updates.emplace_back(std::move(all_nodes_partition));
+    test.updates.emplace_back(new_leader{0,0});
 
     // Process all updates in order
     size_t next_val = leader_snap_skipped + leader_initial_entries;
@@ -474,21 +459,18 @@ future<int> run_test(test_case test) {
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
             co_await seastar::parallel_for_each(commands, [&] (raft::command cmd) {
-fmt::print("Adding command entry on leader {}\n", e.server); // XXX
+fmt::print("Adding command entry on leader 000{}\n", e.server + 1); // XXX
                 tlogger.debug("Adding command entry on leader {}", e.server);
                 return rafts[e.server].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += e.n;
         } else if (std::holds_alternative<partitions>(update)) {
+            co_await seastar::sleep(10us);   // Allow propagation (single thread test)
             current_partitions = std::get<partitions>(update);
-// fmt::print("Partition {}\n"); // XXX
             partition_servers(current_partitions, rafts, states);
         } else if (std::holds_alternative<new_leader>(update)) {
             auto p_leader = std::get<new_leader>(update);
-            co_await partition_new_leader(p_leader.server, current_partitions[p_leader.partition], rafts);
-            if (p_leader.server == 1) {
-                leader_0 = p_leader.server;
-            }
+            co_await rafts[p_leader.server].first->become_leader();
         }
     }
 
@@ -497,10 +479,10 @@ fmt::print("Adding command entry on leader {}\n", e.server); // XXX
         std::vector<int> values(test.total_values - next_val);
         std::iota(values.begin(), values.end(), next_val);
         std::vector<raft::command> commands = create_commands<int>(values);
-fmt::print("Adding remaining {} entries on leader {}\n", values.size(), leader_0); // XXX
-        tlogger.debug("Adding remaining {} entries on leader {}", values.size(), leader_0);
+fmt::print("Adding remaining {} entries on leader {}\n", values.size(), 0); // XXX
+        tlogger.debug("Adding remaining {} entries on leader {}", values.size(), 0);
         co_await seastar::parallel_for_each(commands, [&] (raft::command cmd) {
-            return rafts[leader_0].first->add_entry(std::move(cmd), raft::wait_type::committed);
+            return rafts[0].first->add_entry(std::move(cmd), raft::wait_type::committed);
         });
     }
 
