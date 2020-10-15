@@ -91,10 +91,6 @@ struct configuration {
     // Contains the current configuration. When configuration
     // change is in progress, contains the new configuration.
     std::unordered_set<server_address> current;
-    // True if we are transitioning through a configuration
-    // change and should use both current and previous
-    // configuration.
-    bool _is_joint = false;
 
     configuration(std::initializer_list<server_id> ids) {
         current.reserve(ids.size());
@@ -107,7 +103,7 @@ struct configuration {
     // Return true if the previous configuration is still
     // in use
     bool is_joint() const {
-        return _is_joint;
+        return !previous.empty();
     }
     // Enter a joint configuration given a new set of servers.
     void enter_joint(std::unordered_set<server_address> c_new) {
@@ -115,31 +111,11 @@ struct configuration {
         assert(c_new.size());
         previous = std::move(current);
         current = std::move(c_new);
-        _is_joint = true;
     }
     // Transition from C_old + C_new to C_new.
     void leave_joint() {
-        assert(_is_joint);
-        _is_joint = false;
-        // Keep C_old around in case we'd have to roll back
-        // to the joint configuration.
-    }
-    // Rollback the pending (uncommitted) configuration change
-    // when the log is truncated.
-    void rollback() {
-        if (_is_joint) {
-            // Rollback C_old + C_new to C_old.
-            // It's OK to forget C_new, it will be re-submitted
-            // by the new leader.
-            current = std::move(previous);
-            _is_joint = false;
-        } else {
-            // We transitioned into the new configuration but failed to commit it.
-            // It's OK, the previous one is still kept around,
-            // roll back to the joint configuration, it's been
-            // committed for sure.
-            _is_joint = true;
-        }
+        assert(is_joint());
+        previous.empty();
     }
 };
 
