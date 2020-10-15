@@ -40,7 +40,27 @@ class log {
     log_entries _log;
     // Index of the last stable (persisted) entry in the log.
     index_t _stable_idx = index_t(0);
-
+    // Log index of the last configuration change.
+    //
+    // Is used to:
+    // - prevent accepting a new configuration change while
+    // there is a change in progress.
+    // - revert the state machine to the previous configuration if
+    // the log is truncated while there is an uncommitted change
+    //
+    // Seastar Raft uses a joint consensus approach to
+    // configuration changes, when each change is represented as
+    // two log entries: one for C_old + C_new and another for
+    // C_new. This index is therefore updated twice per change.
+    // It's used to track when the log entry for C_old + C_new is
+    // committed (_last_conf_idx > _commit_idx &&
+    // _configuration.is_joint()) and automatically append a new
+    // log entry for C_new.
+    //
+    // While the index is used only on the leader, it is
+    // maintained in all states to avoid scanning the log
+    // backwards after each election.
+    index_t _last_conf_idx = index_t{0};
 private:
     void truncate_head(index_t i);
     void truncate_tail(index_t i);

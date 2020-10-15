@@ -33,6 +33,9 @@ log_entry_ptr& log::operator[](size_t i) {
 
 void log::emplace_back(log_entry&& e) {
     _log.emplace_back(seastar::make_lw_shared(std::move(e)));
+    if (std::holds_alternative<configuration>(_log.back()->data)) {
+        _last_conf_idx = last_idx();
+    }
 }
 
 bool log::empty() const {
@@ -62,6 +65,16 @@ void log::truncate_head(index_t idx) {
     auto it = _log.begin() + (idx - start_idx());
     _log.erase(it, _log.end());
     stable_to(std::min(_stable_idx, last_idx()));
+    if (_last_conf_idx > last_idx() ) {
+        // We did not keep track of the previous value of
+        // _last_conf_idx, and now must restore it.
+        // On the other hand, We never truncate more than one
+        // configuration entry, since next configuration change
+        // may not start until the current one is committed.
+        // So it should be OK to set _last_conf_idx to an
+        // approximate value.
+        _last_conf_idx = index_t{0};
+    }
 }
 
 void log::truncate_tail(index_t idx) {
@@ -149,7 +162,7 @@ index_t log::maybe_append(std::vector<log_entry>&& entries) {
         }
         // Assert log monotonicity
         assert(e.idx == next_idx());
-        _log.emplace_back(seastar::make_lw_shared(std::move(e)));
+        emplace_back(std::move(e));
     }
 
     return last_new_idx;
