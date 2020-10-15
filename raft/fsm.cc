@@ -280,6 +280,9 @@ void fsm::check_committed() {
     if (new_commit_idx <= _commit_idx) {
         return;
     }
+    bool leave_joint_config = _commit_idx < _log.last_conf_idx() &&
+        new_commit_idx >= _log.last_conf_idx() &&
+        _tracker->get_configuration().is_joint();
 
     if (_log[new_commit_idx]->term != _current_term) {
 
@@ -295,10 +298,18 @@ void fsm::check_committed() {
         return;
     }
     logger.trace("check_committed[{}]: commit {}", _my_id, new_commit_idx);
+
     _commit_idx = new_commit_idx;
     // We have a quorum of servers with match_idx greater than the
     // current commit index. Commit && apply more entries.
     _sm_events.signal();
+
+    if (leave_joint_config) {
+
+        configuration tmp(_tracker->get_configuration());
+        tmp.leave_joint();
+        add_entry(std::move(tmp));
+    }
 }
 
 void fsm::tick_leader() {
