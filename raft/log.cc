@@ -89,6 +89,15 @@ void log::truncate_tail(index_t idx) {
     _stable_idx = std::max(idx, _stable_idx);
 }
 
+void log::update_last_conf_idx() {
+    for (auto it = _log.rbegin(); it != _log.rend(); ++it) {
+        if (std::holds_alternative<configuration>((**it).data)) {
+            _last_conf_idx = (**it).idx;
+            break;
+        }
+    }
+}
+
 index_t log::start_idx() const {
     // log my contain entries included in the snapshot, so start idx
     // may be smaller that snapshot index

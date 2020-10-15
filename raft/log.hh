@@ -64,10 +64,16 @@ class log {
 private:
     void truncate_head(index_t i);
     void truncate_tail(index_t i);
+    // A helper used to find the last configuration entry in the
+    // log after it's been loaded from disk.
+    void update_last_conf_idx();
     log_entry_ptr& get_entry(index_t);
 public:
     log() = default ;
-    log(snapshot snp, log_entries log) : _snapshot(std::move(snp)), _log(std::move(log)) { stable_to(last_idx()); }
+    log(snapshot snp, log_entries log) : _snapshot(std::move(snp)), _log(std::move(log)) {
+        stable_to(last_idx());
+        update_last_conf_idx();
+    }
     explicit log(snapshot snp) : _snapshot(std::move(snp)) {}
     // The index here the global raft log index, not related to a snapshot.
     // It is a programming error to call the function with an index that points into the snapshot,
