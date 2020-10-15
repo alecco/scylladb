@@ -67,7 +67,6 @@ private:
     log_entry_ptr& get_entry(index_t);
 public:
     log() = default ;
-    explicit log(log_entries log) : _log(std::move(log)) { stable_to(index_t(_log.size())); };
     log(snapshot snp, log_entries log) : _snapshot(std::move(snp)), _log(std::move(log)) { stable_to(last_idx()); }
     explicit log(snapshot snp) : _snapshot(std::move(snp)) {}
     // The index here the global raft log index, not related to a snapshot.
