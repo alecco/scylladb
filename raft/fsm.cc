@@ -30,12 +30,6 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
 
     _observed.advance(*this);
-    // Switch to the latest persisted configuration
-    if (_log.last_conf_idx()) {
-        set_configuration(std::get<configuration>(_log[_log.last_conf_idx()]->data));
-    } else {
-        set_configuration(_log.get_snapshot().config);
-    }
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
 
     assert(!bool(_current_leader));
@@ -48,16 +42,20 @@ future<> fsm::wait() {
    co_return;
 }
 
+const configuration& fsm::get_configuration() const {
+    check_is_leader();
+    return _tracker->get_configuration();
+}
+
 template<typename T>
 const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader.
     check_is_leader();
 
     if constexpr (std::is_same_v<T, configuration>) {
-        if (_configuration.is_joint()) {
+        if (_tracker->get_configuration().is_joint()) {
             throw conf_change_in_progress();
         }
-        _configuration.enter_joint(command.current);
     }
 
     _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
@@ -101,6 +99,21 @@ void fsm::update_current_term(term_t current_term)
     _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
 }
 
+
+void fsm::set_configuration()
+{
+    configuration configuration = _log.last_conf_idx() ?
+        std::get<raft::configuration>(_log[_log.last_conf_idx()]->data) : _log.get_snapshot().config;
+    // We unconditionally access _configuration
+    // to identify which entries are committed.
+    assert(configuration.current.size() > 0);
+    if (is_leader()) {
+        _tracker->set_configuration(std::move(configuration), _log.next_idx());
+    } else if (is_candidate()) {
+        _votes->set_configuration(std::move(configuration));
+    }
+}
+
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
     assert(!_tracker);
@@ -110,7 +123,7 @@ void fsm::become_leader() {
     _tracker.emplace(_my_id);
     _log_limiter_semaphore.emplace(this);
     _log_limiter_semaphore->sem.consume(_log.non_snapshoted_length());
-    _tracker->set_configuration(_configuration.current, _log.next_idx());
+    set_configuration();
     _last_election_time = _clock.now();
     replicate();
 }
@@ -140,7 +153,7 @@ void fsm::become_candidate() {
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
     _votes.emplace();
-    _votes->set_configuration(_configuration.current);
+    set_configuration();
     _voted_for = _my_id;
 
     if (_votes->tally_votes() == vote_result::WON) {
@@ -149,7 +162,7 @@ void fsm::become_candidate() {
         return;
     }
 
-    for (const auto& server : _configuration.current) {
+    for (const auto& server : _votes->get_configuration().current) {
         if (server.id == _my_id) {
             continue;
         }
@@ -667,11 +680,6 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
         os << "votes (" << *f._votes << "), ";
     }
     os << "messages: " << f._messages.size() << ", ";
-    os << "current_config (";
-    for (auto& server: f._configuration.current) {
-        os << server.id << ", ";
-    }
-    os << "), ";
 
     if (std::holds_alternative<leader>(f._state)) {
         os << "leader, ";

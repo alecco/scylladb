@@ -68,12 +68,8 @@ void log::truncate_head(index_t idx) {
     if (_last_conf_idx > last_idx() ) {
         // We did not keep track of the previous value of
         // _last_conf_idx, and now must restore it.
-        // On the other hand, We never truncate more than one
-        // configuration entry, since next configuration change
-        // may not start until the current one is committed.
-        // So it should be OK to set _last_conf_idx to an
-        // approximate value.
         _last_conf_idx = index_t{0};
+        update_last_conf_idx();
     }
 }
 
