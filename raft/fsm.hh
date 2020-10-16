@@ -179,16 +179,12 @@ class fsm {
     // so it may be the case that some entries are committed now.
     // Signals _sm_events.
     void check_committed();
-    // Check if the randomized election timeout has expired.
-    bool is_past_election_timeout() const {
-        return _clock.now() - _last_election_time >= _randomized_election_timeout;
-    }
-
     // A helper to send any kind of RPC message.
     template <typename Message>
     void send_to(server_id to, Message&& m) {
         static_assert(std::is_rvalue_reference<decltype(m)>::value, "must be rvalue");
         _messages.push_back(std::make_pair(to, std::move(m)));
+// fmt::print("{} send_to: message, signal\n", _my_id);  // XXX
         _sm_events.signal();
     }
 
@@ -256,6 +252,11 @@ public:
 
     void become_leader();
 
+    // Check if the randomized election timeout has expired.
+    bool is_past_election_timeout() const {
+        return _clock.now() - _last_election_time >= _randomized_election_timeout;
+    }
+
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
     template<typename T> const log_entry& add_entry(T command);
@@ -292,6 +293,7 @@ public:
     // How much time has passed since last election or last
     // time we heard from a valid leader.
     logical_clock::duration election_elapsed() const {
+fmt::print("{} election_elapsed: now {} last {}\n", _my_id, _clock.now(), _last_election_time); // XXX
         return _clock.now() - _last_election_time;
     }
 
@@ -328,6 +330,7 @@ void fsm::step(server_id from, Message&& msg) {
     // follower state. If a server receives a request with
     // a stale term number, it rejects the request.
     if (msg.current_term > _current_term) {
+// fmt::print("{} step [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term); // XXX
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
@@ -341,6 +344,7 @@ void fsm::step(server_id from, Message&& msg) {
                     // within the minimum election timeout of
                     // hearing from a current leader, it does not
                     // update its term or grant its vote.
+fmt::print("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {}", _my_id, _current_term, election_elapsed()); // XXX
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {}",
                         _my_id, _current_term, election_elapsed());
                     return;
@@ -353,9 +357,11 @@ void fsm::step(server_id from, Message&& msg) {
     } else if (msg.current_term < _current_term) {
         if constexpr (std::is_same_v<Message, append_request_recv>) {
             // Instructs the leader to step down.
+fmt::print("{} step: stepping down\n", _my_id);  // XXX
             append_reply reply{_current_term, _commit_idx, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
             send_to(from, std::move(reply));
         } else if constexpr (std::is_same_v<Message, install_snapshot>) {
+fmt::print("{} step: snapshot\n", _my_id);  // XXX
             send_to(from, snapshot_reply{ .success = false });
         } else {
             // Ignore other cases
@@ -410,10 +416,12 @@ void fsm::step(server_id from, Message&& msg) {
         } else if constexpr (std::is_same_v<Message, install_snapshot>) {
             if constexpr (!std::is_same_v<State, follower>) {
                 // snapshot can be installed only in follower
+// fmt::print("{} step: visitor install snapshot\n", _my_id);  // XXX
                 send_to(from, snapshot_reply{ .success = false });
             } else {
                 // apply snapshot and reply with success
                 apply_snapshot(std::move(msg.snp), 0);
+// fmt::print("{} step: visitor apply snapshot\n", _my_id);  // XXX
                 send_to(from, snapshot_reply{ .success = true });
             }
         }

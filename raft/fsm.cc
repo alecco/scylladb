@@ -42,6 +42,7 @@ const log_entry& fsm::add_entry(T command) {
     check_is_leader();
 
     _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
+// fmt::print("{} fsm::add_entry\n", _my_id); // XXX
     _sm_events.signal();
 
     return *_log[_log.last_idx()];
@@ -60,6 +61,7 @@ void fsm::advance_commit_idx(index_t leader_commit_idx) {
     if (new_commit_idx > _commit_idx) {
         _commit_idx = new_commit_idx;
         _sm_events.signal();
+// fmt::print("advance_commit_idx[{}]: signal apply_entries: committed: {}\n", _my_id, _commit_idx); // XXX
         logger.trace("advance_commit_idx[{}]: signal apply_entries: committed: {}",
             _my_id, _commit_idx);
     }
@@ -129,6 +131,7 @@ void fsm::become_candidate() {
         if (server.id == _my_id) {
             continue;
         }
+fmt::print("{} [term: {}, index: {}, last log term: {}] sent vote request to {}\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id); // XXX
         logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
 
@@ -248,6 +251,7 @@ void fsm::check_committed() {
             _my_id, _log[new_commit_idx]->term, _current_term);
         return;
     }
+// fmt::print("check_committed[{}]: commit {}\n", _my_id, new_commit_idx); // XXX
     logger.trace("check_committed[{}]: commit {}", _my_id, new_commit_idx);
     _commit_idx = new_commit_idx;
     // We have a quorum of servers with match_idx greater than the
@@ -256,7 +260,9 @@ void fsm::check_committed() {
 }
 
 void fsm::tick_leader() {
+fmt::print("{}  TICK LEADER   now {} last {} ET {} +++++++++++++++++++\n", _my_id, _clock.now(), _last_election_time, ELECTION_TIMEOUT); // XXX
     if (_clock.now() - _last_election_time >= ELECTION_TIMEOUT) {
+fmt::print("{}  LEADER STEPPING DOWN\n", _my_id); // XXX
         // 6.2 Routing requests to the leader
         // A leader in Raft steps down if an election timeout
         // elapses without a successful round of heartbeats to a majority
@@ -279,6 +285,7 @@ void fsm::tick_leader() {
                 progress.in_flight--; // allow one more packet to be sent
             }
             if (progress.match_idx < _log.stable_idx() || progress.commit_idx < _commit_idx) {
+fmt::print("tick[{}]: replicate to {} because match={} < stable={} || follower commit_idx={} < commit_idx={}\n", _my_id, progress.id, progress.match_idx, _log.stable_idx(), progress.commit_idx, _commit_idx); // XXX
                 logger.trace("tick[{}]: replicate to {} because match={} < stable={} || "
                     "follower commit_idx={} < commit_idx={}",
                     _my_id, progress.id, progress.match_idx, _log.stable_idx(),
@@ -296,6 +303,7 @@ void fsm::tick_leader() {
 }
 
 void fsm::tick() {
+fmt::print("{} clock advance\n", _my_id); // XXX
     _clock.advance();
 
     if (is_leader()) {
@@ -330,6 +338,7 @@ void fsm::append_entries(server_id from, append_request_recv&& request) {
     // bandwidth.
     auto [match, term] = _log.match_term(request.prev_log_idx, request.prev_log_term);
     if (!match) {
+// fmt::print("append_entries[{}]: no matching term at position {}: expected {}, found {}", _my_id, request.prev_log_idx, request.prev_log_term, term); // XXX
         logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
                 _my_id, request.prev_log_idx, request.prev_log_term, term);
         // Reply false if log doesn't contain an entry at
@@ -349,6 +358,7 @@ void fsm::append_entries(server_id from, append_request_recv&& request) {
 
     advance_commit_idx(request.leader_commit_idx);
 
+// fmt::print("append_entries[{}]: send to\n", _my_id); // XXX
     send_to(from, append_reply{_current_term, _commit_idx, append_reply::accepted{last_new_idx}});
 }
 
@@ -405,6 +415,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         assert(progress.next_idx != progress.match_idx);
     }
 
+// fmt::print("append_entries_reply[{}->{}]: next_idx={}, match_idx={}", _my_id, from, progress.next_idx, progress.match_idx); // XXX
     logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}",
         _my_id, from, progress.next_idx, progress.match_idx);
 
@@ -489,6 +500,7 @@ static size_t entry_size(const log_entry& e) {
 
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
+// fmt::print("replicate_to[{}->{}]: called next={} match={}", _my_id, progress.id, progress.next_idx, progress.match_idx); // XXX
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, progress.id, progress.next_idx, progress.match_idx);
 
@@ -512,6 +524,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             // continue syncing the log.
             progress.become_snapshot();
             send_to(progress.id, install_snapshot{_current_term, _log.get_snapshot()});
+// fmt::print("replicate_to[{}->{}]: send snapshot next={} snapshot={}", _my_id, progress.id, progress.next_idx,  _log.get_snapshot().idx); // XXX
             logger.trace("replicate_to[{}->{}]: send snapshot next={} snapshot={}",
                     _my_id, progress.id, progress.next_idx,  _log.get_snapshot().idx);
             return;
@@ -561,6 +574,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             logger.trace("replicate_to[{}->{}]: send empty", _my_id, progress.id);
         }
 
+// fmt::print("replicate_to[{}->{}]: end of can send loop\n", _my_id, progress.id); // XXX
         send_to(progress.id, std::move(req));
 
         if (progress.state == follower_progress::state::PROBE) {
@@ -573,6 +587,7 @@ void fsm::replicate() {
     assert(is_leader());
     for (auto& [id, progress] : *_tracker) {
         if (progress.id != _my_id) {
+// fmt::print("replicate[{}->{}]\n", _my_id, progress.id); // XXX
             replicate_to(progress, false);
         }
     }

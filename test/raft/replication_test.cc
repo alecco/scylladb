@@ -387,7 +387,7 @@ fmt::print("----- partitioning ----------------------------------------\n"); // 
     // Note: there could be more than 2 partitions
     for (auto p: partitions) {
 fmt::print("--------- partition: "); for (auto& x: p) { fmt::print("{} ", x); } fmt::print("\n"); // XXX
-        for (auto s: p) {   // XXX here continue
+        for (auto s: p) {
             for (size_t other = 0; other < rafts.size(); ++other) {
                 if (other != s && p.find(other) == p.end()) {
 fmt::print("000{} - 000{} unreachable\n", s + 1, other + 1); // XXX
@@ -396,6 +396,14 @@ fmt::print("000{} - 000{} unreachable\n", s + 1, other + 1); // XXX
             }
         }
     }
+    // Elapse to election
+    for (auto p: partitions) {
+        for (auto s: p) {
+fmt::print("+++++++++++++++++++++ elapse 000{}\n", s + 1); // XXX
+            rafts[s].first->elapse_election();
+        }
+    }
+fmt::print("----- end          ----------------------------------------\n"); // XXX
 }
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -445,15 +453,16 @@ future<int> run_test(test_case test) {
     for (size_t s = 0; s < test.nodes; ++s) {
         all_nodes.insert(s);
     }
-    partitions all_nodes_partition{all_nodes};
-    partitions& current_partitions = all_nodes_partition;
-    test.updates.emplace_back(std::move(all_nodes_partition));
+    test.updates.emplace_back(partitions{all_nodes});
     test.updates.emplace_back(new_leader{0,0});
+    std::vector<size_t> partition_leaders(1);
+    size_t total_partitions = 1;
 
     // Process all updates in order
     size_t next_val = leader_snap_skipped + leader_initial_entries;
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
+            // Entries
             auto e = std::get<entries>(update);
             std::vector<int> values(e.n);
             std::iota(values.begin(), values.end(), next_val);
@@ -465,12 +474,22 @@ fmt::print("Adding command entry on leader 000{}\n", e.server + 1); // XXX
             });
             next_val += e.n;
         } else if (std::holds_alternative<partitions>(update)) {
-            co_await seastar::sleep(10us);   // Allow propagation (single thread test)
-            current_partitions = std::get<partitions>(update);
-            partition_servers(current_partitions, rafts, states);
+            // Partition
+            for (auto pl: partition_leaders) {
+fmt::print("<<<< ticking leader 000{}\n", pl + 1); // XXX
+                rafts[pl].first->tick(); // XXX XXX XXX or just tick all servers, duh!
+            }
+            auto& new_partitions = std::get<partitions>(update);
+            partition_leaders.resize(new_partitions.size());
+            partition_servers(new_partitions, rafts, states);
         } else if (std::holds_alternative<new_leader>(update)) {
+            // New Leader
+            // XXX XXX XXX elapse_election
             auto p_leader = std::get<new_leader>(update);
+fmt::print("----- new candidate 000{} ------------------------------------\n", p_leader.server + 1); // XXX
             co_await rafts[p_leader.server].first->become_leader();
+            partition_leaders[p_leader.partition] = p_leader.server;
+fmt::print("----- end, new leader 000{} of partition {}  -----------------\n", p_leader.server + 1, p_leader.partition); // XXX
         }
     }
 

@@ -59,7 +59,9 @@ public:
     future<> abort() override;
     term_t get_current_term() const override;
     future<> read_barrier() override;
+    void elapse_election() override;
     future<> become_leader() override;
+    void tick() override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -173,6 +175,7 @@ future<> server_impl::start() {
 
 template <typename T>
 future<> server_impl::add_entry_internal(T command, wait_type type) {
+// fmt::print("An entry is submitted on a leader\n"); // XXX
     logger.trace("An entry is submitted on a leader");
 
     // lock access to the raft log while it is been updated
@@ -244,8 +247,10 @@ future<> server_impl::send_message(server_id id, Message m) {
     return std::visit([this, id] (auto&& m) {
         using T = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<T, append_reply>) {
+// fmt::print("[{}] server_impl:send_message append_reply {}\n", _id, id); // XXX
             return _rpc->send_append_entries_reply(id, m);
         } else if constexpr (std::is_same_v<T, append_request_send>) {
+// fmt::print("[{}] server_impl:send_message append_request_send {}\n", _id, id); // XXX
             return _rpc->send_append_entries(id, m);
         } else if constexpr (std::is_same_v<T, vote_request>) {
             return _rpc->send_vote_request(id, m);
@@ -269,10 +274,12 @@ future<> server_impl::send_message(server_id id, Message m) {
 }
 
 future<> server_impl::io_fiber(index_t last_stable) {
+// fmt::print("[{}] io_fiber start\n", _id); // XXX
     logger.trace("[{}] io_fiber start", _id);
     try {
         while (true) {
             auto batch = co_await _fsm->poll_output();
+// fmt::print("[{}] io_fiber got output\n", _id); // XXX
 
             if (batch.term != term_t{}) {
                 // Current term and vote are always persisted
@@ -312,6 +319,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.messages.size()) {
+// fmt::print("[{}] io_fiber got messages {}\n", _id, batch.messages.size()); // XXX
                 // after entries are persisted we can send messages
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
                     return send_message(message.first, std::move(message.second));
@@ -362,6 +370,7 @@ future<> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
 }
 
 future<> server_impl::applier_fiber() {
+// fmt::print("applier_fiber start\n"); // XXX
     logger.trace("applier_fiber start");
     size_t applied_since_snapshot = 0;
 
@@ -463,6 +472,15 @@ future<> server_impl::remove_server(server_id id, clock_type::duration timeout) 
     return make_ready_future<>();
 }
 
+void server_impl::elapse_election() {
+    // for (int i = 1; i <= raft::ELECTION_TIMEOUT.count(); i++) {
+    while (_fsm->election_elapsed() <= ELECTION_TIMEOUT) {
+        // XXX XXX XXX why _last_election_time is kept same as clock.now() ????
+fmt::print("{} elapse_election: ee {} ET {} {} \n", _id, _fsm->election_elapsed(), ELECTION_TIMEOUT, _fsm->election_elapsed() <= ELECTION_TIMEOUT); // XXX
+        _fsm->tick();
+    }
+}
+
 future<> server_impl::become_leader() {
     while (!_fsm->is_candidate()) {
         _fsm->tick();
@@ -470,6 +488,10 @@ future<> server_impl::become_leader() {
     do {
         co_await seastar::sleep(50us);
     } while (!_fsm->is_leader());
+}
+
+void server_impl::tick() {
+    _fsm->tick();
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
