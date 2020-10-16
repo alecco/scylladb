@@ -269,20 +269,19 @@ void fsm::advance_stable_idx(index_t idx) {
         progress.match_idx = idx;
         progress.next_idx = index_t{idx + 1};
         replicate();
-        check_committed();
+        maybe_commit();
     }
 }
 
-void fsm::check_committed() {
+void fsm::maybe_commit() {
 
     index_t new_commit_idx = _tracker->committed(_commit_idx);
 
     if (new_commit_idx <= _commit_idx) {
         return;
     }
-    bool leave_joint_config = _commit_idx < _log.last_conf_idx() &&
-        new_commit_idx >= _log.last_conf_idx() &&
-        _tracker->get_configuration().is_joint();
+    bool committed_conf_change = _commit_idx < _log.last_conf_idx() &&
+        new_commit_idx >= _log.last_conf_idx();
 
     if (_log[new_commit_idx]->term != _current_term) {
 
@@ -293,22 +292,29 @@ void fsm::check_committed() {
         // an entry from the current term has been committed in
         // this way, then all prior entries are committed
         // indirectly because of the Log Matching Property.
-        logger.trace("check_committed[{}]: cannot commit because of term {} != {}",
+        logger.trace("maybe_commit[{}]: cannot commit because of term {} != {}",
             _my_id, _log[new_commit_idx]->term, _current_term);
         return;
     }
-    logger.trace("check_committed[{}]: commit {}", _my_id, new_commit_idx);
+    logger.trace("maybe_commit[{}]: commit {}", _my_id, new_commit_idx);
 
     _commit_idx = new_commit_idx;
     // We have a quorum of servers with match_idx greater than the
     // current commit index. Commit && apply more entries.
     _sm_events.signal();
 
-    if (leave_joint_config) {
-
-        configuration tmp(_tracker->get_configuration());
-        tmp.leave_joint();
-        add_entry(std::move(tmp));
+    if (committed_conf_change) {
+        const configuration& cfg = _tracker->get_configuration();
+        if (cfg.is_joint()) {
+            // Leave joint configuration
+            configuration tmp(cfg);
+            tmp.leave_joint();
+            add_entry(std::move(tmp));
+        } else if (cfg.current.find(server_address{_my_id}) == cfg.current.end()) {
+            // The current leader is not part of the current
+            // configuration. Convert to a follower.
+            become_follower(server_id{});
+        }
     }
 }
 
@@ -437,7 +443,13 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         progress.become_pipeline();
 
         // check if any new entry can be committed
-        check_committed();
+        maybe_commit();
+
+        // We may have resigned leadership if committed a new
+        // configuration.
+        if (!is_leader()) {
+            return;
+        }
     } else {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
