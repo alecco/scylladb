@@ -54,10 +54,23 @@ const log_entry& fsm::add_entry(T command) {
 
     if constexpr (std::is_same_v<T, configuration>) {
         if (_tracker->get_configuration().is_joint()) {
+            // 4.1. Cluster membership changes/Safety.
+            //
+            // Leaders avoid overlapping configuration changes by
+            // not beginning a new change until the previous
+            // change’s entry has committed. It is only safe to
+            // start another membership change once a majority of
+            // the old cluster has moved to operating under the
+            // rules of C_new.
             throw conf_change_in_progress();
         }
-        // Transform the user request to a joint configuration
-        // before persisting it.
+        // 4.3. Arbitrary configuration changes using joint consensus
+        //
+        // When the leader receives a request to change the
+        // configuration from C_old to C_new , it stores the
+        // configuration for joint consensus (C_old,new) as a log
+        // entry and replicates that entry using the normal Raft
+        // mechanism.
         configuration tmp(_tracker->get_configuration());
         tmp.enter_joint(command.current);
         command = tmp;
@@ -315,13 +328,21 @@ void fsm::maybe_commit() {
     if (committed_conf_change) {
         const configuration& cfg = _tracker->get_configuration();
         if (cfg.is_joint()) {
-            // Leave joint configuration
+            // 4.3. Arbitrary configuration changes using joint consensus
+            //
+            // Once the joint consensus has been committed, the
+            // system then transitions to the new configuration.
             configuration tmp(cfg);
             tmp.leave_joint();
             add_entry(std::move(tmp));
         } else if (cfg.current.find(server_address{_my_id}) == cfg.current.end()) {
-            // The current leader is not part of the current
-            // configuration. Convert to a follower.
+            // 4.2.2 Removing the current leader
+            //
+            // A leader that is removed from the configuration
+            // steps down once the C_new entry is committed.
+            //
+            // @todo: when leadership transfer extension is
+            // implemented, send TimeoutNow to a member of C_new
             become_follower(server_id{});
         }
     }
