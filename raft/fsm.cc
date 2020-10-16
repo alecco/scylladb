@@ -173,8 +173,8 @@ void fsm::become_candidate() {
     _state = candidate{};
     _tracker = std::nullopt;
     _log_limiter_semaphore = std::nullopt;
-    update_current_term(term_t{_current_term + 1});
     // 3.4 Leader election
+    //
     // A possible outcome is that a candidate neither wins nor
     // loses the election: if many followers become candidates at
     // the same time, votes could be split so that no candidate
@@ -182,24 +182,35 @@ void fsm::become_candidate() {
     // time out and start a new election by incrementing its term
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
+
     _votes.emplace();
     set_configuration();
-    _voted_for = _my_id;
 
-    if (_votes->tally_votes() == vote_result::WON) {
-        // A single node cluster.
-        become_leader();
-        return;
+    const auto& voters = _votes->voters();
+    if (voters.find(server_address{_my_id}) == voters.end()) {
+        // If the server is not part of the current configuration,
+        // revert to the follower state without increasing
+        // the current term.
+        become_follower(server_id{});
     }
-
-    for (const auto& server : _votes->get_configuration().current) {
+    update_current_term(term_t{_current_term + 1});
+    // Replicate RequestVote
+    for (const auto& server : voters) {
         if (server.id == _my_id) {
+            // Vote for self.
+            _votes->register_vote(server.id, true);
+            _voted_for = _my_id;
+            // Already signaled _sm_events in update_current_term()
             continue;
         }
         logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
 
         send_to(server.id, vote_request{_current_term, _log.last_idx(), _log.last_term()});
+    }
+    if (_votes->tally_votes() == vote_result::WON) {
+        // A single node cluster.
+        become_leader();
     }
 }
 
