@@ -53,7 +53,8 @@ const log_entry& fsm::add_entry(T command) {
     check_is_leader();
 
     if constexpr (std::is_same_v<T, configuration>) {
-        if (_tracker->get_configuration().is_joint()) {
+        if (_log.last_conf_idx() > _commit_idx ||
+            _tracker->get_configuration().is_joint()) {
             // 4.1. Cluster membership changes/Safety.
             //
             // Leaders avoid overlapping configuration changes by
@@ -73,7 +74,7 @@ const log_entry& fsm::add_entry(T command) {
         // mechanism.
         configuration tmp(_tracker->get_configuration());
         tmp.enter_joint(command.current);
-        command = tmp;
+        command = std::move(tmp);
     }
 
     _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
@@ -81,6 +82,7 @@ const log_entry& fsm::add_entry(T command) {
 
     if constexpr (std::is_same_v<T, configuration>) {
         // 4.1. Cluster membership changes/Safety.
+        //
         // The new configuration takes effect on each server as
         // soon as it is added to that server’s log: the C_new
         // entry is replicated to the C_new servers, and
