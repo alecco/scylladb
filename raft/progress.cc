@@ -83,13 +83,33 @@ bool follower_progress::can_send_to() {
     return false;
 }
 
+// If this is called when a tracker is just created, the current
+// progress is empty and we should simply crate an instance for
+// each follower.
+// When switching configurations, we should preserve progress
+// for existing followers, crate progress for new, and remove
+// progress for non-members (to make sure we don't send noise
+// messages to them).
 void tracker::set_configuration(configuration configuration, index_t next_idx) {
     _configuration = std::move(configuration);
-    for (auto& s : _configuration.current) {
-        if (this->progress::find(s.id) != this->progress::end()) {
-            continue;
+    // Swap out the current progress and then re-add
+    // only those entries which are still present.
+    progress old_progress = std::move(*this);
+
+    auto emplace_simple_config = [&](const std::unordered_set<server_address>& config) {
+        for (const auto& s : config) {
+            auto it = old_progress.find(s.id);
+            if (it != old_progress.end()) {
+                this->progress::emplace(s.id, std::move(it->second));
+                old_progress.erase(it); // to not find again on the next invocation
+            } else {
+                this->progress::emplace(s.id, follower_progress{s.id, next_idx});
+            }
         }
-        this->progress::emplace(s.id, follower_progress{s.id, next_idx});
+    };
+    emplace_simple_config(_configuration.current);
+    if (_configuration.is_joint()) {
+        emplace_simple_config(_configuration.previous);
     }
 }
 
