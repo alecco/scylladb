@@ -464,6 +464,11 @@ future<> server_impl::abort() {
 }
 
 future<> server_impl::add_server(server_id id, bytes node_info, clock_type::duration /* timeout */) {
+    // 4.1 Cluster membership changes. Safety.
+    // When the leader receives a request to add or remove a server
+    // from its current configuration (C old ), it appends the new
+    // configuration (C new ) as an entry in its log and replicates
+    // that entry using the normal Raft mechanism.
     raft::configuration c_new(_fsm->get_configuration());
     server_address to_add{std::move(id), std::move(node_info)};
 
