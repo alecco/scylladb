@@ -270,8 +270,11 @@ fsm_output fsm::get_output() {
 
 void fsm::advance_stable_idx(index_t idx) {
     _log.stable_to(idx);
-    if (is_leader()) {
-        auto& progress = _tracker->find(_my_id);
+    // If this server is leader and is part of the current
+    // configuration, update it's progress and optionally
+    // commit new entries.
+    if (is_leader() && _tracker->leader_progress()) {
+        auto& progress = *_tracker->leader_progress();
         progress.match_idx = idx;
         progress.next_idx = index_t{idx + 1};
         replicate();

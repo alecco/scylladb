@@ -92,18 +92,25 @@ bool follower_progress::can_send_to() {
 // messages to them).
 void tracker::set_configuration(configuration configuration, index_t next_idx) {
     _configuration = std::move(configuration);
+    _leader_progress = NULL;
     // Swap out the current progress and then re-add
     // only those entries which are still present.
     progress old_progress = std::move(*this);
 
     auto emplace_simple_config = [&](const std::unordered_set<server_address>& config) {
         for (const auto& s : config) {
-            auto it = old_progress.find(s.id);
-            if (it != old_progress.end()) {
-                this->progress::emplace(s.id, std::move(it->second));
-                old_progress.erase(it); // to not find again on the next invocation
+            auto oldp = old_progress.find(s.id);
+            auto newp = this->progress::end();
+            if (oldp != old_progress.end()) {
+                newp = this->progress::emplace(s.id, std::move(oldp->second)).first;
+                old_progress.erase(oldp); // to not find again on the next invocation
             } else {
-                this->progress::emplace(s.id, follower_progress{s.id, next_idx});
+                newp = this->progress::emplace(s.id, follower_progress{s.id, next_idx}).first;
+            }
+            if (s.id == _my_id) {
+                // The leader is part of the current
+                // configuration.
+                _leader_progress = &newp->second;
             }
         }
     };
