@@ -83,7 +83,7 @@ class tracker: private progress {
     // C_new) when a leader can manage a cluster that does not
     // include itself; it replicates log entries but does not
     // count itself in majorities.
-    follower_progress *_leader_progress = NULL;
+    follower_progress *_leader_progress = nullptr;
 public:
     using progress::begin, progress::end, progress::cbegin, progress::cend, progress::size;
 

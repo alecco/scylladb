@@ -328,16 +328,15 @@ void fsm::maybe_commit() {
     _sm_events.signal();
 
     if (committed_conf_change) {
-        const configuration& cfg = _tracker->get_configuration();
-        if (cfg.is_joint()) {
+        if (_tracker->get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
             // Once the joint consensus has been committed, the
             // system then transitions to the new configuration.
-            configuration tmp(cfg);
+            configuration tmp(_tracker->get_configuration());
             tmp.leave_joint();
             add_entry(std::move(tmp));
-        } else if (cfg.current.find(server_address{_my_id}) == cfg.current.end()) {
+        } else if (_tracker->leader_progress() == nullptr) {
             // 4.2.2 Removing the current leader
             //
             // A leader that is removed from the configuration
