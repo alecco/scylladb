@@ -67,6 +67,12 @@ const log_entry& fsm::add_entry(T command) {
     _sm_events.signal();
 
     if constexpr (std::is_same_v<T, configuration>) {
+        // 4.1. Cluster membership changes/Safety.
+        // The new configuration takes effect on each server as
+        // soon as it is added to that server’s log: the C_new
+        // entry is replicated to the C_new servers, and
+        // a majority of the new configuration is used to
+        // determine the C_new entry’s commitment.
         set_configuration();
     }
 
