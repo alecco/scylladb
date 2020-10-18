@@ -116,6 +116,7 @@ void fsm::become_candidate() {
     // obtains a majority. When this happens, each candidate will
     // time out and start a new election by incrementing its term
     // and initiating another round of RequestVote RPCs.
+fmt::print("become_candidate: reset _last_election_time\n", _my_id); // XXX
     _last_election_time = _clock.now();
     _votes.emplace();
     _votes->set_configuration(_current_config.servers);
@@ -262,7 +263,7 @@ void fsm::check_committed() {
 void fsm::tick_leader() {
 fmt::print("{}  TICK LEADER   now {} last {} ET {} +++++++++++++++++++\n", _my_id, _clock.now(), _last_election_time, ELECTION_TIMEOUT); // XXX
     if (_clock.now() - _last_election_time >= ELECTION_TIMEOUT) {
-fmt::print("{}  LEADER STEPPING DOWN\n", _my_id); // XXX
+fmt::print("{}  LEADER STEPPING DOWN\n", _my_id); // XXX  XXX XXX  why not stepping down
         // 6.2 Routing requests to the leader
         // A leader in Raft steps down if an election timeout
         // elapses without a successful round of heartbeats to a majority
@@ -298,12 +299,13 @@ fmt::print("tick[{}]: replicate to {} because match={} < stable={} || follower c
     if (active >= _tracker->size()/2 + 1) {
         // Advance last election time if we heard from
         // the quorum during this tick.
+fmt::print("{} advancing _last_election_time as we heard from quorum\n", _my_id); // XXX
         _last_election_time = _clock.now();
     }
 }
 
 void fsm::tick() {
-fmt::print("{} clock advance\n", _my_id); // XXX
+fmt::print("{} tick: clock advance\n", _my_id); // XXX
     _clock.advance();
 
     if (is_leader()) {
@@ -311,8 +313,10 @@ fmt::print("{} clock advance\n", _my_id); // XXX
     } else if (_current_leader && _failure_detector.is_alive(_current_leader)) {
         // Ensure the follower doesn't disrupt a valid leader
         // simple because there were no AppendEntries RPCs recently.
+fmt::print("{} advancing _last_election_time follower doesn't disrupt valid leader\n", _my_id); // XXX
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
+fmt::print("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id, _last_election_time, _clock.now()); // XXX
         logger.trace("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id,
             _last_election_time, _clock.now());
         become_candidate();

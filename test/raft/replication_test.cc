@@ -378,15 +378,39 @@ struct test_case {
 
 void partition_servers(partitions& partitions, 
         std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        std::vector<initial_state>& states) {
+        std::vector<initial_state>& states, std::vector<size_t>& leaders) {
 fmt::print("----- partitioning ----------------------------------------\n"); // XXX
+
+    // 1. partition
+    // 2. tick leaders to propagate within new partition
+    // 3. isolate followers and tick till election timed out
+    // 4. set new candidate, leader  (first in partition)
+
+
+            // std::unordered_set<size_t> old_leaders(partition_leaders.begin(), partition_leaders.end());
+
+    // Isolate all nodes and elapse election so all are receptive to new custom candidate
+    for (size_t s = 0; s < states.size(); ++s) {
+        std::fill(states[s].unreachable->begin(), states[s].unreachable->end(), 1); // Disconnect
+    }
+    // Elapse to election all followers
+    for (auto p: partitions) {
+        for (auto s: p) {
+            if (leaders.find(s) == leaders.end()) {
+fmt::print("+++++++++++++++++++++ elapse follower 000{}\n", s + 1); // XXX
+                rafts[s].first->elapse_election();
+            }
+        }
+    }
+
+    // XXX do we need this or just  else unreachable = false is good enough?
     for (size_t s = 0; s < states.size(); ++s) {
         std::fill(states[s].unreachable->begin(), states[s].unreachable->end(), 0); // reset
     }
     // Mark node unreachable if in different partition
     // Note: there could be more than 2 partitions
     for (auto p: partitions) {
-fmt::print("--------- partition: "); for (auto& x: p) { fmt::print("{} ", x); } fmt::print("\n"); // XXX
+fmt::print("--------- partition: "); for (auto& x: p) { fmt::print("000{} ", x + 1); } fmt::print("\n"); // XXX
         for (auto s: p) {
             for (size_t other = 0; other < rafts.size(); ++other) {
                 if (other != s && p.find(other) == p.end()) {
@@ -394,13 +418,6 @@ fmt::print("000{} - 000{} unreachable\n", s + 1, other + 1); // XXX
                     states[s].unreachable->at(other) = true;  // One is in partition
                 }
             }
-        }
-    }
-    // Elapse to election
-    for (auto p: partitions) {
-        for (auto s: p) {
-fmt::print("+++++++++++++++++++++ elapse 000{}\n", s + 1); // XXX
-            rafts[s].first->elapse_election();
         }
     }
 fmt::print("----- end          ----------------------------------------\n"); // XXX
@@ -475,13 +492,28 @@ fmt::print("Adding command entry on leader 000{}\n", e.server + 1); // XXX
             next_val += e.n;
         } else if (std::holds_alternative<partitions>(update)) {
             // Partition
-            for (auto pl: partition_leaders) {
-fmt::print("<<<< ticking leader 000{}\n", pl + 1); // XXX
-                rafts[pl].first->tick(); // XXX XXX XXX or just tick all servers, duh!
+            for (auto& r: rafts) {
+                r.first->tick(); // Tick all servers to propagate entries before splitting
             }
             auto& new_partitions = std::get<partitions>(update);
+            partition_servers(new_partitions, rafts, states, partition_leaders);
+            // Tick all leaders now in their new partitions to propagate entries to newcomers
+            // XXX is this OK for multiple leaders in same partition?
+            for (auto pl: partition_leaders) {
+fmt::print("<<<< ticking leader 000{}\n", pl + 1); // XXX
+                rafts[pl].first->tick();
+            }
+            // Find out new partitions leaders, pick one per partition
+            // XXX is this OK for multiple leaders in same partition?
             partition_leaders.resize(new_partitions.size());
-            partition_servers(new_partitions, rafts, states);
+            for (size_t p = 0; p < new_partitions.size(); ++p) {
+                for (auto s: new_partitions[p]) {
+                    if (old_leaders.find(s) != old_leaders.end()) {
+                        partition_leaders[p] = s;
+                        break;   // One leader per partition, first found
+                    }
+                }
+            }
         } else if (std::holds_alternative<new_leader>(update)) {
             // New Leader
             // XXX XXX XXX elapse_election

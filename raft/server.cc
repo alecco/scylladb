@@ -475,8 +475,7 @@ future<> server_impl::remove_server(server_id id, clock_type::duration timeout) 
 void server_impl::elapse_election() {
     // for (int i = 1; i <= raft::ELECTION_TIMEOUT.count(); i++) {
     while (_fsm->election_elapsed() <= ELECTION_TIMEOUT) {
-        // XXX XXX XXX why _last_election_time is kept same as clock.now() ????
-fmt::print("{} elapse_election: ee {} ET {} {} \n", _id, _fsm->election_elapsed(), ELECTION_TIMEOUT, _fsm->election_elapsed() <= ELECTION_TIMEOUT); // XXX
+fmt::print("{} elapse_election: ee {} ET {} {} {}\n", _id, _fsm->election_elapsed(), ELECTION_TIMEOUT, _fsm->election_elapsed() <= ELECTION_TIMEOUT, _fsm->election_elapsed() <= ELECTION_TIMEOUT? "" : "**************"); // XXX
         _fsm->tick();
     }
 }
