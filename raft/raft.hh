@@ -115,7 +115,7 @@ struct configuration {
     // Transition from C_old + C_new to C_new.
     void leave_joint() {
         assert(is_joint());
-        previous.empty();
+        previous.clear();
     }
 };
 
