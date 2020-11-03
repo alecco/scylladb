@@ -326,6 +326,10 @@ public:
     // entry.
     void apply_snapshot(snapshot snp, size_t traling);
 
+    size_t in_memory_log_size() {
+        return _log.non_snapshoted_length();
+    };
+
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
