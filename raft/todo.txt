@@ -1,3 +1,7 @@
+* rename progress to tracker
+* rename tracker to progress_tracker
+* rename votes to election_tracker
+* rename election_tracker to votes
 * class log exception safety & tests (error injections)
 * low prio: drop _my_id from fsm, it should be a server property.
 * when switching to leader state, we currently assume each follower
