@@ -48,11 +48,13 @@ bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) 
 }
 
 void follower_progress::become_probe() {
+fmt::print("[{}] become_probe\n", id);
     state = state::PROBE;
     probe_sent = false;
 }
 
 void follower_progress::become_pipeline() {
+fmt::print("[{}] become_pipeline\n", id);
     if (state != state::PIPELINE) {
         // If a previous request was accepted, move to "pipeline" state
         // since we now know the follower's log state.

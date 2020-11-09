@@ -215,6 +215,7 @@ void fsm::become_candidate() {
 }
 
 future<fsm_output> fsm::poll_output() {
+// fmt::print("fsm::poll_output() {} stable index: {} last index: {} :::::::::::::::::::\n", _my_id, _log.stable_idx(), _log.last_idx());
     logger.trace("fsm::poll_output() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
 
@@ -275,6 +276,7 @@ fsm_output fsm::get_output() {
     // Get a snapshot of all unsent messages.
     // Do it after populating log_entries and committed arrays
     // to not lose messages in case arrays population throws
+// fmt::print("get_output swapping messages {} ++++++++++++++++\n", _messages.size());
     std::swap(output.messages, _messages);
 
     // Advance the observed state.
@@ -295,6 +297,7 @@ fsm_output fsm::get_output() {
 }
 
 void fsm::advance_stable_idx(index_t idx) {
+// fmt::print("advance_stable_idx 1\n");
     _log.stable_to(idx);
     // If this server is leader and is part of the current
     // configuration, update it's progress and optionally
@@ -303,6 +306,7 @@ void fsm::advance_stable_idx(index_t idx) {
         auto& progress = *_tracker->leader_progress();
         progress.match_idx = idx;
         progress.next_idx = index_t{idx + 1};
+// fmt::print("advance_stable_idx 2 replicate()\n");
         replicate();
         maybe_commit();
     }
@@ -377,14 +381,21 @@ void fsm::tick_leader() {
             if (_failure_detector.is_alive(progress.id)) {
                 active++;
             }
+fmt::print("tick_leader 1   progress state {} probe_sent {}\n", progress.state, progress.probe_sent); // XXX
             if (progress.state == follower_progress::state::PROBE) {
                 // allow one probe to be resent per follower per time tick
+fmt::print("tick_leader 2 progress.probe_sent = false\n"); // XXX
                 progress.probe_sent = false;
             } else if (progress.state == follower_progress::state::PIPELINE &&
                 progress.in_flight == follower_progress::max_in_flight) {
+fmt::print("tick_leader 3\n"); // XXX
                 progress.in_flight--; // allow one more packet to be sent
             }
+fmt::print("tick_leader 4: progress.match_idx {} < _log.stable_idx() {} || progress.commit_idx {} < _commit_idx {} ? {}\n", progress.match_idx, _log.stable_idx(), progress.commit_idx, _commit_idx,
+            (progress.match_idx < _log.stable_idx() || progress.commit_idx < _commit_idx));
             if (progress.match_idx < _log.stable_idx() || progress.commit_idx < _commit_idx) {
+fmt::print("tick_leader 5\n"); // XXX
+logger.error("tick[{}]: replicate to {} because match={} < stable={} || follower commit_idx={} < commit_idx={}", _my_id, progress.id, progress.match_idx, _log.stable_idx(), progress.commit_idx, _commit_idx);
                 logger.trace("tick[{}]: replicate to {} because match={} < stable={} || "
                     "follower commit_idx={} < commit_idx={}",
                     _my_id, progress.id, progress.match_idx, _log.stable_idx(),
@@ -459,6 +470,7 @@ void fsm::append_entries(server_id from, append_request_recv&& request) {
 }
 
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {
+// fmt::print("append_entries_reply\n");
     assert(is_leader());
 
     follower_progress& progress = _tracker->find(from);
@@ -476,6 +488,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // accepted
         index_t last_idx = std::get<append_reply::accepted>(reply.result).last_new_idx;
 
+// fmt::print("append_entries_reply[{}->{}]: accepted match={} last index={}\n", _my_id, from, progress.match_idx, last_idx);
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}",
             _my_id, from, progress.match_idx, last_idx);
 
@@ -483,6 +496,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // out next_idx may be large because of optimistic increase in pipeline mode
         progress.next_idx = std::max(progress.next_idx, index_t(last_idx + 1));
 
+// fmt::print("append_entries_reply[{}->{}]: accepted match={} last index={}\n", _my_id, from, progress.match_idx, last_idx);
         progress.become_pipeline();
 
         // check if any new entry can be committed
@@ -598,6 +612,7 @@ static size_t entry_size(const log_entry& e) {
 
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
+fmt::print("replicate_to[{}->{}]: called next={} match={}\n", _my_id, progress.id, progress.next_idx, progress.match_idx);
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, progress.id, progress.next_idx, progress.match_idx);
 
@@ -605,6 +620,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.stable_idx()) {
             next_idx = index_t(0);
+// fmt::print("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}\n", _my_id, progress.id, progress.next_idx, _log.stable_idx(), allow_empty);
             logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}",
                     _my_id, progress.id, progress.next_idx, _log.stable_idx(), allow_empty);
             if (!allow_empty) {
@@ -621,6 +637,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             // continue syncing the log.
             progress.become_snapshot();
             send_to(progress.id, install_snapshot{_current_term, _log.get_snapshot()});
+// fmt::print("replicate_to[{}->{}]: send snapshot next={} snapshot={}\n", _my_id, progress.id, progress.next_idx,  _log.get_snapshot().idx);
             logger.trace("replicate_to[{}->{}]: send snapshot next={} snapshot={}",
                     _my_id, progress.id, progress.next_idx,  _log.get_snapshot().idx);
             return;
@@ -650,16 +667,21 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             while (next_idx <= _log.stable_idx() && size < _config.append_request_threshold) {
                 const log_entry& entry = *_log[next_idx];
                 req.entries.push_back(std::cref(entry));
+// fmt::print("replicate_to[{}->{}]: send entry idx={}, term={}\n", _my_id, progress.id, entry.idx, entry.term);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
                              _my_id, progress.id, entry.idx, entry.term);
                 size += entry_size(entry);
                 next_idx++;
                 if (progress.state == follower_progress::state::PROBE) {
+// fmt::print("replicate_to[{}->{}]: PROBE mode send only one <<<<<\n", _my_id, progress.id);
                     break; // in PROBE mode send only one entry
                 }
+// else
+// fmt::print("replicate_to[{}->{}]: NOT PROBE <<<<<\n", _my_id, progress.id);
             }
 
             if (progress.state == follower_progress::state::PIPELINE) {
+// fmt::print("replicate_to[{}->{}]: PIPELINE\n", _my_id, progress.id);
                 progress.in_flight++;
                 // Optimistically update next send index. In case
                 // a message is lost there will be negative reply that
@@ -667,12 +689,14 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
                 progress.next_idx = next_idx;
             }
         } else {
+// fmt::print("replicate_to[{}->{}]: send empty\n", _my_id, progress.id);
             logger.trace("replicate_to[{}->{}]: send empty", _my_id, progress.id);
         }
 
         send_to(progress.id, std::move(req));
 
         if (progress.state == follower_progress::state::PROBE) {
+fmt::print("replicate_to probe_sent = true\n"); // XXX
              progress.probe_sent = true;
         }
     }

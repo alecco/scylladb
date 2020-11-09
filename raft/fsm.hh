@@ -205,6 +205,7 @@ private:
     void send_to(server_id to, Message&& m) {
         static_assert(std::is_rvalue_reference<decltype(m)>::value, "must be rvalue");
         _messages.push_back(std::make_pair(to, std::move(m)));
+// fmt::print("send_to: added message to _messages, len {} <<<<<<<<<<<<\n", _messages.size());
         _sm_events.signal();
     }
 
@@ -337,6 +338,7 @@ public:
 
 template <typename Message>
 void fsm::step(server_id from, Message&& msg) {
+fmt::print("step(): enter\n");
     static_assert(std::is_rvalue_reference<decltype(msg)>::value, "must be rvalue");
     // 4.1. Safety
     // Servers process incoming RPC requests without consulting
@@ -415,9 +417,11 @@ void fsm::step(server_id from, Message&& msg) {
         using State = decltype(state);
 
         if constexpr (std::is_same_v<Message, append_request_recv>) {
+// fmt::print("got append entries from self <<<<<<<<\n");
             // Got AppendEntries RPC from self
             append_entries(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, append_reply>) {
+fmt::print("got append reply self <<<<<<<<\n");
             if constexpr (!std::is_same_v<State, leader>) {
                 // Ignore stray reply if we're not a leader.
                 return;
