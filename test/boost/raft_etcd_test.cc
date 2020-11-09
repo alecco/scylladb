@@ -25,21 +25,12 @@
 
 #include <boost/test/unit_test.hpp>
 #include "test/lib/log.hh"
-#include "serializer.hh"
-// XXX #include "serializer_impl.hh"
+#include "serializer_impl.hh"
+#include <limits>
 
 #include "raft/fsm.hh"
 
 using raft::term_t, raft::index_t, raft::server_id;
-
-class fsm_debug : public raft::fsm {
-public:
-    using raft::fsm::fsm;
-    raft::follower_progress& get_progress(server_id id) {
-        raft::follower_progress& progress = _tracker->find(id);
-        return progress;
-    }
-};
 
 void election_threshold(raft::fsm& fsm) {
     for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
@@ -70,6 +61,17 @@ raft::command create_command(T val) {
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1};
 
+class fsm_debug : public raft::fsm {
+public:
+    using raft::fsm::fsm;
+    raft::follower_progress& get_progress(server_id id) {
+        raft::follower_progress& progress = _tracker->find(id);
+        return progress;
+    }
+};
+
+
+#if 1
 // TestProgressLeader
 BOOST_AUTO_TEST_CASE(test_progress_leader) {
 
@@ -89,31 +91,26 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
     fsm.step(id2, raft::vote_reply{output.term, true});
     BOOST_CHECK(fsm.is_leader());
 
-    // First iteration doesn't output message
-    int follower_idx = 1;     // Next index to send to follower
     for (int i = 0; i < 30; ++i) {
-        raft::command cmd = create_command(i);
+        raft::command cmd = create_command(i + 1);
         raft::log_entry le = fsm.add_entry(std::move(cmd));
-        BOOST_CHECK(le.term == 1);
-        BOOST_CHECK(le.idx == i + 1);
 
-        auto output = fsm.get_output();
-        BOOST_CHECK(output.log_entries.size() == 1);
-        BOOST_CHECK(output.log_entries[0]->term == 1);
-        BOOST_CHECK(output.log_entries[0]->idx == i + 1);
+        do {
+            output = fsm.get_output();
+        } while (output.messages.size() == 0);  // Should only loop twice
 
-        if (output.messages.size() == 1) {
-            auto msg = std::get<raft::append_request_send>(output.messages.back().second);
-            auto idx = msg.entries.back().get().idx;
-            BOOST_CHECK(idx == follower_idx);
-            fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
-            follower_idx++;
-        }
+        auto msg = std::get<raft::append_request_send>(output.messages.back().second);
+        auto idx = msg.entries.back()->idx;
+        BOOST_CHECK(idx == i + 1);
+        fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     }
 }
 
 // TestProgressResumeByHeartbeatResp
-BOOST_AUTO_TEST_CASE(test_progress_resume_by_hearbeat_resp) {
+// TBD once we have failure_detector.is_alive() heartbeat
+
+// Similar but with append reply
+BOOST_AUTO_TEST_CASE(test_progress_resume_by_append_resp) {
 
     failure_detector fd;
 
@@ -129,21 +126,126 @@ BOOST_AUTO_TEST_CASE(test_progress_resume_by_hearbeat_resp) {
     fsm.step(id2, raft::vote_reply{output.term, true});
     BOOST_CHECK(fsm.is_leader());
 
-    fsm.step(id2, raft::vote_reply{output.term, true});
-
     raft::follower_progress& fprogress = fsm.get_progress(id2);
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
-    fsm.add_entry(create_command(1));   // move probe_sent with add, not tick
-    output = fsm.get_output();          // Advances stable idx
+
     fprogress = fsm.get_progress(id2);
+    BOOST_CHECK(!fprogress.probe_sent);
+    raft::command cmd = create_command(1);
+    raft::log_entry le = fsm.add_entry(std::move(cmd));
+    do {
+        output = fsm.get_output();
+    } while (output.messages.size() == 0);
+
     BOOST_CHECK(fprogress.probe_sent);
-    fsm.add_entry(create_command(2));   // why second needed to send...
-    output = fsm.get_output();
-    BOOST_CHECK(output.messages.size() == 1);
-    auto msg = std::get<raft::append_request_send>(output.messages.back().second);
-    auto idx = msg.entries.back().get().idx;
-    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
-    fsm.tick();    // beat, make it send heartbeat
-    BOOST_CHECK(!fprogress.probe_sent);  // hmm
 }
 
+// TestProgressPaused
+BOOST_AUTO_TEST_CASE(test_progress_paused) {
+
+    failure_detector fd;
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)};
+    raft::configuration cfg({id1, id2});                 // 2 nodes
+    raft::log log{raft::snapshot{.config = cfg}};
+
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+
+    election_timeout(fsm);
+    auto output = fsm.get_output();
+    fsm.step(id2, raft::vote_reply{output.term, true});
+    BOOST_CHECK(fsm.is_leader());
+
+    fsm.step(id2, raft::vote_reply{output.term, true});
+
+    fsm.add_entry(create_command(1));
+    fsm.add_entry(create_command(2));
+    fsm.add_entry(create_command(3));
+    fsm.tick();
+    do {
+        output = fsm.get_output();
+    } while (output.messages.size() == 0);
+    BOOST_CHECK(output.messages.size() == 1);
+}
+#endif
+
+// TestProgressFlowControl
+BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
+
+    failure_detector fd;
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)};
+    raft::configuration cfg({id1, id2});                 // 2 nodes
+    raft::log log{raft::snapshot{.config = cfg}};
+
+    // Fit 2 ints
+    raft::fsm_config fsm_cfg_8{.append_request_threshold = 2048};   // Threshold 2k
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg_8);
+
+    election_timeout(fsm);
+    auto output = fsm.get_output();
+    fsm.step(id2, raft::vote_reply{output.term, true});
+    BOOST_CHECK(fsm.is_leader());
+
+    fsm.step(id2, raft::vote_reply{output.term, true});
+	// Throw away all the messages relating to the initial election.
+    output = fsm.get_output();
+    raft::follower_progress& fprogress = fsm.get_progress(id2);
+    BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
+
+	// While node 2 is in probe state, propose a bunch of entries.
+    sstring blob(1000, 'a');
+    raft::command cmd_blob = create_command(blob);
+    for (auto i = 0; i < 11; ++i) {
+        fsm.add_entry(cmd_blob);
+    }
+    do {
+        output = fsm.get_output();
+    } while (output.messages.size() == 0);
+
+    BOOST_CHECK(output.messages.size() == 1);
+
+    raft::append_request_send msg;
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request_send>(output.messages.back().second));
+	// the first proposal (only one proposal gets sent because follower is in probe state)
+    BOOST_CHECK(msg.entries.size() == 1);
+    const raft::log_entry_ptr le = msg.entries.back();
+    size_t current_entry = 0;
+    BOOST_CHECK(le->idx == ++current_entry);
+    raft::command cmd;
+    BOOST_REQUIRE_NO_THROW(cmd = std::get<raft::command>(le->data));
+    BOOST_CHECK(cmd.size() == cmd_blob.size());
+
+	// When this append is acked, we change to replicate state and can
+	// send multiple messages at once. (PIPELINE)
+    fsm.step(id2, raft::append_reply{msg.current_term, le->idx, raft::append_reply::accepted{le->idx}});
+    fprogress = fsm.get_progress(id2);
+    BOOST_CHECK(fprogress.state == raft::follower_progress::state::PIPELINE);
+
+    do {
+        output = fsm.get_output();
+    } while (output.messages.size() == 0);
+    // 10 entries: first in 1 msg, then 10 remaining 2 per msg = 5
+    BOOST_CHECK(output.messages.size() == 5);
+
+    size_t committed = 1;
+    BOOST_CHECK(output.committed.size() == 1);
+
+    for (size_t i = 0; i < output.messages.size(); ++i) {
+        raft::append_request_send msg;
+        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request_send>(output.messages[i].second));
+        BOOST_CHECK(msg.entries.size() == 2);
+        for (size_t m = 0; m < msg.entries.size(); ++m) {
+            const raft::log_entry_ptr le = msg.entries[m];
+            BOOST_CHECK(le->idx == ++current_entry);
+            raft::command cmd;
+            BOOST_REQUIRE_NO_THROW(cmd = std::get<raft::command>(le->data));
+            BOOST_CHECK(cmd.size() == cmd_blob.size());
+        }
+    }
+
+    raft::index_t ack_idx{current_entry}; // Acknowledge all entries at once
+    fsm.step(id2, raft::append_reply{msg.current_term, ack_idx, raft::append_reply::accepted{ack_idx}});
+    output = fsm.get_output();
+    // Check fsm outputs the remaining 10 entries
+    committed = current_entry - committed;
+    BOOST_CHECK(output.committed.size() == committed);
+}
