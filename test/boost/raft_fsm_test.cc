@@ -314,7 +314,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     // Ensure both id2 and id3 have an append_entry for them.
     BOOST_CHECK(output.messages.size() == 2);
     auto msg = std::get<raft::append_request_send>(output.messages.back().second);
-    auto idx = msg.entries.back().get().idx;
+    auto idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
     // we need one ACK, since there is a quorum overlap.
     // Strictly speaking the new node needs to install a snapshot,
@@ -336,7 +336,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
     msg = std::get<raft::append_request_send>(output.messages.back().second);
-    idx = msg.entries.back().get().idx;
+    idx = msg.entries.back().get()->idx;
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     BOOST_CHECK(fsm.get_configuration().current.size() == 3);
@@ -381,7 +381,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     // Once it's committed, it will be replicated.
     output = fsm.get_output();
     auto msg = std::get<raft::append_request_send>(output.messages.back().second);
-    auto idx = msg.entries.back().get().idx;
+    auto idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
     // we need one ACK, since there is a quorum overlap.
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
@@ -393,7 +393,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
     msg = std::get<raft::append_request_send>(output.messages.back().second);
-    idx = msg.entries.back().get().idx;
+    idx = msg.entries.back().get()->idx;
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     BOOST_CHECK(fsm.get_configuration().current.size() == 2);
@@ -437,7 +437,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     output = fsm.get_output();
     output = fsm.get_output();
     auto msg = std::get<raft::append_request_send>(output.messages.back().second);
-    auto idx = msg.entries.back().get().idx;
+    auto idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
     // we need two ACK, since there is a quorum overlap.
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
@@ -447,7 +447,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
     msg = std::get<raft::append_request_send>(output.messages.back().second);
-    idx = msg.entries.back().get().idx;
+    idx = msg.entries.back().get()->idx;
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     BOOST_CHECK(fsm.get_configuration().current.size() == 3);
