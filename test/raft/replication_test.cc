@@ -591,10 +591,6 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
-        // 2 nodes doing simple replication/snapshoting while leader's log size is limited
-        {.name = "backpressure", .type = sm_type::SUM, .nodes = 2,
-         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_length = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
-         .updates = {entries{100}}},
         // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
         {.name = "drops_01", .nodes = 3,
          .updates = {entries{4},partition{1,2},entries{4}}},
