@@ -176,8 +176,11 @@ bool is_disconnected(raft::server_id id) {
 }
 
 class failure_detector : public raft::failure_detector {
+    raft::server_id _id;
+public:
+    failure_detector(raft::server_id id) : _id(id) {}
     bool is_alive(raft::server_id server) override {
-        return !is_disconnected(server);
+        return !is_disconnected(server) && !is_disconnected(_id);;
     }
 };
 
@@ -221,15 +224,19 @@ public:
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
         if (is_disconnected(id) || is_disconnected(_id)) {
+fmt::print("{} send_vote_request to {} BLOCKED\n", _id, id);
             return make_ready_future<>();
         }
+fmt::print("{} send_vote_request to {}\n", _id, id);
         net[id]->_client->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
         if (is_disconnected(id) || is_disconnected(_id)) {
+fmt::print("{} send_vote_reply to {} BLOCKED\n", _id, id);
             return make_ready_future<>();
         }
+fmt::print("{} send_vote_reply to {}\n", _id, id);
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
@@ -248,7 +255,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(uuid, state);
-    auto fd = seastar::make_shared<failure_detector>();
+    auto fd = seastar::make_shared<failure_detector>(uuid);
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage),
         std::move(fd), state.server_config);
@@ -403,6 +410,7 @@ future<int> run_test(test_case test) {
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
             auto n = std::get<entries>(update);
+fmt::print("Adding {} entries to leader 000{}\n", n, leader + 1);
             std::vector<int> values(n);
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
@@ -426,6 +434,11 @@ future<int> run_test(test_case test) {
             leader = next_leader;
         } else if (std::holds_alternative<partition>(update)) {
             auto p = std::get<partition>(update);
+fmt::print("\n\nre-partitioning ");
+for (auto x: p)
+    fmt::print(" 000{},", x + 1);
+fmt::print(" =================================\n\n\n", p);
+            co_await seastar::sleep(50us);  // Let entries propagate?
             std::unordered_set<size_t> connected_servers(p.begin(), p.end());
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (connected_servers.find(s) == connected_servers.end()) {
@@ -438,14 +451,25 @@ future<int> run_test(test_case test) {
                 server_disconnected.erase(raft::server_id{utils::UUID(0, s + 1)});
             }
             if (connected_servers.find(leader) == connected_servers.end() && p.size() > 0) {
-                // Old leader disconnected, new leader is first server specified in partition
-                auto next_leader = p[0];
+                // Old leader disconnected: elapse election, then tick till leader
                 for (auto s: p) {
+fmt::print("election elapse for server 000{} --------------------------------\n", s + 1);
                     rafts[s].first->elapse_election();
                 }
-                co_await rafts[next_leader].first->elect_me_leader();
-                leader = next_leader;
-                tlogger.debug("confirmed new leader on {}", next_leader);
+                for (bool have_leader = false; !have_leader; ) {
+                    for (auto s: p) {
+fmt::print("    ticking server 000{} --------------------------------\n", s + 1);
+                        rafts[s].first->tick();
+                        co_await seastar::sleep(50us);  // XXX  (Gleb)
+                        if (rafts[s].first->is_leader()) {
+                            have_leader = true;
+                            leader = s;
+                            break;
+                        }
+                    }
+                }
+fmt::print("confirmed new leader on 000{} <<<<<<<<\n", leader + 1);
+                tlogger.debug("confirmed new leader on {}", leader);
             }
         }
     }
@@ -512,6 +536,7 @@ int main(int argc, char* argv[]) {
         ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
 
     std::vector<test_case> replication_tests = {
+#if 0
         // 1 nodes, simple replication, empty, no updates
         {.name = "simple_replication", .nodes = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
@@ -601,19 +626,23 @@ int main(int argc, char* argv[]) {
         // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
         {.name = "drops_01", .nodes = 3,
          .updates = {entries{4},partition{1,2},entries{4}}},
-        // 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
-        {.name = "drops_02", .nodes = 3,
-         .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}},
+#endif
+// 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
+{.name = "drops_02", .nodes = 3,
+ .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}},
+#if 0
         // Snapshot automatic take and load
         {.name = "take_snapshot_and_stream", .nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
+#endif
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
         drop_replication = app.configuration()["drop-replication"].as<bool>();
 
         for (auto test: replication_tests) {
+fmt::print("\n\n\n\n{} +++++++++++++++++++++++++++++\n\n\n\n\n", test.name); // XXX
             if (co_await run_test(test) != 0) {
                 tlogger.error("Test {} failed", test.name);
                 co_return 1; // Fail

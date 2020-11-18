@@ -104,6 +104,7 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate() {
+fmt::print("{} becomming candidate\n", _my_id);
     _state = candidate{};
     _tracker = std::nullopt;
     update_current_term(term_t{_current_term + 1});
@@ -129,6 +130,7 @@ void fsm::become_candidate() {
         if (server.id == _my_id) {
             continue;
         }
+fmt::print("{} [term: {}, index: {}, last log term: {}] sent vote request to {}\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id); // XXX
         logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
 
@@ -301,10 +303,12 @@ void fsm::tick() {
     if (is_leader()) {
         tick_leader();
     } else if (_current_leader && _failure_detector.is_alive(_current_leader)) {
+// fmt::print("{} leader {} is_alive\n", _my_id, _current_leader); // XXX
         // Ensure the follower doesn't disrupt a valid leader
         // simple because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
+fmt::print("tick[{}]: becoming a candidate, last election: {}, now: {}\n", _my_id, _last_election_time, _clock.now()); // XXX
         logger.trace("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id,
             _last_election_time, _clock.now());
         become_candidate();
@@ -427,7 +431,8 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
-        logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
+fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] voted for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx); // XXX
+        logger.debug("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
             from, request.last_log_term, request.last_log_idx);
@@ -436,7 +441,8 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 
         send_to(from, vote_reply{_current_term, true});
     } else {
-        logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
+fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx); // XXX
+        logger.debug("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
             from, request.last_log_term, request.last_log_idx);
@@ -448,6 +454,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
+fmt::print("{} received a {} vote from {}\n", _my_id, reply.vote_granted ? "yes" : "no", from);
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     _votes->register_vote(from, reply.vote_granted);
@@ -456,6 +463,7 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     case vote_result::UNKNOWN:
         break;
     case vote_result::WON:
+fmt::print("{} becoming leader\n", _my_id);
         become_leader();
         break;
     case vote_result::LOST:
