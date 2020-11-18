@@ -45,7 +45,7 @@ static const seastar::metrics::label message_type("message_type");
 class server_impl : public rpc_server, public server {
 public:
     explicit server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
-        std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
+        std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
         seastar::shared_ptr<failure_detector> failure_detector, server::configuration config);
 
     server_impl(server_impl&&) = delete;
@@ -82,7 +82,7 @@ public:
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
-    std::unique_ptr<storage> _storage;
+    std::unique_ptr<persistence> _persistence;
     seastar::shared_ptr<failure_detector> _failure_detector;
     // Protocol deterministic finite-state machine
     std::unique_ptr<fsm> _fsm;
@@ -184,10 +184,10 @@ private:
 };
 
 server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
-        std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
+        std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
         seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) :
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
-                    _storage(std::move(storage)), _failure_detector(failure_detector),
+                    _persistence(std::move(persistence)), _failure_detector(failure_detector),
                     _id(uuid), _config(config) {
     set_rpc_server(_rpc.get());
     if (_config.snapshot_threshold > _config.max_log_length) {
@@ -196,10 +196,10 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
 }
 
 future<> server_impl::start() {
-    auto [term, vote] = co_await _storage->load_term_and_vote();
-    auto snapshot  = co_await _storage->load_snapshot();
+    auto [term, vote] = co_await _persistence->load_term_and_vote();
+    auto snapshot  = co_await _persistence->load_snapshot();
     auto snp_id = snapshot.id;
-    auto log_entries = co_await _storage->load_log();
+    auto log_entries = co_await _persistence->load_log();
     auto log = raft::log(std::move(snapshot), std::move(log_entries));
     index_t stable_idx = log.stable_idx();
     _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector,
@@ -364,14 +364,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 // together. A vote may change independently of
                 // term, but it's safe to update both in this
                 // case.
-                co_await _storage->store_term_and_vote(batch.term, batch.vote);
+                co_await _persistence->store_term_and_vote(batch.term, batch.vote);
                 _stats.store_term_and_vote++;
             }
 
             if (batch.snp) {
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, batch.snp->id);
                 // Persist the snapshot
-                co_await _storage->store_snapshot(*batch.snp, _config.snapshot_trailing);
+                co_await _persistence->store_snapshot(*batch.snp, _config.snapshot_trailing);
                 _stats.store_snapshot++;
                 // If this is locally generated snapshot there is no need to
                 // load it.
@@ -390,13 +390,13 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 auto& entries = batch.log_entries;
 
                 if (last_stable >= entries[0]->idx) {
-                    co_await _storage->truncate_log(entries[0]->idx);
+                    co_await _persistence->truncate_log(entries[0]->idx);
                     _stats.truncate_persisted_log++;
                 }
 
                 // Combine saving and truncating into one call?
-                // will require storage to keep track of last idx
-                co_await _storage->store_log_entries(entries);
+                // will require persistence to keep track of last idx
+                co_await _persistence->store_log_entries(entries);
 
                 last_stable = (*entries.crbegin())->idx;
                 _stats.persisted_log_entries += entries.size();
@@ -538,7 +538,7 @@ future<> server_impl::abort() {
     auto snapshots = seastar::when_all_succeed(snp_futures.begin(), snp_futures.end());
 
     return seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
-            _rpc->abort(), _state_machine->abort(), _storage->abort(), std::move(snapshots)).discard_result();
+            _rpc->abort(), _state_machine->abort(), _persistence->abort(), std::move(snapshots)).discard_result();
 }
 
 future<> server_impl::add_server(server_id id, bytes node_info, clock_type::duration /* timeout */) {
@@ -648,11 +648,11 @@ void server_impl::elapse_election() {
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
-    std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
+    std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
     seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) {
     assert(uuid != raft::server_id{utils::UUID(0, 0)});
     return std::make_unique<raft::server_impl>(uuid, std::move(rpc), std::move(state_machine),
-        std::move(storage), failure_detector, config);
+        std::move(persistence), failure_detector, config);
 }
 
 std::ostream& operator<<(std::ostream& os, const server_impl& s) {
