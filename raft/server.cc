@@ -490,9 +490,9 @@ bool server_impl::is_leader() {
 }
 
 void server_impl::elapse_election() {
-    while (_fsm->election_elapsed() < ELECTION_TIMEOUT) {
+    do {
         _fsm->tick();
-    }
+    } while (_fsm->election_elapsed() < ELECTION_TIMEOUT);
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
