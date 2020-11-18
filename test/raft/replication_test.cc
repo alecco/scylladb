@@ -505,14 +505,25 @@ future<int> run_test(test_case test) {
                 server_disconnected.erase(raft::server_id{utils::UUID(0, s + 1)});
             }
             if (connected_servers.find(leader) == connected_servers.end() && p.size() > 0) {
-                // Old leader disconnected, new leader is first server specified in partition
-                auto next_leader = p[0];
+                // Old leader disconnected: elapse election, then tick till leader
+                rafts[leader].first->elapse_election(); // elapse previous leader
                 for (auto s: p) {
                     rafts[s].first->elapse_election();
                 }
-                co_await rafts[next_leader].first->elect_me_leader();
-                leader = next_leader;
-                tlogger.debug("confirmed new leader on {}", next_leader);
+                for (bool have_leader = false; !have_leader; ) {
+                    for (auto s: p) {
+                        rafts[s].first->tick();
+                    }
+                    co_await seastar::sleep(1us);        // yield
+                    for (auto s: p) {
+                        if (rafts[s].first->is_leader()) {
+                            have_leader = true;
+                            leader = s;
+                            break;
+                        }
+                    }
+                }
+                tlogger.debug("confirmed new leader on {}", leader);
             }
         }
     }
@@ -664,10 +675,6 @@ int main(int argc, char* argv[]) {
          .updates = {entries{12}}},
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
-         .updates = {entries{100}}},
-        // 2 nodes doing simple replication/snapshoting while leader's log size is limited
-        {.name = "backpressure", .type = sm_type::SUM, .nodes = 2,
-         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_length = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
         // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
         {.name = "drops_01", .nodes = 3,
