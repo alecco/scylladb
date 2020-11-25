@@ -207,6 +207,7 @@ public:
     }
     virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
         persisted_snapshots[_id] = std::make_pair(snap, snapshots[_id]);
+fmt::print("sm[{}] persists snapshot {}\n", _id, snapshots[_id].value.get_value());
         tlogger.debug("sm[{}] persists snapshot {}", _id, snapshots[_id].value.get_value());
         return make_ready_future<>();
     }
@@ -379,6 +380,7 @@ void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& co
     for (auto&& d : commands) {
         auto is = ser::as_input_stream(d);
         int n = ser::deserialize(is, boost::type<int>());
+// fmt::print("{} update:  {}\n", id, n);
         value.update(n);      // running hash (values and snapshots)
         tlogger.debug("{}: apply_changes {}", id, n);
     }
@@ -558,7 +560,7 @@ future<int> run_test(test_case test) {
     for (size_t i = 0; i < rafts.size(); ++i) {
         auto digest = rafts[i].second->value.get_value();
         if (digest != expected) {
-            tlogger.debug("Digest doesn't match for server [{}]: {} != {}", i, digest, expected);
+            tlogger.error("Digest doesn't match for server [{}]: {} != {}", i, digest, expected);
             fail = -1;  // Fail
             break;
         }
@@ -570,9 +572,9 @@ future<int> run_test(test_case test) {
         auto digest = val.value.get_value();
         expected = sm_value_for(snp.idx).get_value();
         if (digest != expected) {
-            tlogger.debug("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected);
+            tlogger.error("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected);
             fail = -1;
-            break;
+            // break;
         }
    }
 
@@ -591,6 +593,7 @@ int main(int argc, char* argv[]) {
         ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
 
     std::vector<test_case> replication_tests = {
+#if 0
         // 1 nodes, simple replication, empty, no updates
         {.name = "simple_replication", .nodes = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
@@ -608,10 +611,14 @@ int main(int argc, char* argv[]) {
         {.name = "simple_1_pre", .nodes = 1,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}},},
+#endif
+#if 1
         // 2 nodes, 7 leader entries, 12 client entries
         {.name = "simple_2_pre", .nodes = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}},},
+#endif
+#if 0
         // 3 nodes, 2 leader changes with 4 client entries each
         {.name = "leader_changes", .nodes = 3,
          .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}},
@@ -643,12 +650,16 @@ int main(int argc, char* argv[]) {
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {.le = {{1,0},{1,1},{1,2},{2,20},{2,30},{2,40}}}},
          .updates = {entries{4}}},
+#endif
+#if 1
         // A follower and a leader have matching logs but leader's is shorter
         // 3 nodes, term 2, leader has 2 entries, follower has same and 5 more, 12 updates
         {.name = "simple_3_short_leader", .nodes = 3, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1}}},
                             {.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}}},
+#endif
+#if 0
         // A follower and a leader have no common entries
         // 3 nodes, term 2, leader has 7 entries, follower has non-matching 6 entries, 12 updates
         {.name = "follower_not_matching", .nodes = 3, .initial_term = 3,
@@ -678,10 +689,12 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+#endif
         // 2 nodes doing simple replication/snapshoting while leader's log size is limited
         {.name = "backpressure", .type = sm_type::SUM, .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_length = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+#if 0
         // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
         {.name = "drops_01", .nodes = 3,
          .updates = {entries{4},partition{1,2},entries{4}}},
@@ -692,12 +705,14 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot_and_stream", .nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
+#endif
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
         drop_replication = app.configuration()["drop-replication"].as<bool>();
 
         for (auto test: replication_tests) {
+fmt::print("\n\n ============== test {} ===============\n\n", test.name);
             if (co_await run_test(test) != 0) {
                 tlogger.error("Test {} failed", test.name);
                 co_return 1; // Fail
