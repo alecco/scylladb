@@ -478,7 +478,9 @@ future<int> run_test(test_case test) {
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
+            co_await later();                    // yield
         } else if (std::holds_alternative<new_leader>(update)) {
+            co_await later();                    // yield
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
                 assert(next_leader < rafts.size());
@@ -509,6 +511,7 @@ future<int> run_test(test_case test) {
                     co_await rafts[s].first->wait_log_idx(leader_log_idx);
                 }
             }
+            co_await later();                    // yield
             auto p = std::get<partition>(update);
             server_disconnected.clear();
             std::unordered_set<size_t> partition_servers;
