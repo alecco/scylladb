@@ -481,6 +481,7 @@ future<int> run_test(test_case test) {
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
+            co_await seastar::sleep(10us);        // yield to let entries propagate
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
