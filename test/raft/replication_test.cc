@@ -485,14 +485,30 @@ future<int> run_test(test_case test) {
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
+                raft::server_id leader_id{utils::UUID(0, leader + 1)};
+                raft::server_id next_leader_id{utils::UUID(0, next_leader + 1)};
                 assert(next_leader < rafts.size());
-                // Make current leader a follower: disconnect, timeout, re-connect
-                server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
+                // next leader must be connected
+                assert(server_disconnected.find(next_leader_id) == server_disconnected.end());
+                // Disconnect current leader (!is_alive)
+                server_disconnected.insert(leader_id);
+                std::vector<raft::server_id> connected;
                 for (size_t s = 0; s < test.nodes; ++s) {
-                    rafts[s].first->elapse_election();
+                    auto id = raft::server_id{utils::UUID(0, s + 1)};
+                    if (s != next_leader && s != leader &&
+                            server_disconnected.find(id) == server_disconnected.end()) {
+                        // Disconnect and tick to make followers without disrupting
+                        server_disconnected.insert(id);
+                        rafts[s].first->elapse_election();
+                        connected.push_back(id);
+                    }
+                }
+                for (auto id: connected) {
+                    server_disconnected.erase(id); // Re-connect followers
                 }
                 co_await rafts[next_leader].first->elect_me_leader();
-                server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
+                // Re-connect old leader
+                server_disconnected.erase(leader_id);
                 tlogger.debug("confirmed leader on {}", next_leader);
                 leader = next_leader;
             }
