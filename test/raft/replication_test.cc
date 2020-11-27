@@ -266,7 +266,7 @@ public:
         if (is_disconnected(id) || is_disconnected(_id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
-        raft::append_request_recv req;
+        raft::append_request req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
         req.prev_log_idx = append_request.prev_log_idx;
@@ -488,7 +488,9 @@ future<int> run_test(test_case test) {
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
+            co_await later();                    // yield
         } else if (std::holds_alternative<new_leader>(update)) {
+            co_await later();                    // yield
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
                 assert(next_leader < rafts.size());
