@@ -68,7 +68,8 @@ void log::truncate_tail(index_t idx) {
     assert(start_idx() <= idx);
 
     if (idx >= last_idx()) {
-        _log.clear();
+        if (!_log.empty())
+            _log.clear();
     } else if (idx > start_idx()) {
         _log.erase(_log.begin(), _log.begin() + idx - start_idx() + 1);
     }

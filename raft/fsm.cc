@@ -88,6 +88,7 @@ void fsm::update_current_term(term_t current_term)
 }
 
 void fsm::become_leader() {
+// fmt::print("{} become_leader()\n", _my_id);
     assert(!std::holds_alternative<leader>(_state));
     assert(!_tracker);
     _state = leader{};
@@ -107,6 +108,7 @@ void fsm::become_leader() {
 }
 
 void fsm::become_follower(server_id leader) {
+// fmt::print("{} become_follower()\n", _my_id);
     _current_leader = leader;
     _state = follower{};
     _tracker = std::nullopt;
@@ -118,6 +120,7 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate() {
+// fmt::print("{} become_candidate()\n", _my_id);
     _state = candidate{};
     _tracker = std::nullopt;
     _log_limiter_semaphore = std::nullopt;
@@ -144,6 +147,7 @@ void fsm::become_candidate() {
         if (server.id == _my_id) {
             continue;
         }
+// fmt::print("{} [term: {}, index: {}, last log term: {}] sent vote request to {}\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
         logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
 
@@ -311,7 +315,9 @@ void fsm::tick_leader() {
 }
 
 void fsm::tick() {
+auto prev_clock = _clock.now();
     _clock.advance();
+// fmt::print("tick[{}]: last election: {}, now: {} (prev {})\n", _my_id, _last_election_time, _clock.now(), prev_clock);
 
     if (is_leader()) {
         tick_leader();
@@ -320,6 +326,7 @@ void fsm::tick() {
         // simple because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
+// fmt::print("tick[{}]: becoming a candidate, last election: {}, now: {}\n", _my_id, _last_election_time, _clock.now());
         logger.trace("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id,
             _last_election_time, _clock.now());
         become_candidate();
@@ -450,6 +457,8 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // timer. See Raft Summary.
         _last_election_time = _clock.now();
         _voted_for = from;
+// XXX XXX XXX  why last election 0 and clock now 11  ?????????
+// fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] voted for {} [log_term: {}, log_index: {}] last election {} clock.now() {} <<<<<<<<<<<<<<\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx, _last_election_time, _clock.now());
 
         send_to(from, vote_reply{_current_term, true});
     } else {
@@ -457,6 +466,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
+// fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -469,6 +479,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
+// fmt::print("{} received a {} vote from {}\n", _my_id, reply.vote_granted ? "yes" : "no", from);
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     _votes->register_vote(from, reply.vote_granted);
@@ -567,6 +578,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
                     break; // in PROBE mode send only one entry
                 }
             }
+// fmt::print("replicate_to[{}->{}]: entries\n", _my_id, progress.id, req.entries.size());
 
             if (progress.state == follower_progress::state::PIPELINE) {
                 progress.in_flight++;

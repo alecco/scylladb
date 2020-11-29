@@ -487,11 +487,20 @@ future<> server_impl::remove_server(server_id id, clock_type::duration timeout) 
 }
 
 future<> server_impl::elect_me_leader() {
+// fmt::print("{} elect_me_leader (1) is candidate {} is leader {}\n", _id, _fsm->is_candidate(), _fsm->is_leader());
     while (!_fsm->is_candidate() && !_fsm->is_leader()) {
         _fsm->tick();
     }
+int limit = 100;
+// fmt::print("{} elect_me_leader (2) is candidate {} is leader {}\n", _id, _fsm->is_candidate(), _fsm->is_leader());
     do {
+        // XXX is this a fix?! _fsm->tick();
         co_await seastar::sleep(1us);
+#if 0
+if (limit-- == 0)
+    fmt::print("{} elect_me_leader waited too long\n", _id);
+assert(limit > 0);
+#endif
     } while (!_fsm->is_leader());
 }
 
