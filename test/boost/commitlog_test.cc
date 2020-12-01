@@ -177,6 +177,29 @@ SEASTAR_TEST_CASE(test_commitlog_new_segment){
     });
 }
 
+SEASTAR_TEST_CASE(test_commitlog_new_segment_512_align){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.disk_write_alignment = 512;
+    return cl_test(cfg, [](commitlog& log) {
+        return do_with(rp_set(), [&log](auto& set) {
+            auto uuid = utils::UUID_gen::get_time_UUID();
+            return do_until([&set]() { return set.size() > 1; }, [&log, &set, uuid]() {
+                sstring tmp = "hej bubba cow";
+                return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+                    dst.write(tmp.data(), tmp.size());
+                }).then([&set](rp_handle h) {
+                    BOOST_CHECK_NE(h.rp(), db::replay_position());
+                    set.put(std::move(h));
+                });
+            });
+        }).then([&log] {
+            auto n = log.get_active_segment_names().size();
+            BOOST_REQUIRE(n > 1);
+        });
+    });
+}
+
 typedef std::vector<sstring> segment_names;
 
 static segment_names segment_diff(commitlog& log, segment_names prev = {}) {

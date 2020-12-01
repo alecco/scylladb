@@ -141,6 +141,8 @@ public:
         bool warn_about_segments_left_on_disk_after_shutdown = true;
 
         const db::extensions * extensions = nullptr;
+
+        std::optional<size_t> disk_write_alignment;
     };
 
     struct descriptor {

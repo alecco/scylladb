@@ -348,8 +348,8 @@ public:
 
     using buffer_type = fragmented_temporary_buffer;
 
-    buffer_type acquire_buffer(size_t s);
-    temporary_buffer<char> allocate_single_buffer(size_t);
+    buffer_type acquire_buffer(size_t s, size_t align);
+    temporary_buffer<char> allocate_single_buffer(size_t, size_t);
 
     future<std::vector<descriptor>> list_descriptors(sstring dir);
 
@@ -381,6 +381,7 @@ private:
     future<> _reserve_replenisher;
     seastar::gate _gate;
     uint64_t _new_counter = 0;
+    std::optional<size_t> _disk_write_alignment;
 };
 
 template<typename T>
@@ -450,6 +451,8 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     uint64_t _flush_pos = 0;
     uint64_t _size_on_disk = 0;
 
+    size_t _alignment;
+
     bool _closed = false;
     // Not the same as _closed since files can be reused
     bool _closed_file = false;
@@ -504,14 +507,14 @@ public:
     // The commit log (chained) sync marker/header size in bytes (int: length + int: checksum [segmentId, position])
     static constexpr size_t sync_marker_size = 2 * sizeof(uint32_t);
 
-    static constexpr size_t alignment = 4096;
     // TODO : tune initial / default size
-    static constexpr size_t default_size = align_up<size_t>(128 * 1024, alignment);
+    static constexpr size_t default_size = 128 * 1024;
 
-    segment(::shared_ptr<segment_manager> m, descriptor&& d, file&& f, uint64_t initial_disk_size)
+    segment(::shared_ptr<segment_manager> m, descriptor&& d, file&& f, uint64_t initial_disk_size, size_t alignment)
             : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
         _file_name(_segment_manager->cfg.commit_log_location + "/" + _desc.filename()), 
         _size_on_disk(initial_disk_size),
+        _alignment(alignment),
         _sync_time(clock_type::now()), _pending_ops(true) // want exception propagation
     {
         ++_segment_manager->totals.segments_created;
@@ -679,10 +682,10 @@ public:
             overhead += descriptor_header_size;
         }
 
-        auto a = align_up(s + overhead, alignment);
+        auto a = align_up(s + overhead, _alignment);
         auto k = std::max(a, default_size);
 
-        _buffer = _segment_manager->acquire_buffer(k);
+        _buffer = _segment_manager->acquire_buffer(k, _alignment);
         _buffer_ostream = _buffer.get_ostream();
         auto out = _buffer_ostream.write_substream(overhead);
         out.fill('\0', overhead);
@@ -779,7 +782,7 @@ public:
                             }
                             // gah, partial write. should always get here with dma chunk sized
                             // "bytes", but lets make sure...
-                            bytes = align_down(bytes, alignment);
+                            bytes = align_down(bytes, _alignment);
                             off += bytes;
                             view.remove_prefix(bytes);
                             clogger.trace("Partial write of {} to {}: {}/{} bytes at at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
@@ -955,7 +958,7 @@ public:
     // a.k.a. zero the tail.
     size_t clear_buffer_slack() {
         auto buf_pos = buffer_position();
-        auto size = align_up(buf_pos, alignment);
+        auto size = align_up(buf_pos, _alignment);
         auto fill_size = size - buf_pos;
         _buffer_ostream.fill('\0', fill_size);
         _segment_manager->totals.bytes_slack += fill_size;
@@ -1304,6 +1307,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         f = make_checked_file(commit_error_handler, f);
         // xfs doesn't like files extended betond eof, so enlarge the file
         auto fut = make_ready_future<>();
+        auto align = f.disk_write_dma_alignment();
+
         // If file is opened with O_DSYNC, we should explicitly write zeros
         // instead of just truncate/fallocate. Otherwise we get crappy
         // behaviour.
@@ -1315,7 +1320,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
             // would be super nice if we just could mmap(/dev/zero) and do sendto
             // instead of this, but for now we must do explicit buffer writes.
-            fut = fsiz.then([f, this, filename](uint64_t existing_size) mutable {
+            fut = fsiz.then([f, this, filename, align](uint64_t existing_size) mutable {
                 // if recycled (or from last run), we might have either truncated smaller or written it 
                 // (slightly) larger due to final zeroing of file
                 if (existing_size > max_size) {
@@ -1327,16 +1332,16 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 totals.total_size_on_disk += (max_size - existing_size);
 
                 clogger.trace("Pre-writing {} of {} KB to segment {}", (max_size - existing_size)/1024, max_size/1024, filename);
-                return f.allocate(existing_size, max_size - existing_size).then([this, existing_size, f]() mutable {
-                    static constexpr size_t buf_size = 4 * segment::alignment;
-                    size_t zerofill_size = max_size - align_down(existing_size, segment::alignment);
-                    return do_with(allocate_single_buffer(buf_size), zerofill_size, [this, f](temporary_buffer<char>& buf, uint64_t& rem) mutable {
+                return f.allocate(existing_size, max_size - existing_size).then([this, existing_size, f, align]() mutable {
+                    size_t buf_size = align_up<size_t>(16 * 1024, size_t(align));
+                    size_t zerofill_size = max_size - align_down(existing_size, align);
+                    return do_with(allocate_single_buffer(buf_size, align), zerofill_size, [this, f, buf_size](temporary_buffer<char>& buf, uint64_t& rem) mutable {
                         std::fill(buf.get_write(), buf.get_write() + buf.size(), 0);
-                        return repeat([this, f, &rem, &buf]() mutable {
+                        return repeat([this, f, &rem, &buf, buf_size]() mutable {
                             if (rem == 0) {
                                 return make_ready_future<stop_iteration>(stop_iteration::yes);
                             }
-                            static constexpr size_t max_write = 128 * 1024;
+                            const size_t max_write = 128 * 1024;
                             auto n = std::min(max_write / buf_size, 1 + rem / buf_size);
 
                             std::vector<iovec> v;
@@ -1358,8 +1363,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         } else {
             fut = f.truncate(max_size);
         }
-        return fut.then([this, d, f, filename] () mutable {
-            auto s = make_shared<segment>(shared_from_this(), std::move(d), std::move(f), max_size);
+        return fut.then([this, d, f, filename, align] () mutable {
+            auto s = make_shared<segment>(shared_from_this(), std::move(d), std::move(f), max_size, cfg.disk_write_alignment.value_or(align));
             return make_ready_future<sseg_ptr>(s);
         });
     });
@@ -1725,18 +1730,18 @@ uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
     });
 }
 
-temporary_buffer<char> db::commitlog::segment_manager::allocate_single_buffer(size_t s) {
-    return temporary_buffer<char>::aligned(segment::alignment, s);
+temporary_buffer<char> db::commitlog::segment_manager::allocate_single_buffer(size_t s, size_t alignment) {
+    return temporary_buffer<char>::aligned(alignment, s);
 }
 
-db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acquire_buffer(size_t s) {
+db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acquire_buffer(size_t s, size_t alignment) {
     s = align_up(s, segment::default_size);
     auto fragment_count = s / segment::default_size;
 
     std::vector<temporary_buffer<char>> buffers;
     buffers.reserve(fragment_count);
     while (buffers.size() < fragment_count) {
-        buffers.emplace_back(allocate_single_buffer(segment::default_size));
+        buffers.emplace_back(allocate_single_buffer(segment::default_size, alignment));
     }
     clogger.trace("Allocated {} k buffer", s / 1024);
     return fragmented_temporary_buffer(std::move(buffers), s);
