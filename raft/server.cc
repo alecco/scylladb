@@ -62,7 +62,9 @@ public:
     future<> abort() override;
     term_t get_current_term() const override;
     future<> read_barrier() override;
+    // testing
     future<> elect_me_leader() override;
+    void receptive_follower() override;
     void elapse_election() override;
     bool is_leader() override;
     void tick() override;
@@ -497,6 +499,13 @@ future<> server_impl::elect_me_leader() {
 
 bool server_impl::is_leader() {
     return _fsm->is_leader();
+}
+
+// For custom election make server receptive to a new candidate
+// without becoming a candidate itself
+void server_impl::receptive_follower() {
+    _fsm->set_max_election_timeout();
+    elapse_election();
 }
 
 void server_impl::elapse_election() {

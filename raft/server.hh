@@ -121,8 +121,9 @@ public:
     virtual future<> read_barrier() = 0;
 
     // Ad hoc functions for testing
-    virtual future<> elect_me_leader() = 0;
+    virtual void receptive_follower() = 0;
     virtual void elapse_election() = 0;
+    virtual future<> elect_me_leader() = 0;
     virtual bool is_leader() = 0;
     virtual void tick() = 0;
 };
