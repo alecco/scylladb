@@ -222,6 +222,7 @@ public:
     using timeout_exception_factory = request_controller_timeout_exception_factory;
 
     basic_semaphore<timeout_exception_factory> _flush_semaphore;
+    basic_semaphore<timeout_exception_factory> _sync_semaphore;
 
     seastar::metrics::metric_groups _metrics;
 
@@ -340,6 +341,21 @@ public:
         if (!_shutdown) {
             _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms + extra));
         }
+    }
+
+    future<> force_sync(time_point latest) {
+        if (_timer.get_timeout() < latest) {
+            return make_ready_future<>();
+        }        
+        
+        _timer.cancel();
+        
+        if (clock_type::now() < latest) {
+            on_timer();
+        } else {
+            _timer.arm(latest);
+        }
+        return _sync_semaphore.wait();
     }
 
     std::vector<sstring> get_active_names() const;
@@ -851,6 +867,12 @@ public:
         });
     }
 
+    future<> force_sync(time_point latest, replay_position waitfor) {
+        return _segment_manager->force_sync(latest).then([this, waitfor] {
+            return _pending_ops.wait_for_pending(waitfor);
+        });
+    }
+
     /**
      * Add a "mutation" to the segment.
      */
@@ -928,9 +950,13 @@ public:
         ++_segment_manager->totals.allocation_count;
         ++_num_allocs;
 
-        if (_segment_manager->cfg.mode == sync_mode::BATCH || writer->sync) {
+        if (_segment_manager->cfg.mode == sync_mode::BATCH || writer->sync == force_sync::yes) {
             return batch_cycle(timeout).then([h = std::move(h)](auto s) mutable {
                 return make_ready_future<rp_handle>(std::move(h));
+            });
+        } else if (writer->sync) {
+            return force_sync(*writer->sync, rp).then([h = std::move(h)]() mutable {
+                return std::move(h);
             });
         } else {
             // If this buffer alone is too big, potentially bigger than the maximum allowed size,
@@ -1055,6 +1081,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     // our threshold for trying to force a flush. needs heristics, for now max - segment_size/2.
     , disk_usage_threshold(max_disk_size - (max_disk_size > (max_size/2) ? (max_size/2) : 0))
     , _flush_semaphore(cfg.max_active_flushes)
+    , _sync_semaphore(0)
     // That is enough concurrency to allow for our largest mutation (max_mutation_size), plus
     // an existing in-flight buffer. Since we'll force the cycling() of any buffer that is bigger
     // than default_size at the end of the allocation, that allows for every valid mutation to
@@ -1691,6 +1718,9 @@ void db::commitlog::segment_manager::on_timer() {
         if (cfg.mode != sync_mode::BATCH) {
             sync();
         }
+
+        _sync_semaphore.signal(_sync_semaphore.waiters());
+
         // IFF a new segment was put in use since last we checked, and we're
         // above threshold, request flush.
         if (_new_counter > 0) {
