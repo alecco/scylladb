@@ -486,10 +486,12 @@ future<int> run_test(test_case test) {
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
                 assert(next_leader < rafts.size());
-                // Make current leader a follower: disconnect, timeout, re-connect
+                // Make current leader and others followers
                 server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
                 for (size_t s = 0; s < test.nodes; ++s) {
-                    rafts[s].first->elapse_election();
+                    if (s != next_leader) {
+                        rafts[s].first->receptive_follower();
+                    }
                 }
                 co_await rafts[next_leader].first->elect_me_leader();
                 server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
@@ -522,7 +524,9 @@ future<int> run_test(test_case test) {
             if (have_new_leader && new_leader.id != leader) {
                 // New leader specified, elect it
                 for (size_t s = 0; s < test.nodes; ++s) {
-                    rafts[s].first->elapse_election();
+                    if (s != new_leader.id) {
+                        rafts[s].first->receptive_follower();
+                    }
                 }
                 co_await rafts[new_leader.id].first->elect_me_leader();
                 tlogger.debug("confirmed leader on {}", new_leader.id);
