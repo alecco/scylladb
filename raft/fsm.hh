@@ -330,6 +330,10 @@ public:
     // entry.
     void apply_snapshot(snapshot snp, size_t traling);
 
+    // For testing
+    constexpr void set_max_election_timeout() {
+        _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{ELECTION_TIMEOUT.count()};
+    }
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
