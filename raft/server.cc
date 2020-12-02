@@ -188,12 +188,13 @@ future<> server_impl::start() {
 
 template <typename T>
 future<> server_impl::add_entry_internal(T command, wait_type type) {
+//fmt::print("{} An entry is submitted on leader\n", _id);
     logger.trace("An entry is submitted on a leader");
 
     // wait for new slot to be available
     co_await _fsm->wait();
 
-    logger.trace("An entry proceeds after wait");
+// fmt::print("{} An entry on leader after wait\n", _id);
 
     const log_entry& e = _fsm->add_entry(std::move(command));
 
@@ -341,8 +342,10 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.messages.size()) {
+// fmt::print("{} io_fiber message # {}\n", _id, batch.messages.size());
                 // after entries are persisted we can send messages
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
+// fmt::print("{}    io_fiber sending message  to {}\n", _id, message.first);
                     return send_message(message.first, std::move(message.second));
                 });
             }
@@ -504,14 +507,17 @@ bool server_impl::is_leader() {
 // For custom election make server receptive to a new candidate
 // without becoming a candidate itself
 void server_impl::receptive_follower() {
+// fmt::print("{} setting election timeout\n", _id);
     _fsm->set_max_election_timeout();
     elapse_election();
 }
 
 void server_impl::elapse_election() {
+// fmt::print("{} elapsing election\n", _id);
     while (_fsm->election_elapsed() < ELECTION_TIMEOUT) {
         _fsm->tick();
     }
+// fmt::print("{} done\n", _id);
 }
 
 void server_impl::tick() {

@@ -254,8 +254,10 @@ public:
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
         if (is_disconnected(id) || is_disconnected(_id) || (drop_replication && !(rand() % 5))) {
+// fmt::print("{} send_append_entries to {} BLOCKED {} {}\n", _id, id, is_disconnected(_id), is_disconnected(id));
             return make_ready_future<>();
         }
+// fmt::print("{} send_append_entries to {} SENT\n", _id, id);
         raft::append_request_recv req;
         req.current_term = append_request.current_term;
         req.leader_id = append_request.leader_id;
@@ -476,12 +478,15 @@ future<int> run_test(test_case test) {
             std::vector<int> values(n);
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
+// fmt::print("\n\n\nAdding {} entries on leader {}\n\n\n", n, leader);
             co_await seastar::parallel_for_each(commands, [&] (raft::command cmd) {
                 tlogger.debug("Adding command entry on leader {}", leader);
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
-            co_await seastar::sleep(10us);        // yield to let entries propagate
+            // XXX XXX XXX try to trigger UNCOMMENT !!
+            // bumping co_await seastar::sleep(1us);        // yield to let entries propagate
+            co_await seastar::sleep(2us);        // yield to let entries propagate
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
@@ -491,20 +496,30 @@ future<int> run_test(test_case test) {
                 // next leader must be connected
                 assert(server_disconnected.find(next_leader_id) == server_disconnected.end());
                 // Disconnect current leader (!is_alive)
+// fmt::print("disconnecting leader 000{}\n", leader + 1);
                 server_disconnected.insert(leader_id);
+// fmt::print("making leader follower (receptive) 000{}\n", leader + 1);
+                rafts[leader].first->receptive_follower();
                 for (size_t s = 0; s < test.nodes; ++s) {
                     auto id = raft::server_id{utils::UUID(0, s + 1)};
                     if (s != next_leader && server_disconnected.find(id) == server_disconnected.end()) {
+// fmt::print("making 000{} receptive\n", s + 1);
                         rafts[s].first->receptive_follower();
+// fmt::print("    done\n");
                     }
                 }
+// fmt::print("electing 000{}\n", next_leader + 1);
                 co_await rafts[next_leader].first->elect_me_leader();
+// fmt::print("confirmed leader 000{}\n", next_leader + 1);
                 // Re-connect old leader
                 server_disconnected.erase(leader_id);
                 tlogger.debug("confirmed leader on {}", next_leader);
                 leader = next_leader;
             }
         } else if (std::holds_alternative<partition>(update)) {
+// fmt::print("\n\n\n\n\n\n\n ====================== partitioning: ====================== \n\n\n\n\n");
+            // XXX XXX XXX add for checking
+            // co_await seastar::sleep(1us);        // yield to let entries propagate
             auto p = std::get<partition>(update);
             server_disconnected.clear();
             std::unordered_set<size_t> partition_servers;
@@ -516,14 +531,18 @@ future<int> run_test(test_case test) {
                     have_new_leader = true;
                     new_leader = std::get<struct leader>(s);
                     id = new_leader.id;
+// fmt::print("000{} (L),", new_leader.id + 1);
                 } else {
                     id = std::get<int>(s);
+// fmt::print("000{}, ", id + 1);
                 }
                 partition_servers.insert(id);
             }
+// fmt::print("\n");
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (partition_servers.find(s) == partition_servers.end()) {
                     // Disconnect servers not in main partition
+// fmt::print("disconnecting 000{}\n", s + 1);
                     server_disconnected.insert(raft::server_id{utils::UUID(0, s + 1)});
                 }
             }
@@ -531,10 +550,13 @@ future<int> run_test(test_case test) {
                 // New leader specified, elect it
                 for (size_t s = 0; s < test.nodes; ++s) {
                     if (s != new_leader.id) {
+// fmt::print("making 000{} receptive\n", s + 1);
                         rafts[s].first->receptive_follower();
                     }
                 }
+// fmt::print("electing 000{}\n", new_leader.id + 1);
                 co_await rafts[new_leader.id].first->elect_me_leader();
+// fmt::print("confirmed leader 000{}\n", new_leader.id + 1);
                 tlogger.debug("confirmed leader on {}", new_leader.id);
                 leader = new_leader.id;
             } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
@@ -710,10 +732,13 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+#if 1
+        // XXX XXX XXX does this have its own bug?
         // 2 nodes doing simple replication/snapshoting while leader's log size is limited
         {.name = "backpressure", .type = sm_type::SUM, .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_length = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+#endif
         // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
         {.name = "drops_01", .nodes = 3,
          .updates = {entries{4},partition{1,2},entries{4}}},
@@ -736,6 +761,7 @@ int main(int argc, char* argv[]) {
         drop_replication = app.configuration()["drop-replication"].as<bool>();
 
         for (auto test: replication_tests) {
+// fmt::print("\n\n ==== test {} ==== \n\n", test.name);
             if (co_await run_test(test) != 0) {
                 tlogger.error("Test {} failed", test.name);
                 co_return 1; // Fail

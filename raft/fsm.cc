@@ -103,6 +103,7 @@ void fsm::become_leader() {
     // send append entries rpc as soon as possible to establish its leqdership
     // (3.4).  Do both of those by commiting a dummy entry.
     add_entry(log_entry::dummy());
+// fmt::print("{} become leader replicating dummy entry\n", _my_id);
     replicate();
 }
 
@@ -159,6 +160,7 @@ future<fsm_output> fsm::poll_output() {
         auto diff = _log.last_idx() - _log.stable_idx();
 
         if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this)) {
+// fmt::print("{} poll_output got something, messages? {}\n", _my_id, !_messages.empty()); 
             break;
         }
         co_await _sm_events.wait();
@@ -225,6 +227,7 @@ fsm_output fsm::get_output() {
         // will fail the FSM will be stopped and get_output() will
         // never be called again, so any new sate that assumes that
         // the entries are stable will not be observed.
+// fmt::print("{} get_output advance_table_idx\n", _my_id);
         advance_stable_idx(output.log_entries.back()->idx);
     }
 
@@ -237,6 +240,7 @@ void fsm::advance_stable_idx(index_t idx) {
         auto& progress = _tracker->find(_my_id);
         progress.match_idx = idx;
         progress.next_idx = index_t{idx + 1};
+// fmt::print("{} advance_stable_idx replicate()\n", _my_id);
         replicate();
         check_committed();
     }
@@ -271,6 +275,7 @@ void fsm::check_committed() {
 }
 
 void fsm::tick_leader() {
+// fmt::print("{} tick_leader\n", _my_id);
     if (_clock.now() - _last_election_time >= ELECTION_TIMEOUT) {
         // 6.2 Routing requests to the leader
         // A leader in Raft steps down if an election timeout
@@ -313,9 +318,11 @@ void fsm::tick_leader() {
 void fsm::tick() {
     _clock.advance();
 
+// fmt::print("{} tick\n", _my_id);
     if (is_leader()) {
         tick_leader();
     } else if (_current_leader && _failure_detector.is_alive(_current_leader)) {
+// fmt::print("{} tick: resetting clock\n", _my_id);
         // Ensure the follower doesn't disrupt a valid leader
         // simple because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
@@ -327,6 +334,7 @@ void fsm::tick() {
 }
 
 void fsm::append_entries(server_id from, append_request_recv&& request) {
+// fmt::print("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}\n", _my_id, request.current_term, request.prev_log_idx, request.prev_log_term, request.leader_commit_idx, request.entries.size() ? request.entries[0].idx : index_t(0), request.entries.size());
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}",
             _my_id, request.current_term, request.prev_log_idx, request.prev_log_term,
             request.leader_commit_idx, request.entries.size() ? request.entries[0].idx : index_t(0), request.entries.size());
@@ -345,6 +353,7 @@ void fsm::append_entries(server_id from, append_request_recv&& request) {
     // bandwidth.
     auto [match, term] = _log.match_term(request.prev_log_idx, request.prev_log_term);
     if (!match) {
+// fmt::print("append_entries[{}]: no matching term at position {}: expected {}, found {}\n", _my_id, request.prev_log_idx, request.prev_log_term, term);
         logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
                 _my_id, request.prev_log_idx, request.prev_log_term, term);
         // Reply false if log doesn't contain an entry at
@@ -364,6 +373,7 @@ void fsm::append_entries(server_id from, append_request_recv&& request) {
 
     advance_commit_idx(request.leader_commit_idx);
 
+// fmt::print("append_entries[{}] replying to {}\n", _my_id, from);
     send_to(from, append_reply{_current_term, _commit_idx, append_reply::accepted{last_new_idx}});
 }
 
@@ -457,6 +467,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
+// fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -507,6 +518,7 @@ static size_t entry_size(const log_entry& e) {
 
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
+// fmt::print("replicate_to[{}->{}]: called next={} match={}\n", _my_id, progress.id, progress.next_idx, progress.match_idx);
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, progress.id, progress.next_idx, progress.match_idx);
 
@@ -514,6 +526,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.stable_idx()) {
             next_idx = index_t(0);
+// fmt::print("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}\n", _my_id, progress.id, progress.next_idx, _log.stable_idx(), allow_empty);
             logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}",
                     _my_id, progress.id, progress.next_idx, _log.stable_idx(), allow_empty);
             if (!allow_empty) {
@@ -559,11 +572,13 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             while (next_idx <= _log.stable_idx() && size < _config.append_request_threshold) {
                 const auto& entry = _log[next_idx];
                 req.entries.push_back(entry);
+// fmt::print("replicate_to[{}->{}]: send entry idx={}, term={}\n", _my_id, progress.id, entry->idx, entry->term);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
                              _my_id, progress.id, entry->idx, entry->term);
                 size += entry_size(*entry);
                 next_idx++;
                 if (progress.state == follower_progress::state::PROBE) {
+// fmt::print("replicate_to[{}->{}]: PROBE send only one\n", _my_id, progress.id);
                     break; // in PROBE mode send only one entry
                 }
             }
@@ -576,6 +591,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
                 progress.next_idx = next_idx;
             }
         } else {
+// fmt::print("replicate_to[{}->{}]: send empty\n", _my_id, progress.id);
             logger.trace("replicate_to[{}->{}]: send empty", _my_id, progress.id);
         }
 
@@ -591,9 +607,11 @@ void fsm::replicate() {
     assert(is_leader());
     for (auto& [id, progress] : *_tracker) {
         if (progress.id != _my_id) {
+// fmt::print("{} replicate() to... {}\n", _my_id, progress.id);
             replicate_to(progress, false);
         }
     }
+// fmt::print("{} replicate() done\n", _my_id);
 }
 
 bool fsm::can_read() {
