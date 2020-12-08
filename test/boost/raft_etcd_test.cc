@@ -98,7 +98,7 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
             output = fsm.get_output();
         } while (output.messages.size() == 0);  // Should only loop twice
 
-        auto msg = std::get<raft::append_request_send>(output.messages.back().second);
+        auto msg = std::get<raft::append_request>(output.messages.back().second);
         auto idx = msg.entries.back()->idx;
         BOOST_CHECK(idx == i + 1);
         fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
@@ -201,8 +201,8 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
 
     BOOST_CHECK(output.messages.size() == 1);
 
-    raft::append_request_send msg;
-    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request_send>(output.messages.back().second));
+    raft::append_request msg;
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages.back().second));
 	// the first proposal (only one proposal gets sent because follower is in probe state)
     BOOST_CHECK(msg.entries.size() == 1);
     const raft::log_entry_ptr le = msg.entries.back();
@@ -228,8 +228,8 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     BOOST_CHECK(output.committed.size() == 1);
 
     for (size_t i = 0; i < output.messages.size(); ++i) {
-        raft::append_request_send msg;
-        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request_send>(output.messages[i].second));
+        raft::append_request msg;
+        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[i].second));
         BOOST_CHECK(msg.entries.size() == 2);
         for (size_t m = 0; m < msg.entries.size(); ++m) {
             const raft::log_entry_ptr le = msg.entries[m];
