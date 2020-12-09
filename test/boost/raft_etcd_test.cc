@@ -192,7 +192,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     // While node 2 is in probe state, propose a bunch of entries.
     sstring blob(1000, 'a');
     raft::command cmd_blob = create_command(blob);
-    for (auto i = 0; i < 11; ++i) {
+    for (auto i = 0; i < 10; ++i) {
         fsm.add_entry(cmd_blob);
     }
     do {
@@ -208,9 +208,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     const raft::log_entry_ptr le = msg.entries.back();
     size_t current_entry = 0;
     BOOST_CHECK(le->idx == ++current_entry);
-    raft::command cmd;
-    BOOST_REQUIRE_NO_THROW(cmd = std::get<raft::command>(le->data));
-    BOOST_CHECK(cmd.size() == cmd_blob.size());
+    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(le->data));
 
     // When this append is acked, we change to replicate state and can
     // send multiple messages at once. (PIPELINE)
