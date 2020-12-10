@@ -311,8 +311,8 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     // is handled, i.e. the log entry is committed, so now
     // the leader will replicate the confchange
     output = fsm.get_output();
-    // Ensure both id2 and id3 have an append_entry for them.
-    BOOST_CHECK(output.messages.size() == 2);
+    // Append entry for id2
+    BOOST_CHECK(output.messages.size() == 1);
     auto msg = std::get<raft::append_request>(output.messages.back().second);
     auto idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
