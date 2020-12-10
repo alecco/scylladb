@@ -184,12 +184,12 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     BOOST_CHECK(fsm.is_leader());
 
     fsm.step(id2, raft::vote_reply{output.term, true});
-	// Throw away all the messages relating to the initial election.
+    // Throw away all the messages relating to the initial election.
     output = fsm.get_output();
     raft::follower_progress& fprogress = fsm.get_progress(id2);
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
 
-	// While node 2 is in probe state, propose a bunch of entries.
+    // While node 2 is in probe state, propose a bunch of entries.
     sstring blob(1000, 'a');
     raft::command cmd_blob = create_command(blob);
     for (auto i = 0; i < 10; ++i) {
@@ -203,7 +203,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
 
     raft::append_request msg;
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages.back().second));
-	// The first proposal (only one proposal gets sent because follower is in probe state)
+    // The first proposal (only one proposal gets sent because follower is in probe state)
     // Also, the first append request by new leader is dummy
     BOOST_CHECK(msg.entries.size() == 1);
     const raft::log_entry_ptr le = msg.entries.back();
@@ -211,8 +211,8 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     BOOST_CHECK(le->idx == ++current_entry);
     BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(le->data));
 
-	// When this append is acked, we change to replicate state and can
-	// send multiple messages at once. (PIPELINE)
+    // When this append is acked, we change to replicate state and can
+    // send multiple messages at once. (PIPELINE)
     fsm.step(id2, raft::append_reply{msg.current_term, le->idx, raft::append_reply::accepted{le->idx}});
     fprogress = fsm.get_progress(id2);
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PIPELINE);
