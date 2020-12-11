@@ -201,8 +201,8 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
 
     BOOST_CHECK(output.messages.size() == 1);
 
-    raft::append_request_send msg;
-    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request_send>(output.messages.back().second));
+    raft::append_request msg;
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages.back().second));
 	// the first proposal (only one proposal gets sent because follower is in probe state)
     BOOST_CHECK(msg.entries.size() == 1);
     const raft::log_entry_ptr le = msg.entries.back();
@@ -228,8 +228,8 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     BOOST_CHECK(output.committed.size() == 1);
 
     for (size_t i = 0; i < output.messages.size(); ++i) {
-        raft::append_request_send msg;
-        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request_send>(output.messages[i].second));
+        raft::append_request msg;
+        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[i].second));
         BOOST_CHECK(msg.entries.size() == 2);
         for (size_t m = 0; m < msg.entries.size(); ++m) {
             const raft::log_entry_ptr le = msg.entries[m];
@@ -269,7 +269,7 @@ struct log_entry {
     struct dummy {};
     term_t term;
     index_t idx;
-    std::variant<command, configuration, dummy> data;
+    // std::variant<command, configuration, dummy> data;
 };
 using log_entry_ptr = seastar::lw_shared_ptr<const log_entry>;
 using log_entries = boost::container::deque<log_entry_ptr>;
@@ -294,6 +294,10 @@ explicit log(log_entries log) : _log(std::move(log)) { stable_to(index_t(_log.si
 	// know about the election that already happened at term 2. Node 1's
 	// term is pushed ahead to 2.
 
+
+// XXX
+raft::fsm_config fsm_cfg_8{.append_request_threshold = 2048};   // Threshold 2k
+fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg_8);
     election_timeout(fsm);
     auto output = fsm.get_output();
     fsm.step(id2, raft::vote_reply{output.term, true});
@@ -368,4 +372,20 @@ explicit log(log_entries log) : _log(std::move(log)) { stable_to(index_t(_log.si
 // TestLearnerElectionTimeout
 // TBD once we have learner state implemented (and add_server)
 //
+
+
+
+// XXX
+// Helper function voted_with_config creates a raft fsm with vote and term set
+raft::fsm ents_with_config(std::vector<term_t>& terms) {
+    raft::fsm();
+    // XXX
+    return fsm;
+}
+// Helper function voted_with_config creates a raft fsm with vote and term set
+// to the given value but no log entries (indicating that it voted in the given
+// term but has not received any logs).
+raft::fsm voted_with_config(raft::configuration cfg, server_id voted, term_t term) {
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg_8);
+}
 
