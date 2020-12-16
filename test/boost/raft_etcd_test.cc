@@ -341,11 +341,11 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output1.log_entries[0]->data));
     output1 = fsm1.get_output();
     BOOST_CHECK(output1.messages.size() >= 1);  // Request votes to all 4 other nodes
-    raft::append_request areq;
+    raft::append_request_send areq;
     index_t dummy_idx{2};     // Log index of dummy entry of this term, after term 1's entry
     for (auto& [id, msg] : output1.messages) {
-        // BOOST_CHECK(std::holds_alternative<raft::append_request>(msg));
-        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        // BOOST_CHECK(std::holds_alternative<raft::append_request_send>(msg));
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request_send>(msg));
         BOOST_CHECK(areq.prev_log_idx == 1);
         BOOST_CHECK(areq.prev_log_term == 1);
         BOOST_CHECK(areq.entries.size() == 1);
@@ -356,10 +356,21 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     }
 
     // Node 3 steps down and accepts the new leader when it gets entries
-    fsm3.step(id1, raft::append_request{areq});
+    fsm3.step(id1, raft::append_request_send{areq});
     BOOST_CHECK(fsm3.is_follower());
     output3 = fsm3.get_output();
     BOOST_CHECK(output3.term == current_term);
+
+fsm3.step(id1, raft::append_request_send{areq}); // XXX again?
+fmt::print("XXX msgs {}\n", output3.messages.size()); // XXX
+    if (output3.messages.size() == 0) {
+        output3 = fsm3.get_output();
+    }
+fmt::print("XXX msgs {}\n", output3.messages.size()); // XXX
+    if (output3.messages.size() == 0) {
+        output3 = fsm3.get_output();
+    }
+fmt::print("XXX msgs {}\n", output3.messages.size()); // XXX
     BOOST_CHECK(output3.messages.size() == 1);  // Node 3 tells Node 1 there is no match at idx 1
     raft::append_reply arepl;
     BOOST_REQUIRE_NO_THROW(arepl = std::get<raft::append_reply>(output3.messages.back().second));
@@ -369,8 +380,8 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     fsm1.step(id3, raft::append_reply{arepl});
     output1 = fsm1.get_output();
     BOOST_CHECK(output1.messages.size() == 1);
-    BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(output1.messages.back().second));
-    fsm3.step(id1, raft::append_request{areq});
+    BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request_send>(output1.messages.back().second));
+    fsm3.step(id1, raft::append_request_send{areq});
     output3 = fsm3.get_output();
     BOOST_CHECK(output3.log_entries.size() == 1);
     BOOST_CHECK(output3.log_entries[0]->idx == 1);
@@ -381,8 +392,8 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     fsm1.step(id3, raft::append_reply{arepl});
     output1 = fsm1.get_output();
     BOOST_CHECK(output1.messages.size() == 1);
-    BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(output1.messages.back().second));
-    fsm3.step(id1, raft::append_request{areq});
+    BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request_send>(output1.messages.back().second));
+    fsm3.step(id1, raft::append_request_send{areq});
     output3 = fsm3.get_output();
     BOOST_CHECK(output3.log_entries.size() == 1);
     BOOST_CHECK(output3.log_entries[0]->idx == 2);
