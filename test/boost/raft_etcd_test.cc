@@ -294,7 +294,7 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     BOOST_CHECK(output3.messages.size() == 4);   // Sends 4 dummy entries
 
     // Node 1 is reconnected and campaigns. The election fails because a quorum of nodes
-	// know about the election that already happened at term 2. Node 1's term is pushed ahead to 2.
+    // know about the election that already happened at term 2. Node 1's term is pushed ahead to 2.
     election_timeout(fsm1);
     BOOST_CHECK(fsm1.is_candidate());
     auto output1 = fsm1.get_output();
@@ -318,7 +318,7 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     fsm1.step(id5, raft::vote_reply{term_t{2}, false});  // Knows about new term, rejects
     BOOST_CHECK(!fsm1.is_leader());
 
-	// Node 1 campaigns again with a higher term. This time it succeeds.
+    // Node 1 campaigns again with a higher term. This time it succeeds.
     election_timeout(fsm1);
     BOOST_CHECK(fsm1.is_candidate());
     output1 = fsm1.get_output();
