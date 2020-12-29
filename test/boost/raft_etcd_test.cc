@@ -24,13 +24,15 @@
 #define BOOST_TEST_MODULE raft
 
 #include <boost/test/unit_test.hpp>
+#include "test/lib/raft_utils.hh"
 #include "test/lib/log.hh"
 #include "serializer_impl.hh"
 #include <limits>
 
 #include "raft/fsm.hh"
 
-using raft::term_t, raft::index_t, raft::server_id, raft::log_entry;
+using raft::term_t, raft::index_t, raft::server_id;
+#if 0
 
 void election_threshold(raft::fsm& fsm) {
     for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
@@ -270,7 +272,7 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     // node 3:    log entries  1:   2                 wond second election
     // node 4:    log entries  (at term 2 voted for 3)
     // node 5:    log entries  (at term 2 voted for 3)
-    raft::log_entry_ptr lep1 = seastar::make_lw_shared<log_entry>(log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}});
+    raft::log_entry_ptr lep1 = seastar::make_lw_shared<raft::log_entry>(raft::log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}});
     raft::log log1{raft::snapshot{.config = cfg}, raft::log_entries{lep1}};
     raft::fsm fsm1(id1, term_t{1}, server_id{}, std::move(log1), fd, fsm_cfg);
 
@@ -585,4 +587,23 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     output = fsm.get_output();
     BOOST_CHECK(output.committed.size() == 1);  // Entry 2 was committed
 } 
+#endif
+
+BOOST_AUTO_TEST_CASE(etcd_unit_tests) {
+    Tester t{
+        { .name = "test_leader_election_overwrite_newer_logs", .nodes = 5, .fsms = 2,
+          .steps = {
+                {
+                    {elect{0}},
+                },
+#if 0
+                {
+                    {elect{0}},
+                    {{.id = 0, .leader = true, .term = 3}},
+                },
+#endif
+          }, // steps
+          }, // test
+    };
+}
 
