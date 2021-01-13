@@ -72,20 +72,16 @@ struct failure_detector: public raft::failure_detector {
     failure_detector(connected_nodes& map) : _connected(map) { }
 };
 
-// XXX create log_entries
-raft::log create_log(std::vector<log_entry> entries, unsigned start_idx) {
-    raft::log_entries log_entries;
-
-    raft::snapshot snp;  // XXX init
+void fill_log_entries(std::vector<log_entry> entries, unsigned start_idx,
+        raft::log_entries& log_entries) {
 
     unsigned i = start_idx;
     for (auto e : entries) {
         raft::command command;
         ser::serialize(command, e.value);
-        // XXX log_entries.emplace_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++), std::move(command)});
+        log_entries.emplace_back(seastar::make_lw_shared<raft::log_entry>(
+                    raft::log_entry{term_t{e.term}, index_t{i++}, std::move(command)}));
     }
-
-    return raft::log(std::move(snp), std::move(log_entries));
 }
 
 // Runs a configured test case
@@ -225,6 +221,7 @@ fmt::print("    [{}] term {} output term {}\n", e.id, e.term, output.term);
     template<typename T, typename S>
     T get_req(S obj) {
         T ret;
+        // TODO: catching exception here hides caller line
         BOOST_REQUIRE_NO_THROW(ret = std::get<T>(obj));
         return ret;
     }
@@ -256,16 +253,11 @@ public:
             cfg.current.emplace(raft::server_address{ids[s]});
         }
         for (unsigned f = 0; f < test.fsms; f++) {
-#if 0
-            raft::log log;
+            raft::log_entries log_entries;
             if (test.initial_logs.size() > f) {
-                log = create_log(test.initial_logs[f], 1);
-            } else {
-                log = raft::log{raft::snapshot{.config = cfg}};
+                fill_log_entries(test.initial_logs[f], 1, log_entries);
             }
-#else
-            raft::log log{raft::snapshot{.config = cfg}};
-#endif
+            raft::log log{raft::snapshot{.config = cfg}, log_entries};
             _fsms.push_back(seastar::make_lw_shared<raft::fsm>(ids[f], term_t{_initial_term},
                         server_id{}, std::move(log), fds.at(f), fsm_cfg));
         }

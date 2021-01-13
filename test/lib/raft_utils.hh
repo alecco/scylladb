@@ -31,7 +31,7 @@ using raft::term_t, raft::index_t, raft::server_id;
 
 // Simplified log entry without log index
 struct log_entry {
-    unsigned term;
+    int term;
     int value;
 };
 

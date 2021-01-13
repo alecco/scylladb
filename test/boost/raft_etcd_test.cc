@@ -592,6 +592,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
 BOOST_AUTO_TEST_CASE(etcd_unit_tests) {
     Tester t{
         { .name = "test_leader_election_overwrite_newer_logs", .nodes = 5, .fsms = 2,
+          // .initial_logs = {{{1,0},{1,1},{1,2},{1,3}}},
           .steps = {
                 {
                     {disconnect{2,3,4},reconnect{2},elect{0}},
