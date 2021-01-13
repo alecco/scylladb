@@ -65,11 +65,11 @@ void election_timeout(seastar::lw_shared_ptr<raft::fsm> fsm) {
 }
 
 struct failure_detector: public raft::failure_detector {
-    bool alive = true;
-    // TODO: use map id:alive
+    connected_nodes& _connected;
     bool is_alive(server_id from) override {
-        return alive;
+        return _connected(from);
     }
+    failure_detector(connected_nodes& map) : _connected(map) { }
 };
 
 // XXX create log_entries
@@ -244,7 +244,7 @@ public:
     Test(test_case test) : _nodes(test.nodes), _name(test.name),
             _initial_term(test.initial_term), _steps(std::move(test.steps)) {
         for (unsigned n = 0; n < test.fsms; n++) {
-            fds.emplace_back(failure_detector{});
+            fds.emplace_back(failure_detector{_connected});
         }
 
         raft::configuration cfg;
