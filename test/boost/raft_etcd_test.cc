@@ -594,7 +594,7 @@ BOOST_AUTO_TEST_CASE(etcd_unit_tests) {
         { .name = "test_leader_election_overwrite_newer_logs", .nodes = 5, .fsms = 2,
           .steps = {
                 {
-                    {elect{0}},
+                    {disconnect{2,3,4},reconnect{2},elect{0}},
                 },
 #if 0
                 {

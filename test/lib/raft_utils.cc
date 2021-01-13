@@ -42,10 +42,10 @@ public:
         return _nodes.find(id) == _nodes.end();
     }
     void disconnect(server_id id) {
-        _nodes.insert(id.id.get_least_significant_bits());
+        _nodes.insert(id.id.get_least_significant_bits() - 1);
     }
     void reconnect(server_id id) {
-        _nodes.erase(id.id.get_least_significant_bits());
+        _nodes.erase(id.id.get_least_significant_bits() - 1);
     }
     bool operator()(server_id id) {
         return _nodes.find(id.id.get_least_significant_bits()) == _nodes.end();
@@ -185,11 +185,15 @@ fmt::print("Run\n");
                         output = _fsms[candidate]->get_output();
                         BOOST_CHECK(output.committed.size() == 1); // Dummy committed
                     },
-                    [&](struct disconnect& action) {
-                        _connected.disconnect(server_id{utils::UUID(0, action.id + 1)});
+                    [&](struct disconnect& d) {
+                        for (auto id: d.ids) {
+                            _connected.disconnect(id);
+                        }
                     },
-                    [&](struct reconnect& action) {
-                        _connected.reconnect(server_id{utils::UUID(0, action.id + 1)});
+                    [&](struct reconnect& r) {
+                        for (auto id: r.ids) {
+                            _connected.reconnect(id);
+                        }
                     },
                 }, action);
             }
@@ -231,9 +235,9 @@ fmt::print("    [{}] term {} output term {}\n", e.id, e.term, output.term);
         }
     }
     template <typename Message>
-    void fsm_step(unsigned dst, server_id from, Message&& msg) {
-        if (_connected(dst)) {
-            _fsms[dst]->step(from, std::move(msg));
+    void fsm_step(unsigned dst, server_id src, Message&& msg) {
+        if (_connected(dst) && _connected(src)) {
+            _fsms[dst]->step(src, std::move(msg));
         }
     }
 public:

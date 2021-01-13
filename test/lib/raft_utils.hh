@@ -54,14 +54,20 @@ struct receptive {
     unsigned id;
 };
 
-// Disconnects a node
+// Disconnects nodes
 struct disconnect {
-    unsigned id;
+    std::vector<unsigned> ids;
+    disconnect(std::initializer_list<unsigned> lst) {
+        ids = lst;
+    }
 };
 
-// Reconnects a node previously disconnected
+// Reconnects nodes previously disconnected
 struct reconnect {
-    unsigned id;
+    std::vector<unsigned> ids;
+    reconnect(std::initializer_list<unsigned> lst) {
+        ids = lst;
+    }
 };
 
 // Global actions with no arguments
