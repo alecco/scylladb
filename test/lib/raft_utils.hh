@@ -45,6 +45,7 @@ struct candidate {
 };
 
 // Run manual full election cycle and elect specific fsm
+// TODO: handle uncommitted log entries
 struct elect {
     unsigned id;
 };
