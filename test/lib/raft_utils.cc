@@ -29,17 +29,26 @@ template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 // TODO: remove this deduction guidance once it's not needed (C++20)
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
-class disconnected_nodes {
-    std::unordered_set<server_id> _nodes; // Nodes currently disconnected
+class connected_nodes {
+    std::unordered_set<unsigned> _nodes; // Nodes currently disconnected
 public:
-    void disconnect(server_id id) {
+    void disconnect(unsigned id) {
         _nodes.insert(id);
     }
-    void reconnect(server_id id) {
+    void reconnect(unsigned id) {
         _nodes.erase(id);
     }
-    bool is_disconnected(server_id id) {
-        return _nodes.find(id) != _nodes.end();
+    bool operator()(unsigned id) {
+        return _nodes.find(id) == _nodes.end();
+    }
+    void disconnect(server_id id) {
+        _nodes.insert(id.id.get_least_significant_bits());
+    }
+    void reconnect(server_id id) {
+        _nodes.erase(id.id.get_least_significant_bits());
+    }
+    bool operator()(server_id id) {
+        return _nodes.find(id.id.get_least_significant_bits()) == _nodes.end();
     }
 };
 
@@ -91,7 +100,7 @@ protected:
     std::vector<step> _steps;
 
     term_t _current_term;
-    disconnected_nodes out; 
+    connected_nodes _connected; 
     std::vector<failure_detector> fds;
     std::vector<seastar::lw_shared_ptr<raft::fsm>> _fsms;
 
@@ -131,11 +140,7 @@ fmt::print("Run\n");
                     [&](struct elect& action) {
                         unsigned candidate = action.id;
                         server_id candidate_id{utils::UUID(0, action.id + 1)};
-                        // Make all fsms receptive
-                        for (auto fsm: _fsms) {
-                            election_threshold(fsm);
-                            auto output = fsm->get_output();  // ignore output (i.e. vote requests)
-                        }
+                        make_fsms_receptive();
                         // Make defined fsm candidate, force votes
                         // NOTE: we skip doing vote handling at other fsms for now
                         election_timeout(_fsms[candidate]);
@@ -144,10 +149,9 @@ fmt::print("Run\n");
                         _current_term = output.term;
                         for (auto& [id, msg] : output.messages) {
                             auto vreq = get_req<raft::vote_request>(msg);
-                            _fsms[candidate]->step(id, raft::vote_reply{vreq.current_term, true});
+                            fsm_step(candidate, id, raft::vote_reply{vreq.current_term, true});
                         }
                         BOOST_CHECK(_fsms[candidate]->is_leader());
-fmt::print("     candidate output term {} entries {} messages {} committed {}\n", output.term, output.log_entries.size(), output.messages.size(), output.committed.size());
                         // Finally, handle dummy entry propagation
                         output = _fsms[candidate]->get_output();
                         get_req<raft::log_entry::dummy>(output.log_entries[0]->data);
@@ -163,17 +167,17 @@ fmt::print("     candidate output term {} entries {} messages {} committed {}\n"
                             unsigned dst_id = id.id.get_least_significant_bits() - 1;
                             if (dst_id < _fsms.size()) {
                                 // Propagate and get reply from other fsms
-                                _fsms[dst_id]->step(candidate_id, std::move(areq));
+                                fsm_step(dst_id, candidate_id, std::move(areq));
                                 auto follower_output = _fsms[dst_id]->get_output();
                                 BOOST_CHECK(follower_output.messages.size() == 1);
                                 auto& [reply_dst, reply] = follower_output.messages.back();
                                 BOOST_CHECK(reply_dst == candidate_id);
                                 auto arep = get_req<raft::append_reply>(reply);
                                 get_req<raft::append_reply::accepted>(arep.result);
-                                _fsms[candidate]->step(id, std::move(arep));
+                                fsm_step(candidate, id, std::move(arep));
                             } else {
                                 // Reply from virtual nodes
-                                _fsms[candidate]->step(id,
+                                fsm_step(candidate, id,
                                         raft::append_reply{_current_term, areq_lep->idx,
                                                 raft::append_reply::accepted{areq_lep->idx}});
                             }
@@ -182,10 +186,10 @@ fmt::print("     candidate output term {} entries {} messages {} committed {}\n"
                         BOOST_CHECK(output.committed.size() == 1); // Dummy committed
                     },
                     [&](struct disconnect& action) {
-                        out.disconnect(server_id{utils::UUID(0, action.id + 1)});
+                        _connected.disconnect(server_id{utils::UUID(0, action.id + 1)});
                     },
                     [&](struct reconnect& action) {
-                        out.reconnect(server_id{utils::UUID(0, action.id + 1)});
+                        _connected.reconnect(server_id{utils::UUID(0, action.id + 1)});
                     },
                 }, action);
             }
@@ -219,6 +223,18 @@ fmt::print("    [{}] term {} output term {}\n", e.id, e.term, output.term);
         T ret;
         BOOST_REQUIRE_NO_THROW(ret = std::get<T>(obj));
         return ret;
+    }
+    void make_fsms_receptive() {
+        for (auto fsm: _fsms) {
+            election_threshold(fsm);
+            auto output = fsm->get_output();  // ignore output (i.e. vote requests)
+        }
+    }
+    template <typename Message>
+    void fsm_step(unsigned dst, server_id from, Message&& msg) {
+        if (_connected(dst)) {
+            _fsms[dst]->step(from, std::move(msg));
+        }
     }
 public:
     Test(test_case test) : _nodes(test.nodes), _name(test.name),
