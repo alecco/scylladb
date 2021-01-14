@@ -80,7 +80,7 @@ struct failure_detector: public raft::failure_detector {
     failure_detector(connected_nodes& map) : _connected(map) { }
 };
 
-void fill_log_entries(std::vector<log_entry> entries, unsigned start_idx,
+void fill_log_entries(std::vector<log_input> entries, unsigned start_idx,
         raft::log_entries& log_entries) {
 
     unsigned i = start_idx;
@@ -202,23 +202,56 @@ fmt::print("ENTRIES server {} [{}, {}]\n", entries.server.id, _next_val, _next_v
 
             // Expected
             for (auto& e: expect) {
-                auto output = _fsms[e.id]->get_output();
-fmt::print("     expect [{}] output term {} entries {} messages {} committed {}\n", e.id, output.term, output.log_entries.size(), output.messages.size(), output.committed.size());
+                auto id = e.server;
+                auto output = _fsms[id]->get_output();
                 if (e.follower) {
-fmt::print("    [{}] is follower {} {}\n", e.id, e.follower, _fsms[e.id]->is_follower());
-                    BOOST_CHECK(_fsms[e.id]->is_follower());
+                    BOOST_CHECK(_fsms[id]->is_follower());
                 }
                 if (e.candidate) {
-fmt::print("    [{}] is candidate {} {}\n", e.id, e.candidate, _fsms[e.id]->is_candidate());
-                    BOOST_CHECK(_fsms[e.id]->is_candidate());
+                    BOOST_CHECK(_fsms[id]->is_candidate());
                 }
                 if (e.leader) {
-fmt::print("    [{}] is leader {} {}\n", e.id, e.leader, _fsms[e.id]->is_leader());
-                    BOOST_CHECK(_fsms[e.id]->is_leader());
+                    BOOST_CHECK(_fsms[id]->is_leader());
                 }
                 if (e.term) {
-fmt::print("    [{}] term {} output term {}\n", e.id, e.term, output.term);
                     BOOST_CHECK(output.term == e.term);
+                }
+                if (e.entries.size() > 0) {
+                    BOOST_CHECK(output.log_entries.size() == e.entries.size());
+                    for (size_t le = 0; le < e.entries.size(); le++) {
+                        auto expected = e.entries[le];
+                        auto actual = output.log_entries[le];
+                        BOOST_CHECK(actual->term == term_t{expected.term});
+                        BOOST_CHECK(actual->idx == index_t{expected.idx});
+                        std::visit(overloaded{
+                            [&](struct command& expected_cmd) {
+                                raft::command cmd;
+                                BOOST_REQUIRE_NO_THROW(cmd = std::get<raft::command>(actual->data));
+                                auto is = ser::as_input_stream(cmd);
+                                int val = ser::deserialize(is, boost::type<int>());
+                            },
+                            [&](struct configuration& cfg) {
+                                BOOST_REQUIRE_NO_THROW(std::get<raft::configuration>(actual->data));
+                                // XXX
+                            },
+                            [&](struct dummy& dummy) {
+                                BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(actual->data));
+                            },
+                        }, e.entries[le].data);
+                    }
+                }
+                if (e.messages.size() > 0) {
+fmt::print("    [{}] messages {} output messages {}\n", id, e.messages.size(), output.messages.size());
+                    BOOST_CHECK(output.messages.size() == e.messages.size());
+                    for (size_t le = 0; le < e.messages.size(); le++) {
+                        auto expected = e.messages[le];
+                        auto& [id, msg] = output.messages[le];
+                        BOOST_CHECK(id == server_id{utils::UUID(0, expected.dst + 1)});
+                    }
+//using rpc_message = std::variant<append_request, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply>;
+for (auto& [id, msg]: output.messages) {
+    fmt::print("        type {}\n", msg.index());
+}
                 }
             }
         }
@@ -227,7 +260,7 @@ fmt::print("    [{}] term {} output term {}\n", e.id, e.term, output.term);
     template<typename T, typename S>
     T get_req(S obj) {
         T ret;
-        // TODO: catching exception here hides caller line
+        // NOTE: catching exception here hides caller line
         BOOST_REQUIRE_NO_THROW(ret = std::get<T>(obj));
         return ret;
     }

@@ -29,10 +29,30 @@
 
 using raft::term_t, raft::index_t, raft::server_id;
 
-// Simplified log entry without log index
-struct log_entry {
+// Simplified log entry without log index (for input)
+struct log_input {
     int term;
     int value;
+};
+
+//
+// Expected log_entry from fsm output
+//
+struct command {
+    int value;
+};
+
+struct configuration {
+    std::vector<unsigned> previous;
+    std::vector<unsigned> current;
+};
+
+struct dummy {};
+
+struct log_entry {
+    unsigned term;
+    unsigned idx;
+    std::variant<command, configuration, dummy> data;
 };
 
 struct initial_snapshot {
@@ -99,7 +119,7 @@ struct append_request {
     unsigned prev_log_idx;
     unsigned prev_log_term;
     unsigned leader_commit_idx;
-    std::vector<log_entry> entries;
+    std::vector<log_input> entries;
 };
 
 struct append_reply_accepted {
@@ -143,7 +163,7 @@ struct message {
 
 // Get output out of specific fsm
 struct expect {
-    unsigned id;
+    unsigned server;
     bool follower;
     bool candidate;
     bool leader;
@@ -167,7 +187,7 @@ struct test_case {
     unsigned fsms = 1;
     unsigned initial_term = 1;
     std::optional<unsigned> initial_leader;
-    std::vector<std::vector<log_entry>> initial_logs;
+    std::vector<std::vector<log_input>> initial_logs;
     // std::vector<struct initial_snapshot> initial_snapshots;
     // std::vector<raft::server::configuration> config;
     std::vector<step> steps;

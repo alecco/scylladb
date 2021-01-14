@@ -591,18 +591,17 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
 
 BOOST_AUTO_TEST_CASE(etcd_unit_tests) {
     Tester t{
-        { .name = "test_progress_leader", .nodes = 2, .fsms = 1,
+        // Check fsm becomes leader and sends 5 entries to log and followers
+        { .name = "test_progress_leader", .nodes = 2,
           .steps = {
-                {
-                    {elect{0},entries{server{0},5}},
-                    {{.id = 0, .leader = true, .term = 3}},
-                },
-#if 0
-                {
-                    {elect{0}},
-                    {{.id = 0, .leader = true, .term = 3}},
-                },
-#endif
+              {.actions = {elect{0},entries{server{0},5}},
+               .expect = {{.server = 0,
+                           .entries = {{3,2,command{1}},{3,3,command{2}},{3,4,command{3}},
+                                      {3,5,command{4}}, {3,6,command{5}}}}},
+              },
+              {.expect = {{.server = 0,
+                           .messages = {}}},
+              },
           }, // steps
         }, // test
     };
