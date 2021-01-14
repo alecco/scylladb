@@ -64,6 +64,14 @@ void election_timeout(seastar::lw_shared_ptr<raft::fsm> fsm) {
     }
 }
 
+template <typename T>
+raft::command create_command(T val) {
+    raft::command command;
+    ser::serialize(command, val);
+
+    return std::move(command);
+}
+
 struct failure_detector: public raft::failure_detector {
     connected_nodes& _connected;
     bool is_alive(server_id from) override {
@@ -94,6 +102,8 @@ protected:
     std::optional<unsigned> initial_leader;
     std::vector<std::vector<log_entry>> initial_logs;
     std::vector<step> _steps;
+
+    int _next_val = 1;    // TODO: make consecutive from log
 
     term_t _current_term;
     connected_nodes _connected; 
@@ -190,6 +200,14 @@ fmt::print("Run\n");
                         for (auto id: r.ids) {
                             _connected.reconnect(id);
                         }
+                    },
+                    [&](struct entries& entries) {
+fmt::print("ENTRIES server {} [{}, {}]\n", entries.server.id, _next_val, _next_val + entries.n - 1);
+                        for (auto i = _next_val; i < _next_val + entries.n; i++) {
+                            raft::command cmd = create_command(i);
+                            _fsms[entries.server.id]->add_entry(std::move(cmd));
+                        }
+                        _next_val += entries.n;
                     },
                 }, action);
             }

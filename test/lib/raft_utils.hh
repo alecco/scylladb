@@ -76,6 +76,16 @@ enum simple_action {
     receptive_all,
 };
 
+struct server {
+    unsigned id;
+};
+
+// Append entries to a leader fsm
+struct entries {
+    struct server server;
+    unsigned n;
+};
+
 struct snapshot {
     unsigned idx;
     unsigned term;
@@ -147,14 +157,14 @@ struct expect {
 
 struct step {
     std::vector<std::variant<simple_action, candidate, receptive, elect,
-            disconnect, reconnect>> actions;
+            disconnect, reconnect, entries>> actions;
     std::vector<struct expect> expect;
 };
 
 struct test_case {
     std::string name;
     unsigned nodes;
-    unsigned fsms;
+    unsigned fsms = 1;
     unsigned initial_term = 1;
     std::optional<unsigned> initial_leader;
     std::vector<std::vector<log_entry>> initial_logs;
