@@ -595,6 +595,7 @@ BOOST_AUTO_TEST_CASE(etcd_unit_tests) {
           .steps = {
                 {
                     {elect{0},entries{server{0},5}},
+                    {{.id = 0, .leader = true, .term = 3}},
                 },
 #if 0
                 {

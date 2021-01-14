@@ -112,18 +112,6 @@ protected:
 
     void _run_test() {
 fmt::print("Test {}\n", _name);
-
-        raft::index_t idx;
-        raft::fsm_output output;
-        raft::vote_request vreq;
-        raft::vote_reply vrepl;
-        raft::append_reply arepl;
-
-        //
-        // Run
-        //
-fmt::print("Run\n");
-
         for (auto& [actions, expect]: _steps) {
             // Actions
             for (auto& action: actions) {
@@ -214,7 +202,7 @@ fmt::print("ENTRIES server {} [{}, {}]\n", entries.server.id, _next_val, _next_v
 
             // Expected
             for (auto& e: expect) {
-                output = _fsms[e.id]->get_output();
+                auto output = _fsms[e.id]->get_output();
 fmt::print("     expect [{}] output term {} entries {} messages {} committed {}\n", e.id, output.term, output.log_entries.size(), output.messages.size(), output.committed.size());
                 if (e.follower) {
 fmt::print("    [{}] is follower {} {}\n", e.id, e.follower, _fsms[e.id]->is_follower());
