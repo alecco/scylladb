@@ -38,6 +38,14 @@ struct log_input {
 //
 // Expected log_entry from fsm output
 //
+struct term {
+    unsigned term;
+};
+
+struct idx {
+    unsigned idx;
+};
+
 struct cmd {
     int value;
 };
@@ -50,8 +58,8 @@ struct configuration {
 struct dummy {};
 
 struct log_entry {
-    unsigned term;
-    unsigned idx;
+    struct term term;
+    struct idx idx;
     std::variant<cmd, configuration, dummy> data;
 };
 

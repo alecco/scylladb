@@ -221,8 +221,8 @@ fmt::print("ENTRIES server {} [{}, {}]\n", entries.server.id, _next_val, _next_v
                     for (size_t le = 0; le < e.entries.size(); le++) {
                         auto expected = e.entries[le];
                         auto actual = output.log_entries[le];
-                        BOOST_CHECK(actual->term == term_t{expected.term});
-                        BOOST_CHECK(actual->idx == index_t{expected.idx});
+                        BOOST_CHECK(actual->term == term_t{expected.term.term});
+                        BOOST_CHECK(actual->idx == index_t{expected.idx.idx});
                         std::visit(overloaded{
                             [&](struct cmd& expected_cmd) {
                                 raft::command cmd;
