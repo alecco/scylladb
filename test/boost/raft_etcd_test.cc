@@ -589,6 +589,10 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
 } 
 #endif
 
+// XXX
+// actions: noop, candidate, receptive, elect, disconnect, reconnect, entries
+// expect: server, follower, candidate, leader, term, vote, entries, messages, committed, snp
+
 BOOST_AUTO_TEST_CASE(etcd_unit_tests) {
     Tester t{
         // Check fsm becomes leader and sends 5 entries to log and followers
