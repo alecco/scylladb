@@ -228,7 +228,8 @@ fmt::print("ENTRIES server {} [{}, {}]\n", entries.server.id, _next_val, _next_v
                                 raft::command cmd;
                                 BOOST_REQUIRE_NO_THROW(cmd = std::get<raft::command>(actual->data));
                                 auto is = ser::as_input_stream(cmd);
-                                int val = ser::deserialize(is, boost::type<int>());
+                                int value = ser::deserialize(is, boost::type<int>());
+                                BOOST_CHECK(value == expected_cmd.value);
                             },
                             [&](struct configuration& cfg) {
                                 BOOST_REQUIRE_NO_THROW(std::get<raft::configuration>(actual->data));
