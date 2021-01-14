@@ -224,7 +224,7 @@ fmt::print("ENTRIES server {} [{}, {}]\n", entries.server.id, _next_val, _next_v
                         BOOST_CHECK(actual->term == term_t{expected.term});
                         BOOST_CHECK(actual->idx == index_t{expected.idx});
                         std::visit(overloaded{
-                            [&](struct command& expected_cmd) {
+                            [&](struct cmd& expected_cmd) {
                                 raft::command cmd;
                                 BOOST_REQUIRE_NO_THROW(cmd = std::get<raft::command>(actual->data));
                                 auto is = ser::as_input_stream(cmd);

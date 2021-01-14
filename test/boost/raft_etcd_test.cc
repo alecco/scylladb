@@ -600,8 +600,8 @@ BOOST_AUTO_TEST_CASE(etcd_unit_tests) {
           .steps = {
               {.actions = {elect{0},entries{server{0},5}},
                .expect = {{.server = 0,
-                           .entries = {{3,2,command{1}},{3,3,command{2}},{3,4,command{3}},
-                                      {3,5,command{4}}, {3,6,command{5}}}}},
+                           .entries = {{3,2,cmd{1}},{3,3,cmd{2}},{3,4,cmd{3}},
+                                      {3,5,cmd{4}}, {3,6,cmd{5}}}}},
               },
               {.expect = {{.server = 0,
                            .messages = {}}},
