@@ -4,6 +4,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/log.hh>
+#include <seastar/util/later.hh>
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
@@ -266,8 +267,7 @@ public:
             req.entries.push_back(*e);
         }
         net[id]->_client->append_entries(_id, std::move(req));
-        //co_return seastar::sleep(1us);
-        return make_ready_future<>();
+        return later();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
         if (is_disconnected(id) || is_disconnected(_id) || (drop_replication && !(rand() % 5))) {
@@ -533,7 +533,7 @@ future<int> run_test(test_case test) {
                     for (auto s: partition_servers) {
                         rafts[s].first->tick();
                     }
-                    co_await seastar::sleep(1us);        // yield
+                    co_await later();                 // yield
                     for (auto s: partition_servers) {
                         if (rafts[s].first->is_leader()) {
                             have_leader = true;
