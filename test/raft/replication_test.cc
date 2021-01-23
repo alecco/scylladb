@@ -636,6 +636,7 @@ int main(int argc, char* argv[]) {
         ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
 
     std::vector<test_case> replication_tests = {
+#if 0
         // 1 nodes, simple replication, empty, no updates
         {.name = "simple_replication", .nodes = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
@@ -724,10 +725,12 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+#if 1
         // 2 nodes doing simple replication/snapshoting while leader's log size is limited
         {.name = "backpressure", .type = sm_type::SUM, .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_length = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+#endif
         // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
         {.name = "drops_01", .nodes = 3,
          .updates = {entries{4},partition{1,2},entries{4}}},
@@ -740,10 +743,13 @@ int main(int argc, char* argv[]) {
         // 4 nodes, add entries, drop follower 1, custom leader, add entries [implicit re-join all]
         {.name = "drops_04", .nodes = 4,
          .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}},
+#endif
+#if 1
         // Snapshot automatic take and load
         {.name = "take_snapshot_and_stream", .nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
+#endif
 
         // verifies that each node in a cluster can campaign
         // and be elected in turn. This ensures that elections work when not
@@ -757,6 +763,7 @@ int main(int argc, char* argv[]) {
         drop_replication = app.configuration()["drop-replication"].as<bool>();
 
         for (auto test: replication_tests) {
+tlogger.error("Test {}", test.name);
             if (co_await run_test(test) != 0) {
                 tlogger.error("Test {} failed", test.name);
                 co_return 1; // Fail
