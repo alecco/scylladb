@@ -72,6 +72,8 @@ public:
     void elapse_election() override;
     bool is_leader() override;
     void tick() override;
+    void pause_ticker() override;
+    void restart_ticker() override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -641,6 +643,13 @@ void server_impl::elapse_election() {
 
 void server_impl::tick() {
     _fsm->tick();
+}
+
+void server_impl::pause_ticker() {
+    _ticker.cancel();
+}
+void server_impl::restart_ticker() {
+    _ticker.rearm_periodic(100ms);
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
