@@ -32,6 +32,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     _observed.advance(*this);
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
     reset_election_timeout();
+// fmt::print("XXXXXX {} prevote {}\n", _my_id, _config.enable_prevoting);
 
     assert(!bool(_current_leader));
 }
@@ -155,6 +156,7 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate(bool is_prevote) {
+// fmt::print("{} become_candidate\n", _my_id);
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
@@ -186,9 +188,12 @@ void fsm::become_candidate(bool is_prevote) {
     }
 
     term_t term{_current_term + 1};
+// fmt::print("{} become_candidate\n", _my_id);
     if (!is_prevote) {
+// fmt::print("is not pre-vote new term {}\n", term);
         update_current_term(term);
     }
+else fmt::print("is pre-vote\n");
     // Replicate RequestVote
     for (const auto& server : voters) {
         if (server.id == _my_id) {
@@ -201,6 +206,7 @@ void fsm::become_candidate(bool is_prevote) {
             // Already signaled _sm_events in update_current_term()
             continue;
         }
+// fmt::print("{} [term: {}, index: {}, last log term: {}{}] sent vote request to {}\n", _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "", server.id);
         logger.trace("{} [term: {}, index: {}, last log term: {}{}] sent vote request to {}",
             _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "", server.id);
 
@@ -418,6 +424,7 @@ void fsm::tick_leader() {
 
 void fsm::tick() {
     _clock.advance();
+// fmt::print("{} tick   (prevote {})\n", _my_id, _config.enable_prevoting);
 
     if (is_leader()) {
         tick_leader();
@@ -428,6 +435,7 @@ void fsm::tick() {
     } else if (is_past_election_timeout()) {
         logger.trace("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id,
             _last_election_time, _clock.now());
+// fmt::print("tick[{}]: becoming a candidate, last election: {}, now: {} prevote {}\n", _my_id, _last_election_time, _clock.now(), _config.enable_prevoting);
         become_candidate(_config.enable_prevoting);
     }
 }

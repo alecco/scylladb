@@ -207,6 +207,7 @@ private:
     void maybe_commit();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
+// fmt::print("{} is_past_election_timeout _clock.now() {} - _last_election_time {} >= _randomized_election_timeout {} ? {}\n", _my_id, _clock.now(), _last_election_time, _randomized_election_timeout, ( _clock.now() - _last_election_time >= _randomized_election_timeout) );
         return _clock.now() - _last_election_time >= _randomized_election_timeout;
     }
 
