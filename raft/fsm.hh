@@ -207,6 +207,7 @@ private:
     void maybe_commit();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
+// fmt::print("{} is_past_election_timeout _clock.now() {} - _last_election_time {} >= _randomized_election_timeout {} ? {}\n", _my_id, _clock.now(), _last_election_time, _randomized_election_timeout, ( _clock.now() - _last_election_time >= _randomized_election_timeout) );
         return _clock.now() - _last_election_time >= _randomized_election_timeout;
     }
 
@@ -383,6 +384,7 @@ void fsm::step(server_id from, Message&& msg) {
     if (msg.current_term > _current_term) {
         server_id leader{};
 
+// fmt::print("{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
@@ -396,6 +398,7 @@ void fsm::step(server_id from, Message&& msg) {
                     // within the minimum election timeout of
                     // hearing from a current leader, it does not
                     // update its term or grant its vote.
+// fmt::print("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})\n", _my_id, _current_term, election_elapsed(), _current_leader);
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
                         _my_id, _current_term, election_elapsed(), _current_leader);
                     return;
@@ -413,6 +416,7 @@ void fsm::step(server_id from, Message&& msg) {
             // rejected our vote so we should become a follower at the new
             // term.
             ignore_term = msg.is_prevote && msg.vote_granted;
+// fmt::print("{} step: got vote reply, is prevote and granted? {} (ignore_term)\n", _my_id, ignore_term);
         }
 
         if (!ignore_term) {
@@ -428,6 +432,7 @@ void fsm::step(server_id from, Message&& msg) {
             send_to(from, snapshot_reply{ .success = false });
         } else if constexpr (std::is_same_v<Message, vote_request>) {
             if (msg.is_prevote) {
+// fmt::print("{} reply reject prevote\n", _my_id);
                 send_to(from, vote_reply{_current_term, false, true});
             }
         } else {
