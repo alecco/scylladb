@@ -128,6 +128,7 @@ void fsm::reset_election_timeout() {
 }
 
 void fsm::become_leader() {
+fmt::print("[{}] become leader\n", _my_id);
     assert(!std::holds_alternative<leader>(_state));
     _state = leader(_my_id);
     _current_leader = _my_id;
@@ -377,6 +378,7 @@ void fsm::maybe_commit() {
 }
 
 void fsm::tick_leader() {
+// fmt::print("[{}] tick leader\n", _my_id);
     if (_clock.now() - _last_election_time >= ELECTION_TIMEOUT) {
         // 6.2 Routing requests to the leader
         // A leader in Raft steps down if an election timeout
@@ -400,6 +402,7 @@ void fsm::tick_leader() {
                 progress.in_flight--; // allow one more packet to be sent
             }
             if (progress.match_idx < _log.stable_idx() || progress.commit_idx < _commit_idx) {
+//fmt::print("tick[{}]: replicate to {} because match={} < stable={} || follower commit_idx={} < commit_idx={}\n", _my_id, progress.id, progress.match_idx, _log.stable_idx(), progress.commit_idx, _commit_idx);
                 logger.trace("tick[{}]: replicate to {} because match={} < stable={} || "
                     "follower commit_idx={} < commit_idx={}",
                     _my_id, progress.id, progress.match_idx, _log.stable_idx(),
@@ -409,10 +412,12 @@ void fsm::tick_leader() {
             }
         }
     }
+// fmt::print("tick[{}]: active {} / {}\n", _my_id, active, _tracker->size()/2 + 1);
     if (active >= leader_state().tracker.size()/2 + 1) {
         // Advance last election time if we heard from
         // the quorum during this tick.
         _last_election_time = _clock.now();
+// fmt::print("tick[{}]: re-setting last election time\n");
     }
 }
 
@@ -433,6 +438,7 @@ void fsm::tick() {
 }
 
 void fsm::append_entries(server_id from, append_request&& request) {
+fmt::print("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}\n", _my_id, request.current_term, request.prev_log_idx, request.prev_log_term, request.leader_commit_idx, request.entries.size() ? request.entries[0]->idx : index_t(0), request.entries.size());
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}",
             _my_id, request.current_term, request.prev_log_idx, request.prev_log_term,
             request.leader_commit_idx, request.entries.size() ? request.entries[0]->idx : index_t(0), request.entries.size());
@@ -572,6 +578,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
+// fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] voted for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -598,6 +605,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
+// fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
