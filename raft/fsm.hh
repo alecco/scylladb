@@ -355,10 +355,12 @@ void fsm::step(server_id from, Message&& msg) {
     // follower state. If a server receives a request with
     // a stale term number, it rejects the request.
     if (msg.current_term > _current_term) {
+// fmt::print("{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
         if constexpr (std::is_same_v<Message, append_request>) {
+fmt::print("{} [term: {}] received a message with higher term from {} [term: {}] become follower\n", _my_id, _current_term, from, msg.current_term);
             become_follower(from);
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
@@ -368,6 +370,7 @@ void fsm::step(server_id from, Message&& msg) {
                     // within the minimum election timeout of
                     // hearing from a current leader, it does not
                     // update its term or grant its vote.
+// fmt::print("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {}\n", _my_id, _current_term, election_elapsed());
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {}",
                         _my_id, _current_term, election_elapsed());
                     return;
