@@ -383,11 +383,13 @@ void fsm::step(server_id from, Message&& msg) {
     if (msg.current_term > _current_term) {
         server_id leader{};
 
+// fmt::print("{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
         if constexpr (std::is_same_v<Message, append_request>) {
             leader = from;
+fmt::print("{} [term: {}] received a message with higher term from {} [term: {}] become follower\n", _my_id, _current_term, from, msg.current_term);
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
                 if (_current_leader != server_id{} && election_elapsed() < ELECTION_TIMEOUT) {
@@ -398,6 +400,7 @@ void fsm::step(server_id from, Message&& msg) {
                     // update its term or grant its vote.
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
                         _my_id, _current_term, election_elapsed(), _current_leader);
+fmt::print("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {}\n", _my_id, _current_term, election_elapsed());
                     return;
                 }
             }
