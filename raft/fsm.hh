@@ -35,6 +35,12 @@ struct fsm_output {
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
     std::optional<snapshot> snp;
+
+    // True of there is no new output
+    bool empty() const {
+        return !term_and_vote.has_value() && log_entries.size() == 0 && messages.size() == 0 &&
+            committed.size() == 0 && !snp.has_value();
+    }
 };
 
 struct fsm_config {
