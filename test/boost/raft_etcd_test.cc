@@ -95,6 +95,7 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
     raft::configuration cfg({id1, id2});                 // 2 nodes
     raft::log log{raft::snapshot{.config = cfg}};
 
+    // XXX use fsm_debug
     raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
 
     election_timeout(fsm);
@@ -112,6 +113,7 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
             output = fsm.get_output();
         } while (output.messages.size() == 0);  // Should only loop twice
 
+        // XXX check progress
         auto msg = std::get<raft::append_request>(output.messages.back().second);
         auto idx = msg.entries.back()->idx;
         BOOST_CHECK(idx == i + 1);
@@ -168,7 +170,7 @@ BOOST_AUTO_TEST_CASE(test_progress_paused) {
     fsm.step(id2, raft::vote_reply{output.term, true});
     BOOST_CHECK(fsm.is_leader());
 
-    fsm.step(id2, raft::vote_reply{output.term, true});
+    fsm.step(id2, raft::vote_reply{output.term, true});  // XXX remove
 
     fsm.add_entry(create_command(1));
     fsm.add_entry(create_command(2));
