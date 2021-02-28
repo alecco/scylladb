@@ -456,7 +456,6 @@ perf_tests = set([
 ])
 
 raft_tests = set([
-    'test/raft/replication_test',
     'test/boost/raft_fsm_test',
     'test/boost/raft_replication_test',
     'test/boost/raft_etcd_test',
@@ -1130,7 +1129,6 @@ deps['test/boost/linearizing_input_stream_test'] = [
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/alternator_base64_test'] += ['alternator/base64.cc']
 
-deps['test/raft/replication_test'] = ['test/raft/replication_test.cc'] + scylla_raft_dependencies
 deps['test/boost/raft_fsm_test'] =  ['test/boost/raft_fsm_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/boost/raft_replication_test'] =  ['test/boost/raft_replication_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/boost/raft_etcd_test'] =  ['test/boost/raft_etcd_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
