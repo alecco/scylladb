@@ -77,6 +77,8 @@ struct install_snapshot {
 };
 
 struct snapshot_reply {
+    raft::internal::tagged_uint64<raft::term_tag> current_term;
+    raft::internal::tagged_uint64<raft::index_tag> idx;
     bool success;
 };
 
