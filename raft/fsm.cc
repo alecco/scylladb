@@ -766,19 +766,19 @@ bool fsm::can_read() {
     return false;
 }
 
-void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
-    follower_progress& progress = *leader_state().tracker.find(id);
+void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
+    follower_progress& progress = *leader_state().tracker.find(from);
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
-        logger.trace("snasphot_status[{}]: called not in snapshot state", _my_id);
+        logger.trace("install_snapshot_reply[{}]: called not in snapshot state", _my_id);
         return;
     }
 
     // No matter if snapshot transfer failed or not move back to probe state
     progress.become_probe();
 
-    if (idx) {
-        progress.next_idx = *idx + index_t(1);
+    if (reply.success) {
+        progress.next_idx = reply.idx + index_t(1);
         // If snapshot was successfully transferred start replication immediately
         replicate_to(progress, false);
     }

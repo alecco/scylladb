@@ -419,14 +419,15 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
     index_t snp_idx = snp.snp.idx;
     future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst, snp_idx] (future<snapshot_reply> f) {
         _snapshot_transfers.erase(dst);
+        auto reply = raft::snapshot_reply{.current_term = _fsm->get_current_term(),
+            .idx = snp_idx, .success = false};
         if (f.failed()) {
             logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
-            _fsm->snapshot_status(dst, std::nullopt);
         } else {
             logger.trace("[{}] Transferred snapshot to {}", _id, dst);
-            _fsm->snapshot_status(dst, snp_idx);
+            reply = f.get();
         }
-
+        _fsm->step(dst, std::move(reply));
     });
     auto res = _snapshot_transfers.emplace(dst, std::move(f));
     assert(res.second);
