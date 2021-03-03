@@ -72,7 +72,7 @@ std::mt19937 random_generator() {
     std::random_device rd;
     // In case of errors, replace the seed with a fixed value to get a deterministic run.
     auto seed = rd();
-    std::cout << "Random seed: " << seed << "\n";
+    std::cout << "random-seed-packet-drops=" << seed << "\n";
     return std::mt19937(seed);
 }
 
