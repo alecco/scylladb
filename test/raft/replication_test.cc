@@ -660,6 +660,7 @@ int main(int argc, char* argv[]) {
         ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
 
     std::vector<test_case> replication_tests = {
+#if 0
         // 1 nodes, simple replication, empty, no updates
         {.name = "simple_replication", .nodes = 1},
         // 2 nodes, 4 existing leader entries, 4 updates
@@ -766,22 +767,26 @@ int main(int argc, char* argv[]) {
         {.name = "drops_04", .nodes = 4,
          .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}},
         // Snapshot automatic take and load
+#endif
         {.name = "take_snapshot_and_stream", .nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
 
+#if 0
         // verifies that each node in a cluster can campaign
         // and be elected in turn. This ensures that elections work when not
         // starting from a clean slate (as they do in TestLeaderElection)
         // TODO: add pre-vote case
         {.name = "etcd_test_leader_cycle", .nodes = 3,
          .updates = {new_leader{1},new_leader{2},new_leader{0}}},
+#endif
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
         drop_replication = app.configuration()["drop-replication"].as<bool>();
 
         for (auto test: replication_tests) {
+fmt::print("XXX running {} (drop replication {})\n", test.name, drop_replication);
             if (co_await run_test(test) != 0) {
                 tlogger.error("Test {} failed", test.name);
                 co_return 1; // Fail
