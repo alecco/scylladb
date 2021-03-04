@@ -950,3 +950,44 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
     BOOST_CHECK(!fsm.get_configuration().is_joint());
 }
+
+using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
+
+void
+communicate_impl(raft_routing_map& map) {
+    // To enable tracing, set:
+    // global_logger_registry().set_all_loggers_level(seastar::log_level::trace);
+    //
+    bool has_traffic;
+    do {
+        has_traffic = false;
+        for (auto e : map) {
+            raft::fsm& from = *e.second;
+            bool has_output;
+            for (auto output = from.get_output(); !output.empty(); output = from.get_output()) {
+                for (auto&& m : output.messages) {
+                    has_traffic = true;
+                    auto it = map.find(m.first);
+                    if (it == map.end()) {
+                        // The node is not available, drop the message
+                        continue;
+                    }
+                    raft::fsm& to = *(it->second);
+                    std::visit([&from, &to](auto&& m) { to.step(from.id(), std::move(m)); },
+                        std::move(m.second));
+                }
+            }
+        }
+    } while (has_traffic);
+}
+
+template <typename... Args>
+void communicate(Args&... args) {
+    raft_routing_map map;
+    auto add_map_entry = [&map](raft::fsm& fsm) -> void {
+        map.emplace(fsm.id(), &fsm);
+    };
+    (add_map_entry(args), ...);
+    communicate_impl(map);
+}
+
