@@ -83,17 +83,6 @@ const log_entry& fsm::add_entry(T command) {
     _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
     _sm_events.signal();
 
-    if constexpr (std::is_same_v<T, configuration>) {
-        // 4.1. Cluster membership changes/Safety.
-        //
-        // The new configuration takes effect on each server as
-        // soon as it is added to that server’s log: the C_new
-        // entry is replicated to the C_new servers, and
-        // a majority of the new configuration is used to
-        // determine the C_new entry’s commitment.
-        leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
-    }
-
     return *_log[_log.last_idx()];
 }
 
@@ -300,14 +289,66 @@ fsm_output fsm::get_output() {
 }
 
 void fsm::advance_stable_idx(index_t idx) {
+    auto prev_stable_idx = _log.stable_idx();
+    auto last_conf_idx = _log.last_conf_idx();
+    bool stable_conf_change = last_conf_idx > prev_stable_idx && last_conf_idx <= idx;
+
     _log.stable_to(idx);
+    logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
+
     // If this server is leader and is part of the current
     // configuration, update it's progress and optionally
     // commit new entries.
     if (is_leader() && leader_state().tracker.leader_progress()) {
         leader_state().tracker.leader_progress()->accepted(idx);
-        replicate();
+        if (stable_conf_change) {
+            // 4.1. Cluster membership changes/Safety.
+            //
+            // The new configuration takes effect on each server as
+            // soon as it is added to that server’s log: the C_new
+            // entry is replicated to the C_new servers, and
+            // a majority of the new configuration is used to
+            // determine the C_new entry’s commitment.
+            //
+            // Leaving joint configuration may commit more entries
+            // even if we had no new acks. Imagine the cluster is
+            // in joint configuration {{A, B}, {A, B, C, D, E}}.
+            // The leader's view of stable indexes is:
+            //
+            // Server  Match Index
+            // A       5
+            // B       5
+            // C       6
+            // D       7
+            // E       8
+            //
+            // The commit index would be 5 if we use joint
+            // configuration, and 6 if we assume we left it.
+            // Thus set new configuration before calling
+            // maybe_commit()
+            leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
+        }
+        // Advancing the stable index not only creates new entries
+        // to append to replicas' logs, but may also advance
+        // the leader commit index. Update the commit index first
+        // to be able to replicate it at once.
         maybe_commit();
+        // Committing new entries may cause the leader to step down.
+        // Only replicate() if we are still the leader.
+        if (is_leader()) {
+            replicate();
+        }
+    } else if (_current_leader &&
+        !_log.get_configuration().is_joint() &&
+        !_log.get_configuration().current.contains(server_address{_current_leader})) {
+        // We have received a configuration which does not contain
+        // the current leader. Since the failure detector may
+        // still report the leader node as alive and healthy,
+        // we must clear the current leader to be capable of
+        // becoming a candidate. If the configuration is joint,
+        // and the leader is not part of C_new it will drive
+        // down the transition to C_new before it steps down.
+        _current_leader = server_id{};
     }
 }
 
@@ -342,6 +383,7 @@ void fsm::maybe_commit() {
     _sm_events.signal();
 
     if (committed_conf_change) {
+        logger.trace("maybe_commit[{}]: committed conf change at idx {}", _my_id, _log.last_conf_idx());
         if (_log.get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
@@ -350,28 +392,19 @@ void fsm::maybe_commit() {
             configuration cfg(_log.get_configuration());
             cfg.leave_joint();
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
-            leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
-            // Leaving joint configuration may commit more entries
-            // even if we had no new acks. Imagine the cluster is
-            // in joint configuration {{A, B}, {A, B, C, D, E}}.
-            // The leader's view of stable indexes is:
-            //
-            // Server  Match Index
-            // A       5
-            // B       5
-            // C       6
-            // D       7
-            // E       8
-            //
-            // The commit index would be 5 if we use joint
-            // configuration, and 6 if we assume we left it. Let
-            // it happen without an extra FSM step.
-            maybe_commit();
         } else if (leader_state().tracker.leader_progress() == nullptr) {
+            logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
             // 4.2.2 Removing the current leader
+            //
+            // The leader temporarily manages a configuration
+            // in which it is not a member.
             //
             // A leader that is removed from the configuration
             // steps down once the C_new entry is committed.
+            //
+            // If the leader stepped down before this point,
+            // it might still time out and become leader
+            // again, delaying progress.
             //
             // @todo: when leadership transfer extension is
             // implemented, send TimeoutNow to a member of C_new
