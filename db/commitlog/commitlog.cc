@@ -461,6 +461,7 @@ std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
  *        buffer to the corresponding position in the file
  *  - If we are periodic and crossed a timing threshold, or running "batch" mode
  *    we might be forced to issue a flush ("sync") after adding data
+ *    XXX ouch will have to calculate
  *      - A sync call acquires the write lock, thus locking out writes
  *        and waiting for pending writes to finish. It then checks the
  *        high data mark, and issues the actual file flush.
@@ -470,7 +471,7 @@ std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
  *
  * Sync timer:
  *  - In periodic mode, we try to primarily issue sync calls in
- *    a timer task issued every N seconds. The timer does the same
+ *    a timer task issued every N seconds. The timer does the same     XXX seconds?!?
  *    operation as the above described sync, and resets the timeout
  *    so that mutation path will not trigger syncs and delay.
  *
@@ -740,7 +741,7 @@ public:
         _buffer = _segment_manager->acquire_buffer(k);
         _buffer_ostream = _buffer.get_ostream();
         auto out = _buffer_ostream.write_substream(overhead);
-        out.fill('\0', overhead);
+        out.fill('\0', overhead); // XXX ?    ALL ZEROED need to calc unused and also count full segments
         _segment_manager->totals.buffer_list_bytes += _buffer.size_bytes();
     }
 
@@ -1043,6 +1044,7 @@ public:
 
     // ensures no more of this segment is writeable, by allocating any unused section at the end and marking it discarded
     // a.k.a. zero the tail.
+    // XXX
     size_t clear_buffer_slack() {
         auto buf_pos = buffer_position();
         auto size = align_up(buf_pos, alignment);
@@ -1820,7 +1822,8 @@ void db::commitlog::segment_manager::on_timer() {
         }
         // IFF a new segment was put in use since last we checked, and we're
         // above threshold, request flush.
-        if (_new_counter > 0) {
+        if (_new_counter > 0) {   // XXX _new_counter > 0 means there is a live segment
+            // XXX Here
             auto max = disk_usage_threshold;
             auto cur = totals.active_size_on_disk;
             if (max != 0 && cur >= max) {
