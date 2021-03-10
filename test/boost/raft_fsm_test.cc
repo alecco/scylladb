@@ -42,6 +42,19 @@ void election_timeout(raft::fsm& fsm) {
     }
 }
 
+raft::server_id id() {
+    static int id = 0;
+    return raft::server_id{utils::UUID(0, ++id)};
+}
+
+raft::server_address_set address_set(std::initializer_list<raft::server_id> ids) {
+    raft::server_address_set set;
+    for (auto id : ids) {
+        set.emplace(raft::server_address{.id = id});
+    }
+    return set;
+}
+
 struct failure_detector: public raft::failure_detector {
     bool alive = true;
     bool is_alive(raft::server_id from) override {
@@ -60,121 +73,124 @@ raft::snapshot log_snapshot(raft::log& log, index_t idx) {
 raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = false};
 
 BOOST_AUTO_TEST_CASE(test_votes) {
-    auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
     auto id1 = id();
 
     raft::votes votes(raft::configuration({id1}));
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
     BOOST_CHECK_EQUAL(votes.voters().size(), 1);
     // Try a vote from an unknown server, it should be ignored.
-    votes.register_vote(id().id, true);
-    votes.register_vote(id1.id, false);
+    votes.register_vote(id(), true);
+    votes.register_vote(id1, false);
     // Quorum votes against the decision
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     // Another vote from the same server is ignored
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id1.id, true);
+    votes.register_vote(id1, true);
+    votes.register_vote(id1, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     auto id2 = id();
     votes = raft::votes(raft::configuration({id1, id2}));
     BOOST_CHECK_EQUAL(votes.voters().size(), 2);
-    votes.register_vote(id1.id, true);
+    votes.register_vote(id1, true);
     // We need a quorum of participants to win an election
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id2.id, false);
+    votes.register_vote(id2, false);
     // At this point it's clear we don't have enough votes
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     auto id3 = id();
     // Joint configuration
-    votes = raft::votes(raft::configuration({id1}, {id2, id3}));
+    votes = raft::votes(raft::configuration(address_set({id1}), address_set({id2, id3})));
     BOOST_CHECK_EQUAL(votes.voters().size(), 3);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id2.id, true);
-    votes.register_vote(id3.id, true);
+    votes.register_vote(id2, true);
+    votes.register_vote(id3, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id1.id, false);
+    votes.register_vote(id1, false);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
-    votes = raft::votes(raft::configuration({id1}, {id2, id3}));
-    votes.register_vote(id2.id, true);
-    votes.register_vote(id3.id, true);
-    votes.register_vote(id1.id, true);
+    votes = raft::votes(raft::configuration(address_set({id1}), address_set({id2, id3})));
+    votes.register_vote(id2, true);
+    votes.register_vote(id3, true);
+    votes.register_vote(id1, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
-    votes = raft::votes(raft::configuration({id1, id2, id3}, {id1}));
+    votes = raft::votes(raft::configuration(address_set({id1, id2, id3}), address_set({id1})));
     BOOST_CHECK_EQUAL(votes.voters().size(), 3);
-    votes.register_vote(id1.id, true);
+    votes.register_vote(id1, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
     // This gives us a majority in both new and old
     // configurations.
-    votes.register_vote(id2.id, true);
+    votes.register_vote(id2, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Basic voting test for 4 nodes
     auto id4 = id();
     votes = raft::votes(raft::configuration({id1, id2, id3, id4}));
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id2.id, true);
+    votes.register_vote(id1, true);
+    votes.register_vote(id2, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id3.id, false);
+    votes.register_vote(id3, false);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id4.id, false);
+    votes.register_vote(id4, false);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     auto id5 = id();
     // Basic voting test for 5 nodes
-    votes = raft::votes(raft::configuration({id1, id2, id3, id4, id5}, {id1, id2, id3}));
-    votes.register_vote(id1.id, false);
-    votes.register_vote(id2.id, false);
+    votes = raft::votes(raft::configuration(address_set({id1, id2, id3, id4, id5}),
+            address_set({id1, id2, id3})));
+    votes.register_vote(id1, false);
+    votes.register_vote(id2, false);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
-    votes.register_vote(id3.id, true);
-    votes.register_vote(id4.id, true);
-    votes.register_vote(id5.id, true);
+    votes.register_vote(id3, true);
+    votes.register_vote(id4, true);
+    votes.register_vote(id5, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     // Basic voting test with tree voters and one no-voter
-    votes = raft::votes(raft::configuration({id1, id2, id3, {id4.id, false}}));
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id2.id, true);
+    votes = raft::votes(raft::configuration({{.id = id1},
+            {.id = id2}, {.id = id3}, {id4, false}}));
+    votes.register_vote(id1, true);
+    votes.register_vote(id2, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Basic test that non-voting votes are ignored
-    votes = raft::votes(raft::configuration({id1, id2, id3, {id4.id, false}}));
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id4.id, true);
+    votes = raft::votes(raft::configuration({{.id = id1},
+            {.id = id2}, {.id = id3}, {id4, false}}));
+    votes.register_vote(id1, true);
+    votes.register_vote(id4, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id3.id, true);
+    votes.register_vote(id3, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Joint configuration with non voting members
-    votes = raft::votes(raft::configuration({id1}, {id2, id3, {id4.id, false}}));
+    votes = raft::votes(raft::configuration({{.id = id1}},
+            {{.id = id2}, {.id = id3}, {id4, false}}));
     BOOST_CHECK_EQUAL(votes.voters().size(), 3);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id2.id, true);
-    votes.register_vote(id3.id, true);
-    votes.register_vote(id4.id, true);
+    votes.register_vote(id2, true);
+    votes.register_vote(id3, true);
+    votes.register_vote(id4, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id1.id, true);
+    votes.register_vote(id1, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Same node is voting in one config and non voting in another
-    votes = raft::votes(raft::configuration({id1, id4}, {id2, id3, {id4.id, false}}));
-    votes.register_vote(id2.id, true);
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id4.id, true);
+    votes = raft::votes(raft::configuration({{.id = id1}, {.id = id4}},
+            {{.id = id2}, {.id = id3}, {id4.id, false}}));
+    votes.register_vote(id2, true);
+    votes.register_vote(id1, true);
+    votes.register_vote(id4, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id3.id, true);
+    votes.register_vote(id3, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
 }
 
 BOOST_AUTO_TEST_CASE(test_tracker) {
-    auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
     auto id1 = id();
-    raft::tracker tracker(id1.id);
+    raft::tracker tracker(id1);
     raft::configuration cfg({id1});
     tracker.set_configuration(cfg, index_t{1});
-    BOOST_CHECK_NE(tracker.find(id1.id), nullptr);
+    BOOST_CHECK_NE(tracker.find(id1), nullptr);
     // The node with id set during construction is assumed to be
     // the leader, since otherwise we wouldn't create a tracker
     // in the first place.
-    BOOST_CHECK_EQUAL(tracker.find(id1.id), tracker.leader_progress());
+    BOOST_CHECK_EQUAL(tracker.find(id1), tracker.leader_progress());
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{0});
     // Avoid keeping a reference, follower_progress address may
     // change with configuration change
-    auto pr = [&tracker](raft::server_address address) -> raft::follower_progress* {
-        return tracker.find(address.id);
+    auto pr = [&tracker](raft::server_id id) -> raft::follower_progress* {
+        return tracker.find(id);
     };
     BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{0});
     BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{1});
@@ -198,7 +214,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
 
     // Enter joint configuration {A,B,C}
     auto id2 = id(), id3 = id();
-    cfg.enter_joint({id1, id2, id3});
+    cfg.enter_joint(address_set({id1, id2, id3}));
     tracker.set_configuration(cfg, index_t{1});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{10});
     pr(id2)->accepted(index_t{11});
@@ -216,7 +232,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
 
     auto id4 = id(), id5 = id();
-    cfg.enter_joint({id3, id4, id5});
+    cfg.enter_joint(address_set({id3, id4, id5}));
     tracker.set_configuration(cfg, index_t{1});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
     pr(id1)->accepted(index_t{15});
@@ -236,9 +252,9 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     // Leaving joint configuration commits more entries
     BOOST_CHECK_EQUAL(tracker.committed(index_t{15}), index_t{17});
     //
-    cfg.enter_joint({id1});
+    cfg.enter_joint(address_set({id1}));
     cfg.leave_joint();
-    cfg.enter_joint({id2});
+    cfg.enter_joint(address_set({id2}));
     tracker.set_configuration(cfg, index_t{1});
     // Sic: we're in a weird state. The joint commit index
     // is actually 1, since id2 is at position 1. But in
@@ -256,7 +272,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{18}), index_t{19});
 
     // Check that non voting member is not counted for the quorum in simple config
-    cfg.enter_joint({id1, id2, {id3.id, false}});
+    cfg.enter_joint({{.id = id1}, {.id = id2}, {id3.id, false}});
     cfg.leave_joint();
     tracker.set_configuration(cfg, index_t{1});
     pr(id1)->accepted(index_t{30});
@@ -265,7 +281,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
 
     // Check that non voting member is not counted for the quorum in joint config
-    cfg.enter_joint({id4, id5});
+    cfg.enter_joint({{.id = id4}, {.id = id5}});
     tracker.set_configuration(cfg, index_t{1});
     pr(id4)->accepted(index_t{30});
     pr(id5)->accepted(index_t{30});
@@ -273,14 +289,14 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
 
     // Check the case where the same node is in both config but different voting rights
     cfg.leave_joint();
-    cfg.enter_joint({id1, id2, {id5.id, false}});
+    cfg.enter_joint({{.id = id1}, {.id = id2}, {id5, false}});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
 }
 
 BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     // last_conf_idx, prev_conf_idx are initialized correctly,
     // and maintained during truncate head/truncate tail
-    server_id id1{utils::make_random_uuid()};
+    server_id id1 = id();
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
     BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
@@ -330,7 +346,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
 void test_election_single_node_helper(raft::fsm_config fcfg) {
 
     failure_detector fd;
-    server_id id1{utils::make_random_uuid()};
+    server_id id1 = id();
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
     raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fcfg);
@@ -378,7 +394,7 @@ BOOST_AUTO_TEST_CASE(test_election_single_node) {
 BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
 
     failure_detector fd;
-    server_id id1{utils::make_random_uuid()};
+    server_id id1 = id();
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
 
@@ -404,7 +420,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
 
     failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()}, id2{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log{raft::snapshot{.config = cfg}};
@@ -472,10 +488,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
 
     failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()},
-              id4{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
     raft::configuration cfg({id1, id2, id3, id4});
     raft::log log{raft::snapshot{.config = cfg}};
@@ -526,7 +539,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes_prevote) {
 
     failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()}, id2{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log{raft::snapshot{.config = cfg}};
@@ -591,10 +604,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
 
     failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()},
-              id4{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
     raft::configuration cfg({id1, id2, id3, id4});
     raft::log log{raft::snapshot{.config = cfg}};
@@ -649,9 +659,7 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
 
     failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{999}, .config = cfg});
@@ -696,9 +704,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
 
     failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
@@ -780,9 +786,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
 
     failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
@@ -882,10 +886,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
 
     failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()},
-              id4{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
