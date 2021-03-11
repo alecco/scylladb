@@ -55,10 +55,16 @@ raft::server_address_set address_set(std::initializer_list<raft::server_id> ids)
     return set;
 }
 
-struct failure_detector: public raft::failure_detector {
-    bool alive = true;
+struct trivial_failure_detector: public raft::failure_detector {
     bool is_alive(raft::server_id from) override {
-        return alive;
+        return true;
+    }
+} trivial_failure_detector;
+
+struct discrete_failure_detector: public raft::failure_detector {
+    bool _is_alive = true;
+    bool is_alive(raft::server_id from) override {
+        return _is_alive;
     }
 };
 
@@ -71,6 +77,10 @@ raft::snapshot log_snapshot(raft::log& log, index_t idx) {
 }
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = false};
+
+raft::fsm create_follower(raft::server_id id, raft::log log, raft::failure_detector& fd = trivial_failure_detector) {
+    return raft::fsm(id, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+}
 
 BOOST_AUTO_TEST_CASE(test_votes) {
     auto id1 = id();
@@ -345,11 +355,10 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
 
 void test_election_single_node_helper(raft::fsm_config fcfg) {
 
-    failure_detector fd;
     server_id id1 = id();
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fcfg);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
     BOOST_CHECK(fsm.is_follower());
 
@@ -393,12 +402,11 @@ BOOST_AUTO_TEST_CASE(test_election_single_node) {
 // does not lead to RPC
 BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
 
-    failure_detector fd;
     server_id id1 = id();
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log));
 
     election_timeout(fsm);
 
@@ -418,14 +426,14 @@ BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
 
 BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
 
-    failure_detector fd;
+    discrete_failure_detector fd;
 
     server_id id1 = id(), id2 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log), fd);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -452,7 +460,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
     BOOST_CHECK(fsm.is_leader());
     // Any message with a newer term after election timeout
     // -> immediately convert to follower
-    fd.alive = false;
+    fd._is_alive = false;
     election_threshold(fsm);
     // Use current_term + 2 to switch fsm to follower
     // even if it itself switched to a candidate
@@ -486,14 +494,14 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
 
 BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
 
-    failure_detector fd;
+    discrete_failure_detector fd;
 
     server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
     raft::configuration cfg({id1, id2, id3, id4});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log), fd);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -513,7 +521,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
     BOOST_CHECK(!reply.vote_granted);
 
     // Run out of steam for this term. Start a new one.
-    fd.alive = false;
+    fd._is_alive = false;
     election_timeout(fsm);
     BOOST_CHECK(fsm.is_candidate());
 
@@ -537,14 +545,12 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes_prevote) {
     auto fcfg = fsm_cfg;
     fcfg.enable_prevoting = true;
 
-    failure_detector fd;
-
     server_id id1 = id(), id2 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fcfg);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -602,7 +608,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
     auto fcfg = fsm_cfg;
     fcfg.enable_prevoting = true;
 
-    failure_detector fd;
+    discrete_failure_detector fd;
 
     server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
@@ -629,7 +635,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
     BOOST_CHECK(!reply.vote_granted && reply.is_prevote);
 
     // Run out of steam for this term. Start a new one.
-    fd.alive = false;
+    fd._is_alive = false;
     election_timeout(fsm);
     BOOST_CHECK(fsm.is_candidate() && fsm.is_prevote_candidate());
 
@@ -657,8 +663,6 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
 
 BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
 
-    failure_detector fd;
-
     server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2, id3});
@@ -667,7 +671,7 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
     log.emplace_back(seastar::make_lw_shared<raft::log_entry>(raft::log_entry{term_t{10}, index_t{1000}}));
     log.stable_to(log.last_idx());
 
-    raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log), fd, fsm_cfg);
+    raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -702,14 +706,12 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
 
 BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
 
-    failure_detector fd;
-
     server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
 
-    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log));
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -784,14 +786,12 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
 
 BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
 
-    failure_detector fd;
-
     server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
 
-    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log));
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -884,14 +884,12 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
 
 BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
 
-    failure_detector fd;
-
     server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
 
-    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log));
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
