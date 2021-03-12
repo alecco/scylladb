@@ -547,7 +547,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes_prevote) {
 
     auto output = fsm.get_output();
     // After a favourable prevote reply, we become a regular candidate (quorum is 2)
-    fsm.step(id2, raft::vote_reply{output.term, true, true});
+    fsm.step(id2, raft::vote_reply{output.term_and_vote->first, true, true});
     BOOST_CHECK(fsm.is_candidate() && !fsm.is_prevote_candidate());
     // And increased our term this time
     BOOST_CHECK_EQUAL(fsm.get_current_term(), term_t{1});
@@ -623,11 +623,11 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
 
     output = fsm.get_output();
     // Add a favourable prevote reply, not enough for quorum
-    fsm.step(id2, raft::vote_reply{output.term + term_t{1}, true, true});
+    fsm.step(id2, raft::vote_reply{output.term_and_vote->first + term_t{1}, true, true});
     BOOST_CHECK(fsm.is_candidate() && fsm.is_prevote_candidate());
 
     // Add another one, this adds up to quorum
-    fsm.step(id3, raft::vote_reply{output.term + term_t{1}, true, true});
+    fsm.step(id3, raft::vote_reply{output.term_and_vote->first + term_t{1}, true, true});
     BOOST_CHECK(fsm.is_candidate() && !fsm.is_prevote_candidate());
 
     // Check that prevote with future term is answered even if we voted already
