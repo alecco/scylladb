@@ -61,11 +61,16 @@ struct trivial_failure_detector: public raft::failure_detector {
     }
 } trivial_failure_detector;
 
-struct discrete_failure_detector: public raft::failure_detector {
+class discrete_failure_detector: public raft::failure_detector {
     bool _is_alive = true;
-    bool is_alive(raft::server_id from) override {
-        return _is_alive;
+    std::unordered_set<server_id> _dead;
+public:
+    bool is_alive(raft::server_id id) override {
+        return _is_alive && !_dead.contains(id);
     }
+    void mark_dead(server_id id) { _dead.emplace(id); }
+    void mark_alive(server_id id) { _dead.erase(id); }
+    void mark_all_dead() { _is_alive = false; }
 };
 
 template <typename T> void add_entry(raft::log& log, T cmd) {
@@ -460,7 +465,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
     BOOST_CHECK(fsm.is_leader());
     // Any message with a newer term after election timeout
     // -> immediately convert to follower
-    fd._is_alive = false;
+    fd.mark_all_dead();
     election_threshold(fsm);
     // Use current_term + 2 to switch fsm to follower
     // even if it itself switched to a candidate
@@ -521,7 +526,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
     BOOST_CHECK(!reply.vote_granted);
 
     // Run out of steam for this term. Start a new one.
-    fd._is_alive = false;
+    fd.mark_all_dead();
     election_timeout(fsm);
     BOOST_CHECK(fsm.is_candidate());
 
@@ -635,7 +640,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
     BOOST_CHECK(!reply.vote_granted && reply.is_prevote);
 
     // Run out of steam for this term. Start a new one.
-    fd._is_alive = false;
+    fd.mark_all_dead();
     election_timeout(fsm);
     BOOST_CHECK(fsm.is_candidate() && fsm.is_prevote_candidate());
 
