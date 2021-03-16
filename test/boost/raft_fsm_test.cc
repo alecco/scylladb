@@ -1255,3 +1255,31 @@ BOOST_AUTO_TEST_CASE(test_confchange_abcde_abcdefg) {
     BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
     BOOST_CHECK_EQUAL(A.get_configuration().current.size(), 7);
 }
+
+BOOST_AUTO_TEST_CASE(test_election_during_confchange) {
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id, C_id}});
+
+    {
+        // Joint config has reached old majority, the leader is
+        // from new majority
+        discrete_failure_detector fd;
+        auto A = create_follower(A_id, log, fd);
+        auto B = create_follower(B_id, log, fd);
+        auto C = create_follower(C_id, log, fd);
+        election_timeout(A);
+        communicate(A, B, C);
+        A.add_entry(raft::configuration({C_id, D_id, E_id}));
+        communicate(A, B, C);
+        fd.mark_dead(A_id);
+        auto D = create_follower(D_id, log, fd);
+        auto E = create_follower(E_id, log, fd);
+        election_timeout(C);
+        election_threshold(B);
+        communicate(B, C, D, E);
+        BOOST_CHECK(C.is_leader());
+        BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), false);
+        BOOST_CHECK_EQUAL(C.get_configuration().current.size(), 3);
+    }
+}
