@@ -961,7 +961,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
 using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
 
 void
-communicate_impl(raft_routing_map& map) {
+communicate_impl(raft_routing_map& map, std::function<bool()> stop_pred) {
     // To enable tracing, set:
     // global_logger_registry().set_all_loggers_level(seastar::log_level::trace);
     //
@@ -972,6 +972,9 @@ communicate_impl(raft_routing_map& map) {
             raft::fsm& from = *e.second;
             bool has_output;
             for (auto output = from.get_output(); !output.empty(); output = from.get_output()) {
+                if (stop_pred()) {
+                    return;
+                }
                 for (auto&& m : output.messages) {
                     has_traffic = true;
                     auto it = map.find(m.first);
@@ -982,6 +985,9 @@ communicate_impl(raft_routing_map& map) {
                     raft::fsm& to = *(it->second);
                     std::visit([&from, &to](auto&& m) { to.step(from.id(), std::move(m)); },
                         std::move(m.second));
+                    if (stop_pred()) {
+                        return;
+                    }
                 }
             }
         }
@@ -989,13 +995,18 @@ communicate_impl(raft_routing_map& map) {
 }
 
 template <typename... Args>
-void communicate(Args&... args) {
+void communicate_until(Args&&... args, std::function<bool()> cond = []() { return false; }) {
     raft_routing_map map;
     auto add_map_entry = [&map](raft::fsm& fsm) -> void {
         map.emplace(fsm.id(), &fsm);
     };
     (add_map_entry(args), ...);
-    communicate_impl(map);
+    communicate_impl(map, cond);
+}
+
+template <typename... Args>
+void communicate(Args&&... args) {
+    return communicate(std::forward<Args>(args)...);
 }
 
 BOOST_AUTO_TEST_CASE(test_empty_configuration) {
