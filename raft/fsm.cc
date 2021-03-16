@@ -134,6 +134,8 @@ void fsm::become_leader() {
     // set_configuration() begins replicating from the last entry
     // in the log.
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
+    logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
+        _my_id, _log.stable_idx(), _log.last_idx());
     replicate();
 }
 
