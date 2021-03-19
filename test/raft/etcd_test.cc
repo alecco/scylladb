@@ -766,7 +766,6 @@ BOOST_AUTO_TEST_CASE(test_dueling_candidates) {
     raft::vote_request vreq;
     raft::vote_reply vrepl;
     raft::append_request areq;
-    raft::append_reply arepl;
     raft::log_entry_ptr lep;
 
     failure_detector fd;
@@ -861,7 +860,6 @@ BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
     raft::vote_request vreq;
     raft::vote_reply vrepl;
     raft::append_request areq;
-    raft::append_reply arepl;
     raft::log_entry_ptr lep;
 
     failure_detector fd;
@@ -944,7 +942,7 @@ BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
     BOOST_CHECK(fsm3.is_candidate());
     output3 = fsm3.get_output();
     BOOST_CHECK(output1.term_and_vote->first == 1); // term 1
-    BOOST_CHECK(output3.messages.size() == 2);
+    BOOST_CHECK(output3.messages.size() >= 2);
     for (auto& [id, msg] : output3.messages) {
         BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
         // Both 1 and 2 ignore 3's prevote request as leader 1 is alive
@@ -959,11 +957,6 @@ BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
 // TestSingleNodePreCandidate
 BOOST_AUTO_TEST_CASE(test_single_node_pre_candidate) {
     raft::fsm_output output1;
-    raft::vote_request vreq;
-    raft::vote_reply vrepl;
-    raft::append_request areq;
-    raft::append_reply arepl;
-    raft::log_entry_ptr lep;
 
     failure_detector fd;
     server_id id1{utils::UUID(0, 1)};
@@ -979,23 +972,57 @@ BOOST_AUTO_TEST_CASE(test_single_node_pre_candidate) {
 
 // TestOldMessages
 BOOST_AUTO_TEST_CASE(test_old_messages) {
-    raft::fsm_output output1, output2;
-    raft::vote_request vreq;
-    raft::vote_reply vrepl;
+    raft::fsm_output output1;
     raft::append_request areq;
-    raft::append_reply arepl;
     raft::log_entry_ptr lep;
 
     failure_detector fd;
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg({id1, id2, id3});
-    raft::log log1{raft::snapshot{.config = cfg}};
-    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), fd, fsm_cfg_pre);
-    raft::log log2{raft::snapshot{.config = cfg}};
-    raft::fsm fsm2(id2, term_t{}, server_id{}, std::move(log2), fd, fsm_cfg_pre);
 
-    // XXX elect 1, then 2, then 1
+	// make 1 leader @ term 3
+    raft::log_entry_ptr lep1 = seastar::make_lw_shared<log_entry>(log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}});
+    raft::log_entry_ptr lep2 = seastar::make_lw_shared<log_entry>(log_entry{term_t{2}, index_t{2}, raft::log_entry::dummy{}});
+
+    raft::log log1{raft::snapshot{.config = cfg}, raft::log_entries{lep1, lep2}};
+    raft::fsm fsm1(id1, term_t{2}, server_id{}, std::move(log1), fd, fsm_cfg);
+
+    // elect 1
     election_timeout(fsm1);
-    election_timeout(fsm2);
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 2);
+    BOOST_CHECK(output1.term_and_vote->first == 3);
+    fsm1.step(id3, raft::vote_reply{term_t{3}, true, false});
+    BOOST_CHECK(fsm1.is_leader());
 
+    // fsm1 leader dummy, send, get reply, commit
+    output1 = fsm1.get_output();
+    lep = output1.log_entries.back();
+    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 2); // not received
+    for (auto& [id, msg] : output1.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        const raft::log_entry_ptr le = areq.entries.back();
+        BOOST_CHECK(le->idx == 3);
+        BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(le->data));
+        if (id == id3) {
+            fsm1.step(id3, raft::append_reply{areq.current_term, index_t{3},
+                    raft::append_reply::accepted{index_t{3}}});
+        }
+    }
+
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.committed.size() == 3);  // Dummy was committed
+
+	// pretend [id2's] an old leader trying to make progress; this entry is expected to be ignored.
+    fsm1.step(id2, raft::append_request{term_t{2}, id2, index_t{2}, term_t{2}});
+
+    BOOST_CHECK(fsm1.is_leader());
+    raft::command cmd = create_command(1);
+    fsm1.add_entry(std::move(cmd));
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.log_entries.size() == 1);
+    lep = output1.log_entries.back();
+    BOOST_CHECK(std::holds_alternative<raft::command>(lep->data));
 }
