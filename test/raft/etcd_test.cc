@@ -686,7 +686,7 @@ BOOST_AUTO_TEST_CASE(test_cannot_commit_without_new_term_entry) {
     election_timeout(fsm2);
     output2 = fsm2.get_output();
     BOOST_CHECK(output2.messages.size() == 4);
-    BOOST_CHECK(output1.term_and_vote);
+    BOOST_CHECK(output2.term_and_vote);
     BOOST_CHECK(output2.term_and_vote->first == 2);
     for (auto& [id, msg] : output2.messages) {
         BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
