@@ -34,7 +34,7 @@
 
 #include "raft/fsm.hh"
 
-using raft::term_t, raft::index_t, raft::server_id, raft::log_entry;
+using raft::term_t, raft::index_t, raft::server_id, raft::log_entry, raft::server_address_set;
 using seastar::make_lw_shared;
 
 void election_threshold(raft::fsm& fsm) {
@@ -73,6 +73,7 @@ raft::command create_command(T val) {
 }
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = false};
+raft::fsm_config fsm_cfg_pre{.append_request_threshold = 1, .enable_prevoting = true};
 
 class fsm_debug : public raft::fsm {
 public:
