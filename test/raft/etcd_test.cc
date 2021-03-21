@@ -1027,7 +1027,7 @@ BOOST_AUTO_TEST_CASE(test_old_messages) {
     BOOST_CHECK(std::holds_alternative<raft::command>(lep->data));
 }
 
-void test_proposal(int nodes, std::vector<int> accepting_int) {
+void handle_proposal(int nodes, std::vector<int> accepting_int) {
     std::unordered_set<raft::server_id> accepting;
     raft::fsm_output output1;
     raft::append_request areq;
@@ -1110,25 +1110,88 @@ void test_proposal(int nodes, std::vector<int> accepting_int) {
 // Checks follower logs with 3, 4, 5, and accepts
 BOOST_AUTO_TEST_CASE(test_proposal_1) {
 
-    test_proposal(3, {2, 3});  // 3 nodes, 2  responsive followers
+    handle_proposal(3, {2, 3});  // 3 nodes, 2  responsive followers
 }
 
 BOOST_AUTO_TEST_CASE(test_proposal_2) {
-    test_proposal(3, {2});     // 3 nodes, 1  responsive follower
+    handle_proposal(3, {2});     // 3 nodes, 1  responsive follower
 }
 
 BOOST_AUTO_TEST_CASE(test_proposal_3) {
-    test_proposal(3, {});      // 3 nodes, no responsive followers
+    handle_proposal(3, {});      // 3 nodes, no responsive followers
 }
 
 BOOST_AUTO_TEST_CASE(test_proposal_4) {
-    test_proposal(4, {4});     // 4 nodes, 1  responsive follower
+    handle_proposal(4, {4});     // 4 nodes, 1  responsive follower
 }
 
 BOOST_AUTO_TEST_CASE(test_proposal_5) {
-    test_proposal(5, {4, 5});  // 5 nodes, 2  responsive followers
+    handle_proposal(5, {4, 5});  // 5 nodes, 2  responsive followers
 }
 
 // TestProposalByProxy
 // TBD when we support add_entry() on follower
+
+// TestHandleMsgApp ensures:
+// 1. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm.
+// 2. If an existing entry conflicts with a new one (same index but different terms),
+//    delete the existing entry and all that follow it; append any new entries not already in the log.
+// 3. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry).
+
+void handle_msgapp(raft::append_request areq, int w_index, int w_commit, bool reject) {
+    std::unordered_set<raft::server_id> accepting;
+    raft::fsm_output output1;
+    raft::log_entry_ptr lep;
+
+    for (auto id: accepting_int) {
+        accepting.insert({utils::UUID(0, id)});
+    }
+
+    failure_detector fd;
+    raft::configuration cfg(ids);
+    // Create a follower fsm with log with 2 dummy entries
+    // storage.Append([]pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}})
+    raft::log_entry_ptr lep1 = seastar::make_lw_shared<log_entry>(log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}});
+    raft::log_entry_ptr lep2 = seastar::make_lw_shared<log_entry>(log_entry{term_t{2}, index_t{2}, raft::log_entry::dummy{}});
+    raft::log log1{raft::snapshot{.config = cfg}, raft::log_entries{lep1, lep2}};
+    // sm.becomeFollower(2, None) term:2 lead: None
+    raft::fsm fsm({utils::UUID(0, 1)}, term_t{2}, server_id{}, std::move(log1), fd, fsm_cfg);
+
+    BOOST_CHECK(fsm.is_follower());
+    fsm.step(id, std::move(areq));
+
+    // TODO: using communicate_until() propagate log to followers an check it matches
+};
+
+BOOST_AUTO_TEST_CASE(test_handle_msgapp_1) {
+#if 0
+struct append_request {
+    // The leader's term.
+    term_t current_term;
+    // So that follower can redirect clients
+    // In practice we do not need it since we should know sender's id anyway.
+    server_id leader_id;
+    // Index of the log entry immediately preceding new ones
+    index_t prev_log_idx;
+    // Term of prev_log_idx entry.
+    term_t prev_log_term;
+    // The leader's commit_idx.
+    index_t leader_commit_idx;
+    // Log entries to store (empty vector for heartbeat; may send more
+    // than one entry for efficiency).
+    std::vector<log_entry_ptr> entries;
+};
+#endif
+    //
+	// XXX term 2 and logTerm 3 ???
+	// {pb.Message{Type: pb.MsgApp, Term: 2, LogTerm: 3, Index: 2, Commit: 3},
+    // 2, 0, true},
+    // wIndex  wCommit wReject
+    // previous log mismatch
+    raft::log_entry_ptr lep = seastar::make_lw_shared<log_entry>(log_entry{term_t{3}, index_t{2}, raft::log_entry::dummy{}});
+
+    // {current_term, leader_id, prev_log_idx, prev_log_term, leader_commit_idx, entries}
+    // same term
+    handle_msgapp({2, 1, 1, 1, 2}, 
+}
 
