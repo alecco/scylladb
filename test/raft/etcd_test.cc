@@ -728,3 +728,96 @@ BOOST_AUTO_TEST_CASE(test_cannot_commit_without_new_term_entry) {
 // TODO TestCommitWithoutNewTermEntry tests the entries could be committed
 // when leader changes, no new proposal comes in.
 
+// TestDuelingCandidates
+BOOST_AUTO_TEST_CASE(test_dueling_candidates) {
+    raft::fsm_output output1, output3;
+    raft::vote_request vreq;
+    raft::vote_reply vrepl;
+    raft::append_request areq;
+    raft::log_entry_ptr lep;
+
+    failure_detector fd;
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), fd, fsm_cfg);
+    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::fsm fsm3(id3, term_t{}, server_id{}, std::move(log3), fd, fsm_cfg);
+
+    // fsm1 and fsm3 don't see each other
+    election_timeout(fsm1);
+    election_timeout(fsm3);
+
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 2);
+    for (auto& [id, msg] : output1.messages) {
+        BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
+        if (id == id2) {
+            fsm1.step(id2, raft::vote_reply{vreq.current_term, true});
+        }
+    }
+    // 1 becomes leader since it receives votes from 1 and 2
+    BOOST_CHECK(fsm1.is_leader());
+
+    // fsm1 leader dummy
+    output1 = fsm1.get_output();
+    lep = output1.log_entries.back();
+    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 2);
+    // Dummy from fsm1 idx 1 term 1
+    for (auto& [id, msg] : output1.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        const raft::log_entry_ptr le = areq.entries.back();
+        BOOST_CHECK(le->idx == 1);
+        BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(le->data));
+        if (id == id2) {
+            fsm1.step(id2, raft::append_reply{areq.current_term, index_t{1},
+                    raft::append_reply::accepted{index_t{1}}});
+        }
+    }
+
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.committed.size() == 1);  // Dummy was committed
+
+    BOOST_CHECK(fsm3.is_candidate());
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.messages.size() == 2);
+    for (auto& [id, msg] : output3.messages) {
+        BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
+        // fsm1 doesn't see the vote request and fsm2 rejects vote
+        if (id == id2) {
+            fsm3.step(id2, raft::vote_reply{fsm1.get_current_term(), false});
+        }
+    }
+    // 3 stays as candidate since it receives a vote from 3 and a rejection from 2
+    BOOST_CHECK(fsm3.is_candidate());
+
+    // candidate 3 now increases its term and tries to vote again
+    // we expect it to disrupt the leader 1 since it has a higher term
+    // 3 will be follower again since both 1 and 2 rejects its vote
+    // request since 3 does not have a long enough log
+    // NOTE: this is not the case, 1 rejects due to election timeout
+    election_timeout(fsm3);
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.messages.size() >= 2); // NOTE: there could've been more than one timeout
+    for (auto& [id, msg] : output3.messages) {
+        BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
+        BOOST_CHECK(vreq.current_term >= 2);
+        if (vreq.current_term == 1) {
+            continue;   // Skip lingering vote requests from previous round
+        }
+        // id2 rejects vote flat out
+        if (id == id2) {
+            fsm3.step(id2, raft::vote_reply{vreq.current_term, false});
+        }
+        // fsm1 should reject due to shorter log
+        if (id == id1) {
+            fsm1.step(id3, std::move(std::move(vreq)));
+            output1 = fsm1.get_output();
+            // Within minimum election timeout, 3's vote request is ignored
+            BOOST_CHECK(output1.messages.size() == 0);
+        }
+    }
+    // NOTE: 3 is still candidate
+}
