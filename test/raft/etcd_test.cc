@@ -819,3 +819,108 @@ BOOST_AUTO_TEST_CASE(test_dueling_candidates) {
     }
     // NOTE: 3 is still candidate
 }
+
+// TestDuelingPreCandidates
+BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
+    raft::fsm_output output1, output3;
+    raft::vote_request vreq;
+    raft::vote_reply vrepl;
+    raft::append_request areq;
+    raft::log_entry_ptr lep;
+
+    failure_detector fd;
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), fd, fsm_cfg_pre);
+    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::fsm fsm3(id3, term_t{}, server_id{}, std::move(log3), fd, fsm_cfg_pre);
+
+    // fsm1 and fsm3 don't see each other
+    election_timeout(fsm1);
+    election_timeout(fsm3);
+
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 2);
+    for (auto& [id, msg] : output1.messages) {
+        BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
+        BOOST_CHECK(vreq.is_prevote);
+        if (id == id2) {
+             fsm1.step(id2, raft::vote_reply{vreq.current_term, true, true});
+        }
+    }
+
+    // 1 gets term approval, does voting round
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 2);
+    for (auto& [id, msg] : output1.messages) {
+        BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
+        if (id == id2) {
+            fsm1.step(id2, raft::vote_reply{vreq.current_term, true}); // not prevote
+        }
+    }
+    // 1 becomes leader since it receives votes from 1 and 2
+    BOOST_CHECK(fsm1.is_leader());
+
+    // fsm1 leader dummy
+    output1 = fsm1.get_output();
+    lep = output1.log_entries.back();
+    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 2);
+    // Dummy from fsm1 idx 1 term 1
+    for (auto& [id, msg] : output1.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        const raft::log_entry_ptr le = areq.entries.back();
+        BOOST_CHECK(le->idx == 1);
+        BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(le->data));
+        if (id == id2) {
+            fsm1.step(id2, raft::append_reply{areq.current_term, index_t{1},
+                    raft::append_reply::accepted{index_t{1}}});
+        }
+    }
+
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.committed.size() == 1);  // Dummy was committed
+
+
+    // 3 campaigns then reverts to follower when its PreVote is rejected
+    BOOST_CHECK(fsm3.is_candidate());
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.messages.size() == 2);
+    for (auto& [id, msg] : output3.messages) {
+        BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
+        // fsm1 doesn't see the vote request and fsm2 rejects vote
+        if (id == id2) {
+            fsm3.step(id2, raft::vote_reply{fsm1.get_current_term(), false, true});
+        }
+    }
+
+    // 3 reverts to follower
+    BOOST_CHECK(fsm3.is_follower());
+
+    // network recovers, now 1 and 3 see each other (1 will reject prevote req)
+
+    // Candidate 3 now increases its term and tries to vote again.
+    // With PreVote, it does not disrupt the leader.
+    election_timeout(fsm3);
+    BOOST_CHECK(fsm3.is_candidate());
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.messages.size() >= 2);
+    for (auto& [id, msg] : output3.messages) {
+        BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(msg));
+        // Both 1 and 2 ignore 3's prevote request as leader 1 is alive
+        if (id == id1) {
+            fsm1.step(id3, std::move(vreq));
+            output1 = fsm1.get_output();
+            BOOST_CHECK(output1.messages.size() == 0);  // Ignored
+        }
+    }
+    // TODO: log propagation check afterwards once we have communicate*()
+}
+
+// TestCandidateConcede
+// TBD once we have heartbeat
+
+// TestSingleNodeCandidate (fsm test)
+
