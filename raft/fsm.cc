@@ -308,14 +308,22 @@ void fsm::advance_stable_idx(index_t idx) {
     index_t prev_stable_idx = _log.stable_idx();
     _log.stable_to(idx);
     logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
+    // If this server is leader and is part of the current
+    // configuration, update it's progress and optionally
+    // commit new entries.
     if (is_leader()) {
-        replicate();
         if (leader_state().tracker.leader_progress()) {
-            // If this server is leader and is part of the current
-            // configuration, update it's progress and optionally
-            // commit new entries.
             leader_state().tracker.leader_progress()->accepted(idx);
+            // Advancing the stable index not only creates new entries
+            // to append to replicas' logs, but may also advance
+            // the leader commit index. Update the commit index first
+            // to be able to replicate it at once.
             maybe_commit();
+        }
+        // Committing new entries may cause the leader to step down.
+        // Only replicate() if we are still the leader.
+        if (is_leader()) {
+            replicate();
         }
     }
 }
