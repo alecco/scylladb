@@ -48,6 +48,7 @@
 //          new_leader{x}            elect x as new leader
 //          partition{a,b,c}         Only servers a,b,c are connected
 //          partition{a,leader{b},c} Only servers a,b,c are connected, and make b leader
+//          set_config{a,b,c}        Change configuration on leader
 //
 //      run_test
 //      - Creates the servers and initializes logs and snapshots
@@ -461,8 +462,10 @@ struct leader {
     size_t id;
 };
 using partition = std::vector<std::variant<leader,int>>;
-// TODO: config change
-using update = std::variant<entries, new_leader, partition>;
+
+using set_config = std::vector<size_t>;
+
+using update = std::variant<entries, new_leader, partition, set_config>;
 
 struct initial_log {
     std::vector<log_entry> le;
@@ -484,27 +487,33 @@ struct test_case {
 };
 
 future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        connected& connected, std::optional<size_t>& leader) {
+        connected& connected, std::unordered_set<size_t>& in_configuration,
+        std::optional<size_t>& leader) {
     // Wait for leader log to propagate
     if (!leader.has_value()) {
         co_return;
     }
     auto leader_log_idx = rafts[*leader].first->log_last_idx();
     for (size_t s = 0; s < rafts.size(); ++s) {
-        if (s != *leader && connected(to_raft_id(s), to_raft_id(*leader))) {
+        if (s != leader && connected(to_raft_id(s), to_raft_id(*leader)) &&
+                in_configuration.contains(s)) {
             co_await rafts[s].first->wait_log_idx(leader_log_idx);
         }
     }
 }
 
-future<> elapse_elections(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+future<> elapse_elections(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+        std::unordered_set<size_t>& in_configuration) {
     for (size_t s = 0; s < rafts.size(); ++s) {
-        co_await rafts[s].first->elapse_election();
+        if (in_configuration.contains(s)) {
+            co_await rafts[s].first->elapse_election();
+        }
     }
 }
 
 future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        connected& connected, std::optional<size_t> leader, size_t new_leader) {
+        connected& connected, std::unordered_set<size_t>& in_configuration,
+        std::optional<size_t> leader, size_t new_leader) {
     BOOST_CHECK_MESSAGE(new_leader < rafts.size(),
             format("Wrong next leader value {}", new_leader));
 
@@ -514,7 +523,7 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
         // Disconnect current leader from everyone
         connected.disconnect(to_raft_id(*leader));
         // Make move all nodes past election threshold, also making old leader follower
-        co_await elapse_elections(rafts);
+        co_await elapse_elections(rafts, in_configuration);
         // Consume leader output messages since a stray append might make new leader step down
         co_await later();                 // yield
         rafts[new_leader].first->make_candidate();
@@ -527,7 +536,7 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
         connected.restore(std::move(save_connections));
     } else  {
         // Make move all nodes past election threshold
-        co_await elapse_elections(rafts);
+        co_await elapse_elections(rafts, in_configuration);
         rafts[new_leader].first->make_candidate();
         co_await rafts[new_leader].first->elect_me_leader();
     }
@@ -546,6 +555,51 @@ void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
     for (auto& ticker: tickers) {
         ticker.rearm_periodic(tick_delta);
     }
+}
+
+future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+        size_t total_values, connected& connected, std::unordered_set<size_t>& in_configuration,
+        lw_shared_ptr<snapshots> snapshots, lw_shared_ptr<persisted_snapshots> persisted_snapshots,
+        bool packet_drops, set_config sc, std::optional<size_t>& leader,
+        std::vector<seastar::timer<lowres_clock>>& tickers) {
+
+    BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
+    BOOST_CHECK_MESSAGE(leader.has_value(), "Configuration change without a leader not supported");
+    raft::server_address_set set;
+    std::unordered_set<size_t> new_config;
+    for (auto s: sc) {
+        new_config.insert(s);
+        set.insert(to_server_address(s));
+        BOOST_CHECK_MESSAGE(s < rafts.size(),
+                format("Configuration element {} past node limit {}", s, rafts.size() - 1));
+    }
+    BOOST_CHECK_MESSAGE(new_config.contains(*leader) || sc.size() < (rafts.size()/2 + 1),
+            "New configuration without old leader and below quorum size (no election)");
+    tlogger.debug("Changing configuration on leader {}", *leader);
+    co_await rafts[*leader].first->set_configuration(std::move(set));
+
+    // Now we know joint configuration was applied
+    // Add a dummy entry to confirm new configuration was committed
+    try {
+        co_await rafts[*leader].first->add_entry(create_command(dummy_command),
+                raft::wait_type::committed);
+    } catch (raft::not_a_leader e) {} // leader stepped down, implying config fully changed
+
+    // Reset removed nodes
+    pause_tickers(tickers);  // stop all tickers
+    for (auto s: in_configuration) {
+        if (!new_config.contains(s)) {
+            tickers[s].cancel();
+            co_await rafts[s].first->abort();
+            rafts[s] = create_raft_server(to_raft_id(s), apply_changes, initial_state{.log = {}},
+                    total_values, connected, snapshots, persisted_snapshots, packet_drops);
+            co_await rafts[s].first->start();
+            tickers[s].set_callback([&rafts, s] { rafts[s].first->tick(); });
+        }
+    }
+    restart_tickers(tickers); // start all tickers
+
+    co_return new_config;
 }
 
 // Run test case (name, nodes, leader, initial logs, updates)
@@ -607,6 +661,12 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         });
     }
 
+    // Keep track of what servers are in the current configuration
+    std::unordered_set<size_t> in_configuration;
+    for (size_t s = 0; s < test.nodes; ++s) {
+        in_configuration.insert(s);
+    }
+
     BOOST_TEST_MESSAGE("Electing first leader " << *leader);
     rafts[*leader].first->make_candidate();
     co_await rafts[*leader].first->elect_me_leader();
@@ -617,6 +677,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         if (std::holds_alternative<entries>(update)) {
             auto n = std::get<entries>(update);
             BOOST_CHECK_MESSAGE(leader.has_value(), format("No leader for {} new entries", n));
+            BOOST_CHECK_MESSAGE(in_configuration.contains(*leader),
+                    format("Current leader {} is not in configuration", *leader));
             std::vector<int> values(n);
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
@@ -625,15 +687,16 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                 return rafts[*leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
-            co_await wait_log(rafts, connected, leader);
+            co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
-            co_await wait_log(rafts, connected, leader);
+            co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
-            leader = co_await elect_new_leader(rafts, connected, leader, next_leader);
+            leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
+                    next_leader);
             restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
-            co_await wait_log(rafts, connected, leader);
+            co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
             auto p = std::get<partition>(update);
             connected.connect_all();
@@ -658,20 +721,40 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                 }
             }
             if (have_new_leader) {
-                leader = co_await elect_new_leader(rafts, connected, leader, new_leader.id);
+                leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
+                        new_leader.id);
             }
             restart_tickers(tickers);
+
+        } else if (std::holds_alternative<set_config>(update)) {
+            co_await wait_log(rafts, connected, in_configuration, leader);
+            auto sc = std::get<set_config>(update);
+            in_configuration = co_await change_configuration(rafts, test.total_values, connected,
+                    in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers);
         }
     }
 
+    // Reconnect and bring all nodes back into configuration, if needed
     connected.connect_all();
 
-    BOOST_TEST_MESSAGE("Appending remaining values");
     if (!leader.has_value()) {
-        BOOST_TEST_MESSAGE("No leader, electing 0 to add remaining entries");
-        rafts[0].first->make_candidate();
-        co_await rafts[0].first->elect_me_leader();
+        // Elect a leader
+        size_t node = *in_configuration.begin(); // pick a random node in configuration
+        BOOST_TEST_MESSAGE(format("No leader, electing {} to add remaining entries", node));
+        leader = co_await elect_new_leader(rafts, connected, in_configuration, leader, node);
     }
+
+    if (in_configuration.size() < test.nodes) {
+        set_config sc;
+        for (size_t s = 0; s < test.nodes; ++s) {
+            sc.push_back(s);
+        }
+        in_configuration = co_await change_configuration(rafts, test.total_values, connected,
+                in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader,
+                tickers);
+    }
+
+    BOOST_TEST_MESSAGE("Appending remaining values");
     if (next_val < test.total_values) {
         // Send remaining updates
         std::vector<int> values(test.total_values - next_val);
@@ -886,6 +969,31 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
         {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
+    , false, false);
+}
+
+// Check removing all followers, add entry, bring back one follower and make it leader
+RAFT_TEST_CASE(conf_changes_1, (test_case{
+         .nodes = 3,
+         .updates = {set_config{0}, entries{1}, set_config{0,1}, entries{1},
+                     new_leader{1}, entries{1}}}));
+
+// Check removing leader with entries, add entries, remove follower and add back first node
+RAFT_TEST_CASE(conf_changes_2, (test_case{
+         .nodes = 3,
+         .updates = {entries{1}, new_leader{1}, set_config{1,2}, entries{1},
+                     set_config{0,1}, entries{1}}}));
+
+// Check removing a node from configuration, adding entries; cycle for all combinations
+SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
+    replication_test(
+        {.nodes = 4,
+         .updates = {set_config{0,1,2}, entries{2}, new_leader{1},
+                     set_config{1,2,3}, entries{2}, new_leader{2},
+                     set_config{2,3,0}, entries{2}, new_leader{3},
+                     // TODO: find out why it breaks in release mode
+                     // set_config{3,0,1}, entries{2}, new_leader{0}
+                     }}
     , false, false);
 }
 
