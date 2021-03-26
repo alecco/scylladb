@@ -266,6 +266,7 @@ future<> server_impl::add_entry_internal(T command, wait_type type) {
     // This will track the commit/apply status of the entry
     auto [it, inserted] = container.emplace(e.idx, op_status{e.term, promise<>()});
     assert(inserted);
+fmt::print("{} server_impl::add_entry_internal 5\n", _id);
     co_return co_await it->second.done.get_future();
 }
 
