@@ -48,6 +48,7 @@
 //          new_leader{x}            elect x as new leader
 //          partition{a,b,c}         Only servers a,b,c are connected
 //          partition{a,leader{b},c} Only servers a,b,c are connected, and make b leader
+//          set_config{a,b,c}        Change configuration on leader
 //
 //      run_test
 //      - Creates the servers and initializes logs and snapshots
@@ -406,8 +407,19 @@ struct leader {
     size_t id;
 };
 using partition = std::vector<std::variant<leader,int>>;
-// TODO: config change
-using update = std::variant<entries, new_leader, partition>;
+
+struct set_config {
+    raft::server_address_set set;
+    // Change config for all nodes
+    template<typename ...Ints>
+    set_config(Ints... vals) {
+        (set.insert(to_server_address(vals)), ...);
+    }
+    // TODO: change config for one node when/if it's allowed
+    // set_config(int node, std::vector<int> vals)
+};
+
+using update = std::variant<entries, new_leader, partition, set_config>;
 
 struct initial_log {
     std::vector<log_entry> le;
@@ -604,6 +616,13 @@ future<> run_test(test_case test, bool packet_drops) {
                 }
                 tlogger.debug("confirmed new leader on {}", leader);
             }
+            restart_tickers(tickers);
+
+        } else if (std::holds_alternative<set_config>(update)) {
+            pause_tickers(tickers);
+            set_config sc = std::get<set_config>(update);
+            tlogger.debug("changing configuration on leader {}", leader);
+            co_await rafts[leader].first->set_configuration(std::move(sc.set));
             restart_tickers(tickers);
         }
     }
@@ -813,6 +832,14 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
         {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
+    , false);
+}
+
+// Check removing a node from configuration (still connected) and adding entries
+SEASTAR_THREAD_TEST_CASE(test_remove_node) {
+    replication_test(
+        {.nodes = 3,
+         .updates = {entries{5}, set_config{0,1}, entries{5}, set_config{0,1,2}}}
     , false);
 }
 
