@@ -48,6 +48,7 @@
 //          new_leader{x}            elect x as new leader
 //          partition{a,b,c}         Only servers a,b,c are connected
 //          partition{a,leader{b},c} Only servers a,b,c are connected, and make b leader
+//          set_config{a,b,c}        Change configuration on leader
 //
 //      run_test
 //      - Creates the servers and initializes logs and snapshots
@@ -406,8 +407,10 @@ struct leader {
     size_t id;
 };
 using partition = std::vector<std::variant<leader,int>>;
-// TODO: config change
-using update = std::variant<entries, new_leader, partition>;
+
+using set_config = std::vector<size_t>;
+
+using update = std::variant<entries, new_leader, partition, set_config>;
 
 struct initial_log {
     std::vector<log_entry> le;
@@ -429,14 +432,40 @@ struct test_case {
 };
 
 future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        connected& connected, size_t leader) {
+        connected& connected, std::unordered_set<size_t>& in_configuration, size_t leader) {
     // Wait for leader log to propagate
     auto leader_log_idx = rafts[leader].first->log_last_idx();
     for (size_t s = 0; s < rafts.size(); ++s) {
-        if (s != leader && connected(to_raft_id(s))) {
+        if (s != leader && connected(to_raft_id(s)) && in_configuration.contains(s)) {
             co_await rafts[s].first->wait_log_idx(leader_log_idx);
         }
     }
+}
+
+void elapse_elections(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+        std::unordered_set<size_t>& in_configuration) {
+    for (size_t s = 0; s < rafts.size(); ++s) {
+        if (in_configuration.contains(s)) {
+            rafts[s].first->elapse_election();
+        }
+    }
+}
+
+future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+        connected& connected, std::unordered_set<size_t>& in_configuration, size_t& leader,
+        size_t new_leader) {
+    BOOST_CHECK_MESSAGE(new_leader < rafts.size(),
+            format("Wrong next leader value {}", new_leader));
+    if (new_leader != leader) {
+        // Make current leader a follower: disconnect, timeout, re-connect
+        connected.disconnect(to_raft_id(leader));
+        elapse_elections(rafts, in_configuration);
+        co_await rafts[new_leader].first->elect_me_leader();
+        tlogger.debug("confirmed leader on {}", new_leader);
+        connected.connect(to_raft_id(leader));
+        leader = new_leader;
+    }
+    co_return new_leader;
 }
 
 void pause_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
@@ -509,6 +538,12 @@ future<> run_test(test_case test, bool packet_drops) {
         });
     }
 
+    // Keep track of what servers are in the current configuration
+    std::unordered_set<size_t> in_configuration;
+    for (size_t s = 0; s < test.nodes; ++s) {
+        in_configuration.insert(s);
+    }
+
     BOOST_TEST_MESSAGE("Electing first leader " << leader);
     co_await rafts[leader].first->elect_me_leader();
     BOOST_TEST_MESSAGE("Processing updates");
@@ -525,28 +560,15 @@ future<> run_test(test_case test, bool packet_drops) {
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
-            co_await wait_log(rafts, connected, leader);
+            co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
-            co_await wait_log(rafts, connected, leader);
+            co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
-            if (next_leader != leader) {
-                BOOST_CHECK_MESSAGE(next_leader < rafts.size(),
-                        format("Wrong next leader value {}", next_leader));
-                co_await wait_log(rafts, connected, in_configuration, leader);
-                // Make current leader a follower: disconnect, timeout, re-connect
-                connected.disconnect(to_raft_id(leader));
-                for (size_t s = 0; s < test.nodes; ++s) {
-                    rafts[s].first->elapse_election();
-                }
-                co_await rafts[next_leader].first->elect_me_leader();
-                connected.connect(to_raft_id(leader));
-                tlogger.debug("confirmed leader on {}", next_leader);
-                leader = next_leader;
-            }
+            leader = co_await elect_new_leader(rafts, connected, in_configuration, leader, next_leader);
             restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
-            co_await wait_log(rafts, connected, leader);
+            co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
             auto p = std::get<partition>(update);
             connected.connect_all();
@@ -572,12 +594,7 @@ future<> run_test(test_case test, bool packet_drops) {
             }
             if (have_new_leader && new_leader.id != leader) {
                 // New leader specified, elect it
-                for (size_t s = 0; s < test.nodes; ++s) {
-                    rafts[s].first->elapse_election();
-                }
-                co_await rafts[new_leader.id].first->elect_me_leader();
-                tlogger.debug("confirmed leader on {}", new_leader.id);
-                leader = new_leader.id;
+                leader = co_await elect_new_leader(rafts, connected, in_configuration, leader, new_leader.id);
             } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
                 // Old leader disconnected and not specified new, free election
                 for (size_t s = 0; s < test.nodes; ++s) {
@@ -599,10 +616,34 @@ future<> run_test(test_case test, bool packet_drops) {
                 tlogger.debug("confirmed new leader on {}", leader);
             }
             restart_tickers(tickers);
+
+        } else if (std::holds_alternative<set_config>(update)) {
+            co_await wait_log(rafts, connected, in_configuration, leader);
+            pause_tickers(tickers);
+            set_config sc = std::get<set_config>(update);
+            raft::server_address_set set;
+            in_configuration.clear();
+            for (auto s: sc) {
+                in_configuration.insert(s);
+                set.insert(to_server_address(s));
+                BOOST_CHECK_MESSAGE(s < test.nodes,
+                        format("Configuration element {} past node limit {}", s, test.nodes - 1));
+            }
+            tlogger.debug("changing configuration on leader {}", leader);
+            co_await rafts[leader].first->set_configuration(std::move(set));
+            restart_tickers(tickers);
         }
     }
 
+    // Reconnect and bring all nodes back into configuration, if needed
     connected.connect_all();
+    if (in_configuration.size() < test.nodes) {
+        raft::server_address_set set;
+        for (size_t s = 0; s < test.nodes; ++s) {
+            set.insert(to_server_address(s));
+        }
+        co_await rafts[leader].first->set_configuration(std::move(set));
+    }
 
     BOOST_TEST_MESSAGE("Appending remaining values");
     if (next_val < test.total_values) {
@@ -808,6 +849,15 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
         {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
+    , false);
+}
+
+// Check removing a node from configuration (still connected) and adding entries
+// TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
+SEASTAR_THREAD_TEST_CASE(test_remove_node) {
+    replication_test(
+        {.nodes = 3,
+         .updates = {set_config{0,1}, entries{2}, set_config{1}, new_leader{1}, set_config{1,2}, entries{2}}}
     , false);
 }
 
