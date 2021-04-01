@@ -641,7 +641,9 @@ future<> run_test(test_case test, bool packet_drops) {
             co_await rafts[leader].first->set_configuration(std::move(set));
             // Now we know joint configuration was applied
             // Add a dummy entry to confirm new configuration was committed
-            co_await rafts[leader].first->add_entry(raft::log_entry::dummy{},
+            // XXX XXX XXX here catch if exception because not leader,
+            //             leader stepped down and config fully changed, too
+            co_await rafts[leader].first->add_entry(create_command(dummy_command),
                     raft::wait_type::committed);
         }
     }
@@ -654,6 +656,8 @@ future<> run_test(test_case test, bool packet_drops) {
             set.insert(to_server_address(s));
         }
         co_await rafts[leader].first->set_configuration(std::move(set));
+        co_await rafts[leader].first->add_entry(create_command<int>(dummy_command),
+                raft::wait_type::committed);
     }
 
     BOOST_TEST_MESSAGE("Appending remaining values");
@@ -867,7 +871,18 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
 SEASTAR_THREAD_TEST_CASE(test_remove_node) {
     replication_test(
         {.nodes = 3,
-         .updates = {set_config{0,1}, entries{2}, set_config{1}, new_leader{1}, set_config{1,2}, entries{2}}}
+         // XXX .updates = {set_config{0,1}, entries{2}, set_config{1}, new_leader{1}, set_config{1,2}, entries{2}}}
+         .updates = {
+         set_config{0,1},
+#if 0
+         entries{1},
+                    set_config{0}, entries{1},
+                    set_config{0,1}, entries{1},
+                    set_config{0,1,2}, entries{1}, new_leader{1}, entries{1},
+                    set_config{1,2},
+                    entries{1} // XXX BOOM
+#endif
+                    }}
     , false);
 }
 
