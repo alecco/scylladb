@@ -157,6 +157,7 @@ void fsm::become_leader() {
 }
 
 void fsm::become_follower(server_id leader) {
+// fmt::print("{} XXX become_follower ************************************************\n", _my_id);
     _current_leader = leader;
     _state = follower{};
     if (_current_leader) {
@@ -336,7 +337,9 @@ void fsm::advance_stable_idx(index_t idx) {
 }
 
 void fsm::maybe_commit() {
+// fmt::print("{} maybe_commit 1\n", _my_id);
 
+    // XXX _state is not leader, BOOM!
     index_t new_commit_idx = leader_state().tracker.committed(_commit_idx);
 
     if (new_commit_idx <= _commit_idx) {
@@ -546,10 +549,12 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 
     progress.commit_idx = reply.commit_idx;
 
+fmt::print("{} append_entries_reply 1\n", _my_id);
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
         // accepted
         index_t last_idx = std::get<append_reply::accepted>(reply.result).last_new_idx;
 
+fmt::print("append_entries_reply[{}->{}]: accepted match={} last index={}\n", _my_id, from, progress.match_idx, last_idx);
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}",
             _my_id, from, progress.match_idx, last_idx);
 
@@ -557,6 +562,11 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 
         progress.become_pipeline();
 
+fmt::print("{} append_entries_reply accepted 1\n", _my_id);
+        // check if any new entry can be committed
+        maybe_commit(); // XXX BOOM we are not leader so we can't commit
+
+fmt::print("{} append_entries_reply accepted 2 if (leader_state().stepdown {} && !leader_state().timeout_now_sent {} && progress.can_vote {} && progress.match_idx == _log.last_idx() {}) -> {}\n", _my_id, leader_state().stepdown, !leader_state().timeout_now_sent, progress.can_vote, progress.match_idx == _log.last_idx(), (leader_state().stepdown && !leader_state().timeout_now_sent && progress.can_vote && progress.match_idx == _log.last_idx()));
         // If a leader is stepping down, transfer the leadership
         // to a first voting node that has fully replicated log.
         if (leader_state().stepdown && !leader_state().timeout_now_sent &&
@@ -564,18 +574,18 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
             send_timeout_now(progress.id);
         }
 
-        // check if any new entry can be committed
-        maybe_commit();
-
+fmt::print("{} append_entries_reply accepted 3\n", _my_id);
         // We may have resigned leadership if a stepdown process completed
         // while the leader is no longer part of the configuration.
         if (!is_leader()) {
             return;
         }
+fmt::print("{} append_entries_reply accepted 4\n", _my_id);
     } else {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
 
+fmt::print("append_entries_reply[{}->{}]: rejected match={} index={}\n", _my_id, from, progress.match_idx, rejected.non_matching_idx);
         logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}",
             _my_id, from, progress.match_idx, rejected.non_matching_idx);
 
@@ -596,15 +606,18 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         assert(progress.next_idx != progress.match_idx);
     }
 
+fmt::print("{} append_entries_reply 6\n", _my_id);
     // We may have just applied a configuration that removes this
     // follower, so re-track it.
     opt_progress = leader_state().tracker.find(from);
     if (opt_progress != nullptr) {
+fmt::print("append_entries_reply[{}->{}]: next_idx={}, match_idx={}\n", _my_id, from, opt_progress->next_idx, opt_progress->match_idx);
         logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}",
             _my_id, from, opt_progress->next_idx, opt_progress->match_idx);
 
         replicate_to(*opt_progress, false);
     }
+fmt::print("{} append_entries_reply END\n", _my_id);
 }
 
 void fsm::request_vote(server_id from, vote_request&& request) {

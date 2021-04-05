@@ -347,27 +347,35 @@ template <typename Message>
 future<> server_impl::send_message(server_id id, Message m) {
     return std::visit([this, id] (auto&& m) {
         using T = std::decay_t<decltype(m)>;
+if (_id == server_id{utils::UUID{0, 2}}) fmt::print("{} send_message 1\n", _id);
         if constexpr (std::is_same_v<T, append_reply>) {
+fmt::print("{} append_reply\n", _id);
             _stats.append_entries_reply_sent++;
             return _rpc->send_append_entries_reply(id, m);
         } else if constexpr (std::is_same_v<T, append_request>) {
+fmt::print("{} append_request\n", _id);
             _stats.append_entries_sent++;
             return _rpc->send_append_entries(id, m);
         } else if constexpr (std::is_same_v<T, vote_request>) {
+fmt::print("{} vote_request\n", _id);
             _stats.vote_request_sent++;
             return _rpc->send_vote_request(id, m);
         } else if constexpr (std::is_same_v<T, vote_reply>) {
+fmt::print("{} vote_reply\n", _id);
             _stats.vote_request_reply_sent++;
             return _rpc->send_vote_reply(id, m);
         } else if constexpr (std::is_same_v<T, timeout_now>) {
+fmt::print("{} timeout_now\n", _id);
             _stats.timeout_now_sent++;
             return _rpc->send_timeout_now(id, m);
         } else if constexpr (std::is_same_v<T, install_snapshot>) {
+fmt::print("{} install_snapshot\n", _id);
             _stats.install_snapshot_sent++;
             // Send in the background.
             send_snapshot(id, std::move(m));
             return make_ready_future<>();
         } else if constexpr (std::is_same_v<T, snapshot_reply>) {
+fmt::print("{} snap reply\n", _id);
             _stats.snapshot_reply_sent++;
             assert(_snapshot_application_done);
             // Send a reply to install_snapshot after
@@ -380,7 +388,9 @@ future<> server_impl::send_message(server_id id, Message m) {
             static_assert(!sizeof(T*), "not all message types are handled");
             return make_ready_future<>();
         }
+if (_id == server_id{utils::UUID{0, 2}}) fmt::print("{} send_message visitor END\n", _id);
     }, std::move(m));
+if (_id == server_id{utils::UUID{0, 2}}) fmt::print("{} send_message END\n", _id);
 }
 
 static configuration_diff diff_address_sets(const server_address_set& prev, const server_address_set& current) {
@@ -465,6 +475,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 }
             }
 
+if (_id == server_id{utils::UUID{0, 2}}) fmt::print("{} io fiber 3\n", _id);
             if (batch.messages.size()) {
                 // After entries are persisted we can send messages.
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {

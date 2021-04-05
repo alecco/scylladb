@@ -281,10 +281,13 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+if (_id == raft::server_id{utils::UUID{0, 2}}) fmt::print("{} send_append_entries_reply {} 1\n", _id, id);
         if (!_connected(id) || !_connected(_id) || (_packet_drops && !(rand() % 5))) {
             return make_ready_future<>();
         }
+if (_id == raft::server_id{utils::UUID{0, 2}}) fmt::print("{} send_append_entries_reply {} 2\n", _id, id);
         net[id]->_client->append_entries_reply(_id, std::move(reply));
+if (_id == raft::server_id{utils::UUID{0, 2}}) fmt::print("{} send_append_entries_reply {} 3\n", _id, id);
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
@@ -561,6 +564,7 @@ future<> run_test(test_case test, bool packet_drops) {
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
             auto n = std::get<entries>(update);
+fmt::print("============ adding {} entries ============\n", n);
             std::vector<int> values(n);
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
@@ -570,12 +574,15 @@ future<> run_test(test_case test, bool packet_drops) {
             });
             next_val += n;
             co_await wait_log(rafts, connected, in_configuration, leader);
+fmt::print("============ adding {} entries DONE ============\n", n);
         } else if (std::holds_alternative<new_leader>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
+fmt::print("============ new leader {} ============\n", next_leader);
             leader = co_await elect_new_leader(rafts, connected, in_configuration, leader, next_leader);
             restart_tickers(tickers);
+fmt::print("============ new leader {} DONE ============\n", next_leader);
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
@@ -629,6 +636,7 @@ future<> run_test(test_case test, bool packet_drops) {
         } else if (std::holds_alternative<set_config>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             set_config sc = std::get<set_config>(update);
+fmt::print("============ set_config {} ============\n", std::vector<int>(sc.begin(), sc.end()));
             raft::server_address_set set;
             in_configuration.clear();
             for (auto s: sc) {
@@ -637,14 +645,18 @@ future<> run_test(test_case test, bool packet_drops) {
                 BOOST_CHECK_MESSAGE(s < test.nodes,
                         format("Configuration element {} past node limit {}", s, test.nodes - 1));
             }
+fmt::print("changing configuration on leader {}\n", leader);
             tlogger.debug("changing configuration on leader {}", leader);
             co_await rafts[leader].first->set_configuration(std::move(set));
             // Now we know joint configuration was applied
             // Add a dummy entry to confirm new configuration was committed
-            // XXX XXX XXX here catch if exception because not leader,
-            //             leader stepped down and config fully changed, too
-            co_await rafts[leader].first->add_entry(create_command(dummy_command),
-                    raft::wait_type::committed);
+            try {
+                co_await rafts[leader].first->add_entry(create_command(dummy_command),
+                        raft::wait_type::committed);
+            } catch(raft::not_a_leader) {
+fmt::print("XXX Leader {} stepped down\n", leader);
+            }   // Leader steps down when out of new config
+fmt::print("============ set_config {} END ============\n", std::vector<int>(sc.begin(), sc.end()));
         }
     }
 
@@ -873,12 +885,10 @@ SEASTAR_THREAD_TEST_CASE(test_remove_node) {
         {.nodes = 3,
          // XXX .updates = {set_config{0,1}, entries{2}, set_config{1}, new_leader{1}, set_config{1,2}, entries{2}}}
          .updates = {
-         set_config{0,1},
-#if 0
-         entries{1},
-                    set_config{0}, entries{1},
                     set_config{0,1}, entries{1},
-                    set_config{0,1,2}, entries{1}, new_leader{1}, entries{1},
+                    set_config{1,2}, new_leader{1},
+#if 0
+                    entries{1},
                     set_config{1,2},
                     entries{1} // XXX BOOM
 #endif

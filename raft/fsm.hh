@@ -289,6 +289,7 @@ protected: // For testing
     void become_follower(server_id leader);
 
     leader& leader_state() {
+if (!std::holds_alternative<leader>(_state)) fmt::print("{} leader_state? {} <<<<<<<<<<<<<<<<<<<<<<<\n", _my_id, std::holds_alternative<leader>(_state));
         return std::get<leader>(_state);
     }
 
@@ -411,6 +412,7 @@ void fsm::step(server_id from, const leader& s, Message&& msg) {
         // Got AppendEntries RPC from self
         append_entries(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, append_reply>) {
+fmt::print("{} step reply\n", _my_id);
         append_entries_reply(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, vote_request>) {
         request_vote(from, std::move(msg));
