@@ -239,7 +239,9 @@ private:
     void update_current_term(term_t current_term);
 
     void check_is_leader() const {
+fmt::print("{} fsm::check_is_leader 1? {}\n", _my_id, is_leader());
         if (!is_leader()) {
+fmt::print("{} fsm::check_is_leader 2 not leader {}\n", _current_leader, _my_id);
             throw not_a_leader(_current_leader);
         }
     }
@@ -407,6 +409,7 @@ public:
 
 template <typename Message>
 void fsm::step(server_id from, const leader& s, Message&& msg) {
+fmt::print("{} step() from leader ---- {}\n", _my_id, from);
     if constexpr (std::is_same_v<Message, append_request>) {
         // Got AppendEntries RPC from self
         append_entries(from, std::move(msg));
@@ -424,6 +427,7 @@ void fsm::step(server_id from, const leader& s, Message&& msg) {
 
 template <typename Message>
 void fsm::step(server_id from, const candidate& c, Message&& msg) {
+fmt::print("{} step() from candidate ---- {}\n", _my_id, from);
     if constexpr (std::is_same_v<Message, vote_request>) {
         request_vote(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, vote_reply>) {
@@ -436,6 +440,7 @@ void fsm::step(server_id from, const candidate& c, Message&& msg) {
 
 template <typename Message>
 void fsm::step(server_id from, const follower& c, Message&& msg) {
+fmt::print("{} step() from follower ---- {}\n", _my_id, from);
     if constexpr (std::is_same_v<Message, append_request>) {
         // Got AppendEntries RPC from self
         append_entries(from, std::move(msg));
@@ -468,9 +473,11 @@ void fsm::step(server_id from, Message&& msg) {
     // that its term is out of date, it immediately reverts to
     // follower state. If a server receives a request with
     // a stale term number, it rejects the request.
+fmt::print("{} step() from server {}: msg current term {} vs current term {}\n", _my_id, from, msg.current_term, _current_term);
     if (msg.current_term > _current_term) {
         server_id leader{};
 
+fmt::print("{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
@@ -548,10 +555,12 @@ void fsm::step(server_id from, Message&& msg) {
                 // leader becomes idle.
                 _current_leader = from;
             }
+fmt::print("{} step() from server {} == current leader {} \n", _my_id, from, _current_leader);
             assert(_current_leader == from);
         }
     }
-
+        
+fmt::print("{} step() ? visitor ---- {}\n", _my_id, from);
     auto visitor = [this, from, msg = std::move(msg)](const auto& state) mutable {
         step(from, state, std::move(msg));
     };

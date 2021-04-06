@@ -142,7 +142,7 @@ private:
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
 
     // Drop waiter that we lost track of, can happen due to a snapshot transfer.
-    void drop_waiters(std::map<index_t, op_status>& waiters, index_t idx);
+    void drop_waiters(std::map<index_t, op_status>& waiters, std::optional<index_t> idx);
 
     // This fiber processes FSM output by doing the following steps in order:
     //  - persist the current term and vote
@@ -250,21 +250,27 @@ future<> server_impl::start() {
 
 template <typename T>
 future<> server_impl::add_entry_internal(T command, wait_type type) {
+fmt::print("{} An entry is submitted on a leader\n", _id);
     logger.trace("An entry is submitted on a leader");
 
     // Wait for a new slot to become available
     co_await _fsm->wait_max_log_size();
 
+fmt::print("{} An entry proceeds after wait\n", _id);
     logger.trace("An entry proceeds after wait");
 
     const log_entry& e = _fsm->add_entry(std::move(command));
 
+fmt::print("{} add_entry_internal 3\n", _id);
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
 
     // This will track the commit/apply status of the entry
     auto [it, inserted] = container.emplace(e.idx, op_status{e.term, promise<>()});
     assert(inserted);
-    co_return co_await it->second.done.get_future();
+fmt::print("{} add_entry_internal 4 waiting for future\n", _id);
+    co_return co_await it->second.done.get_future().then([this] () {  // XXX remove .then
+fmt::print("{} add_entry_internal 5 done\n", _id);
+    });
 }
 
 future<> server_impl::add_entry(command command, wait_type type) {
@@ -298,6 +304,7 @@ void server_impl::request_vote_reply(server_id from, vote_reply vote_reply) {
 
 void server_impl::timeout_now_request(server_id from, timeout_now timeout_now) {
     _stats.timeout_now_received++;
+fmt::print("{} timeout_now_request from {} ----\n", _id, from);
     _fsm->step(from, std::move(timeout_now));
 }
 
@@ -330,10 +337,10 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
     }
 }
 
-void server_impl::drop_waiters(std::map<index_t, op_status>& waiters, index_t idx) {
+void server_impl::drop_waiters(std::map<index_t, op_status>& waiters, std::optional<index_t> idx) {
     while (waiters.size() != 0) {
         auto it = waiters.begin();
-        if (it->first > idx) {
+        if (idx && it->first > *idx) {
             break;
         }
         auto [entry_idx, status] = std::move(*it);
@@ -348,18 +355,23 @@ future<> server_impl::send_message(server_id id, Message m) {
     return std::visit([this, id] (auto&& m) {
         using T = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<T, append_reply>) {
+fmt::print("[{}] send_message append_reply -> {} \n", _id, id);
             _stats.append_entries_reply_sent++;
             return _rpc->send_append_entries_reply(id, m);
         } else if constexpr (std::is_same_v<T, append_request>) {
+fmt::print("[{}] send_message append_request -> {} \n", _id, id);
             _stats.append_entries_sent++;
             return _rpc->send_append_entries(id, m);
         } else if constexpr (std::is_same_v<T, vote_request>) {
+fmt::print("[{}] send_message vote_request -> {} \n", _id, id);
             _stats.vote_request_sent++;
             return _rpc->send_vote_request(id, m);
         } else if constexpr (std::is_same_v<T, vote_reply>) {
+fmt::print("[{}] send_message vote_reply -> {} \n", _id, id);
             _stats.vote_request_reply_sent++;
             return _rpc->send_vote_reply(id, m);
         } else if constexpr (std::is_same_v<T, timeout_now>) {
+fmt::print("[{}] send_message timeout_now -> {} XXX\n", _id, id);
             _stats.timeout_now_sent++;
             return _rpc->send_timeout_now(id, m);
         } else if constexpr (std::is_same_v<T, install_snapshot>) {
@@ -427,6 +439,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     co_await _state_machine->load_snapshot(batch.snp->id);
                     _state_machine->drop_snapshot(_last_loaded_snapshot_id);
                     drop_waiters(_awaited_commits, batch.snp->idx);
+                    drop_waiters(_awaited_applies, batch.snp->idx);
                     _last_loaded_snapshot_id = batch.snp->id;
                     _stats.sm_load_snapshot++;
                 }
@@ -457,6 +470,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
             // network addresses of the joining servers).
             configuration_diff rpc_diff;
             if (batch.rpc_configuration) {
+fmt::print("[{}] io fiber got conf diff\n", _id);
                 const server_address_set& current_rpc_config = get_rpc_config();
                 rpc_diff = diff_address_sets(get_rpc_config(), *batch.rpc_configuration);
                 for (const auto& addr: rpc_diff.joining) {
@@ -466,29 +480,44 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.messages.size()) {
+fmt::print("[{}] io fiber got messages\n", _id);
                 // After entries are persisted we can send messages.
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
                     return send_message(message.first, std::move(message.second));
                 });
+fmt::print("[{}] io fiber done processing messages\n", _id);
             }
 
             if (batch.rpc_configuration) {
+fmt::print("[{}] io fiber got rpc_configuration\n", _id);
                 for (const auto& addr: rpc_diff.leaving) {
                     remove_from_rpc_config(addr);
                     _rpc->remove_server(addr.id);
                 }
+fmt::print("[{}] io fiber done rpc_configuration\n", _id);
             }
 
             // Process committed entries.
             if (batch.committed.size()) {
+fmt::print("[{}] io fiber got committed\n", _id);
                 notify_waiters(_awaited_commits, batch.committed);
                 _stats.queue_entries_for_apply += batch.committed.size();
                 co_await _apply_entries.writer.write(std::move(batch.committed));
+fmt::print("[{}] io fiber done committed\n", _id);
             }
+
+            if (!_fsm->is_leader() && !_current_rpc_config.contains(server_address{_id})) {
+                // If the node is no longer part of a config and no longer the leader
+                // it will never know the status of entries it submitted
+                drop_waiters(_awaited_commits, {});
+                drop_waiters(_awaited_applies, {});
+            }
+fmt::print("[{}] io fiber END LOOP +++++++++++++\n", _id);
         }
     } catch (seastar::broken_condition_variable&) {
         // Log fiber is stopped explicitly.
     } catch (...) {
+fmt::print("[{}] io fiber stopped because of the error: {}\n", _id, std::current_exception());
         logger.error("[{}] io fiber stopped because of the error: {}", _id, std::current_exception());
     }
     co_return;
@@ -694,7 +723,9 @@ future<> server_impl::elect_me_leader() {
 }
 
 future<> server_impl::wait_log_idx(index_t idx) {
+fmt::print("{} wait_log_idx 1: current {} leader {}\n", _id, _fsm->log_last_idx(), idx);
     while (_fsm->log_last_idx() < idx) {
+fmt::print("{} wait_log_idx 2: current {} leader {}\n", _id, _fsm->log_last_idx(), idx);
         co_await seastar::sleep(5us);
     }
 }

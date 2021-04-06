@@ -51,7 +51,9 @@ const configuration& fsm::get_configuration() const {
 template<typename T>
 const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader.
+fmt::print("{} fsm::add_entry 1\n", _my_id);
     check_is_leader();
+fmt::print("{} fsm::add_entry 2, stepdown? {}\n", _my_id, leader_state().stepdown);
     if(leader_state().stepdown) {
         // A leader that is stepping down should not add new entries
         // to its log (see 3.10), but it still does not know who the new
@@ -159,6 +161,7 @@ void fsm::become_leader() {
 void fsm::become_follower(server_id leader) {
     _current_leader = leader;
     _state = follower{};
+fmt::print("{} fsm::become_follower 1 current leader? {}\n", _my_id, _current_leader);
     if (_current_leader) {
         _last_election_time = _clock.now();
     }
@@ -171,6 +174,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     _current_leader = {};
     _state = candidate(_log.get_configuration(), is_prevote);
 
+fmt::print("{} become_candidate() reset_election_timeout()\n", _my_id);
     reset_election_timeout();
 
     // 3.4 Leader election
@@ -210,12 +214,14 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
             // Already signaled _sm_events in update_current_term()
             continue;
         }
+fmt::print("{} [term: {}, index: {}, last log term: {}{}{}] sent vote request to {}\n", _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "", is_leadership_transfer ? ", force" : "", server.id);
         logger.trace("{} [term: {}, index: {}, last log term: {}{}{}] sent vote request to {}",
             _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "",
             is_leadership_transfer ? ", force" : "", server.id);
 
         send_to(server.id, vote_request{term, _log.last_idx(), _log.last_term(), is_prevote, is_leadership_transfer});
     }
+fmt::print("{} become_candidate C\n", _my_id);
     if (votes.tally_votes() == vote_result::WON) {
         // A single node cluster.
         if (is_prevote) {
@@ -224,6 +230,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
             become_leader();
         }
     }
+fmt::print("{} become_candidate D\n", _my_id);
 }
 
 future<fsm_output> fsm::poll_output() {
@@ -322,14 +329,18 @@ fsm_output fsm::get_output() {
 void fsm::advance_stable_idx(index_t idx) {
     index_t prev_stable_idx = _log.stable_idx();
     _log.stable_to(idx);
+fmt::print("advance_stable_idx[{}]: prev_stable_idx={}, idx={}\n", _my_id, prev_stable_idx, idx);
     logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
     if (is_leader()) {
+fmt::print("advance_stable_idx[{}]: is leader, replicating\n", _my_id);
         replicate();
         if (leader_state().tracker.leader_progress()) {
+// fmt::print("advance_stable_idx[{}]: (leader_state().tracker.leader_progress()) true\n", _my_id);
             // If this server is leader and is part of the current
             // configuration, update it's progress and optionally
             // commit new entries.
             leader_state().tracker.leader_progress()->accepted(idx);
+fmt::print("advance_stable_idx[{}]: leader progress accepted - calling maybe commit\n", _my_id);
             maybe_commit();
         }
     }
@@ -339,11 +350,14 @@ void fsm::maybe_commit() {
 
     index_t new_commit_idx = leader_state().tracker.committed(_commit_idx);
 
+fmt::print("maybe_commit[{}]: 1: new_commit_idx {} <= _commit_idx {} ? {} \n", _my_id, new_commit_idx, _commit_idx, (new_commit_idx <= _commit_idx));
     if (new_commit_idx <= _commit_idx) {
+fmt::print("maybe_commit[{}]: 1b: returning\n", _my_id);
         return;
     }
     bool committed_conf_change = _commit_idx < _log.last_conf_idx() &&
         new_commit_idx >= _log.last_conf_idx();
+fmt::print("maybe_commit[{}]: 2: _commit_idx {} < _log.last_conf_idx() {} && new_commit_idx {} >= _log.last_conf_idx() {} ? {} (committed_conf_change) \n", _my_id, _commit_idx, _log.last_conf_idx(), new_commit_idx, _log.last_conf_idx(), committed_conf_change);
 
     if (_log[new_commit_idx]->term != _current_term) {
 
@@ -354,10 +368,12 @@ void fsm::maybe_commit() {
         // an entry from the current term has been committed in
         // this way, then all prior entries are committed
         // indirectly because of the Log Matching Property.
+fmt::print("maybe_commit[{}]: cannot commit because of term {} != {}\n", _my_id, _log[new_commit_idx]->term, _current_term);
         logger.trace("maybe_commit[{}]: cannot commit because of term {} != {}",
             _my_id, _log[new_commit_idx]->term, _current_term);
         return;
     }
+fmt::print("maybe_commit[{}]: 2 commit idx {}\n", _my_id, new_commit_idx);
     logger.trace("maybe_commit[{}]: commit {}", _my_id, new_commit_idx);
 
     _commit_idx = new_commit_idx;
@@ -365,8 +381,11 @@ void fsm::maybe_commit() {
     // current commit index. Commit && apply more entries.
     _sm_events.signal();
 
+fmt::print("maybe_commit[{}]: 3 committed conf change {}\n", _my_id, committed_conf_change);
     if (committed_conf_change) {
+fmt::print("maybe_commit[{}]: committed conf change at idx {}\n", _my_id, _log.last_conf_idx());
         logger.trace("maybe_commit[{}]: committed conf change at idx {}", _my_id, _log.last_conf_idx());
+fmt::print("maybe_commit[{}]: is joint {}\n", _my_id, _log.get_configuration().is_joint());
         if (_log.get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
@@ -391,8 +410,10 @@ void fsm::maybe_commit() {
             // The commit index would be 5 if we use joint
             // configuration, and 6 if we assume we left it. Let
             // it happen without an extra FSM step.
+fmt::print("maybe_commit[{}]: IS joint, YO DAWG I HEARD YOU LIKE MAYBE_COMMIT\n", _my_id);
             maybe_commit();
         } else if (leader_state().tracker.leader_progress() == nullptr) {
+fmt::print("maybe_commit[{}]: stepping down as leader\n", _my_id);
             logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
             // 4.2.2 Removing the current leader
             //
@@ -564,17 +585,20 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
             send_timeout_now(progress.id);
             // We may have resigned leadership if a stepdown process completed
             // while the leader is no longer part of the configuration.
+fmt::print("{} fsm::append_entries_reply stepdown is_leader? {} <-----------\n", _my_id, is_leader());
             if (!is_leader()) {
                 return;
             }
         }
 
         // check if any new entry can be committed
+fmt::print("{} fsm::append_entries_reply calling maybe_commit <-----------\n", _my_id);
         maybe_commit();
 
         // The call to maybe_commit() may initiate and immediately complete stepdown process
         // so the comment above the provios is_leader() check applies here too.
         if (!is_leader()) {
+fmt::print("{} fsm::append_entries_reply calling maybe_commit <-----------\n", _my_id);
             return;
         }
     } else {
@@ -868,6 +892,7 @@ bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
 }
 
 void fsm::transfer_leadership() {
+fmt::print("transfer_leadership[{}]\n", _my_id);
     check_is_leader();
     leader_state().stepdown = true;
     // Stop new requests from commig in
@@ -875,6 +900,7 @@ void fsm::transfer_leadership() {
     // If there is a fully up-to-date voting replica make it start an election
     for (auto&& [_, p] : leader_state().tracker) {
         if (p.id != _my_id && p.can_vote && p.match_idx == _log.last_idx()) {
+fmt::print("transfer_leadership[{}] send_timeout_now to {}\n", _my_id, p.id);
             send_timeout_now(p.id);
             break;
         }
@@ -882,9 +908,13 @@ void fsm::transfer_leadership() {
 }
 
 void fsm::send_timeout_now(server_id id) {
+fmt::print("send_timeout_now[{}] send timeout_now to {}\n", _my_id, id);
+    logger.trace("send_timeout_now[{}] send timeout_now to {}", _my_id, id);
     send_to(id, timeout_now{_current_term});
     leader_state().timeout_now_sent = true;
+fmt::print("{} fsm::send_timeout_now leader_state().tracker.leader_progress() == nullptr? {}\n", _my_id, leader_state().tracker.leader_progress() == nullptr);
     if (leader_state().tracker.leader_progress() == nullptr) {
+        logger.trace("send_timeout_now[{}] become follower", _my_id);
         become_follower({});
     }
 }

@@ -302,10 +302,13 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
+fmt::print("{} send_timeout_now from {} A ----\n", _id, id);
         if (!_connected(id) || !_connected(_id)) {
             return make_ready_future<>();
         }
+fmt::print("{} send_timeout_now from {} B ----\n", _id, id);
         net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
+fmt::print("{} send_timeout_now from {} C ----\n", _id, id);
         return make_ready_future<>();
     }
     virtual void add_server(raft::server_id id, bytes node_info) {}
@@ -627,6 +630,7 @@ future<> run_test(test_case test, bool packet_drops) {
             restart_tickers(tickers);
 
         } else if (std::holds_alternative<set_config>(update)) {
+fmt::print("=========== set_config ============\n");
             co_await wait_log(rafts, connected, in_configuration, leader);
             set_config sc = std::get<set_config>(update);
             raft::server_address_set set;
@@ -641,10 +645,18 @@ future<> run_test(test_case test, bool packet_drops) {
             co_await rafts[leader].first->set_configuration(std::move(set));
             // Now we know joint configuration was applied
             // Add a dummy entry to confirm new configuration was committed
+fmt::print("adding dummy on {} <<<<<<<<<<<<<<<<<<\n", leader);
+// co_await seastar::sleep(100us);
             try {
                 co_await rafts[leader].first->add_entry(create_command(dummy_command),
                         raft::wait_type::committed);
-            } catch (raft::not_a_leader e) {} // leader stepped down, implying config fully changed
+            } catch (raft::not_a_leader& e) {
+fmt::print("CAUGHT NOT LEADER  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+            } // leader stepped down, implying config fully changed
+            catch(raft::commit_status_unknown& e) {
+fmt::print("CAUGHT STATUS UNKNOWN  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+            }
+fmt::print("^^^^^^^^^^^ set_config ^^^^^^^^^^^\n");
         }
     }
 
@@ -876,6 +888,15 @@ SEASTAR_THREAD_TEST_CASE(test_remove_node_cycle) {
                      set_config{1,2,3}, entries{2}, new_leader{2},
                      set_config{2,3,0}, entries{2}, new_leader{3},
                      set_config{3,0,1}, entries{2}, new_leader{0}}}
+    , false);
+}
+
+// Check removing leader from configuration (still connected) and cycle
+SEASTAR_THREAD_TEST_CASE(test_remove_leader_cycle) {
+    replication_test(
+        {.nodes = 4,
+         .updates = { entries{1}, set_config{1,2,3}
+                     }}
     , false);
 }
 
