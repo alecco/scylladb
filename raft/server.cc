@@ -67,6 +67,7 @@ public:
     future<> abort() override;
     term_t get_current_term() const override;
     future<> read_barrier() override;
+    void make_candidate() override;
     future<> elect_me_leader() override;
     future<> wait_log_idx(index_t) override;
     index_t log_last_idx();
@@ -292,6 +293,7 @@ void server_impl::request_vote(server_id from, vote_request vote_request) {
 }
 
 void server_impl::request_vote_reply(server_id from, vote_reply vote_reply) {
+fmt::print("{} server_impl::request_vote_reply() A\n", _id);
     _stats.request_vote_reply_received++;
     _fsm->step(from, std::move(vote_reply));
 }
@@ -351,6 +353,7 @@ future<> server_impl::send_message(server_id id, Message m) {
             _stats.append_entries_reply_sent++;
             return _rpc->send_append_entries_reply(id, m);
         } else if constexpr (std::is_same_v<T, append_request>) {
+fmt::print("{} server_impl::send_message(append_request)\n", _id);
             _stats.append_entries_sent++;
             return _rpc->send_append_entries(id, m);
         } else if constexpr (std::is_same_v<T, vote_request>) {
@@ -684,10 +687,15 @@ void server_impl::register_metrics() {
     });
 }
 
-future<> server_impl::elect_me_leader() {
+void server_impl::make_candidate() {
+// fmt::print("{} make_candidate A follower {} candidate {}\n", _id, _fsm->is_follower(), _fsm->is_candidate());
     while (_fsm->is_follower()) {
+// fmt::print("{} make_candidate A2 follower {} candidate {}\n", _id, _fsm->is_follower(), _fsm->is_candidate());
         _fsm->tick();
     }
+}
+future<> server_impl::elect_me_leader() {
+fmt::print("{} elect_me_leader A follower {} candidate {}\n", _id, _fsm->is_follower(), _fsm->is_candidate());
     do {
         co_await later();
     } while (!_fsm->is_leader());

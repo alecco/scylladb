@@ -408,6 +408,7 @@ public:
 
 template <typename Message>
 void fsm::step(server_id from, const leader& s, Message&& msg) {
+fmt::print("{} fsm::step( leader ) A\n", _my_id);
     if constexpr (std::is_same_v<Message, append_request>) {
         // We are here if we got AppendEntries RPC with our term
         // but this is impossible since we are the leader and
@@ -426,6 +427,7 @@ void fsm::step(server_id from, const leader& s, Message&& msg) {
 
 template <typename Message>
 void fsm::step(server_id from, const candidate& c, Message&& msg) {
+fmt::print("{} fsm::step( candidate ) A\n", _my_id);
     if constexpr (std::is_same_v<Message, vote_request>) {
         request_vote(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, vote_reply>) {
@@ -438,10 +440,16 @@ void fsm::step(server_id from, const candidate& c, Message&& msg) {
 
 template <typename Message>
 void fsm::step(server_id from, const follower& c, Message&& msg) {
+fmt::print("{} fsm::step( follower ) A\n", _my_id);
     if constexpr (std::is_same_v<Message, append_request>) {
+fmt::print("{} fsm::step( follower ) append_request\n", _my_id);
         append_entries(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, vote_request>) {
+fmt::print("{} fsm::step( follower ) vote_request\n", _my_id);
         request_vote(from, std::move(msg));
+    } else if constexpr (std::is_same_v<Message, vote_reply>) {
+fmt::print("{} fsm::step( follower ) vote_reply\n", _my_id);
+        request_vote_reply(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, install_snapshot>) {
         send_to(from, snapshot_reply{.current_term = _current_term,
                     .success = apply_snapshot(std::move(msg.snp), 0)});
@@ -508,6 +516,7 @@ void fsm::step(server_id from, Message&& msg) {
         }
 
         if (!ignore_term) {
+fmt::print("{} step !ignore_term -> become_follower\n", _my_id);
             become_follower(leader);
             update_current_term(msg.current_term);
         }
@@ -540,6 +549,7 @@ void fsm::step(server_id from, Message&& msg) {
                 // leader’s term (included in its RPC) is at least as large as the
                 // candidate’s current term, then the candidate recognizes the
                 // leader as legitimate and returns to follower state.
+fmt::print("{} step got append_req -> become_follower\n", _my_id);
                 become_follower(from);
             } else if (_current_leader == server_id{}) {
                 // Earlier we changed our term to match a candidate's
