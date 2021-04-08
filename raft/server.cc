@@ -67,6 +67,7 @@ public:
     future<> abort() override;
     term_t get_current_term() const override;
     future<> read_barrier() override;
+    void make_candidate() override;
     future<> elect_me_leader() override;
     future<> wait_log_idx(index_t) override;
     index_t log_last_idx();
@@ -694,10 +695,12 @@ void server_impl::register_metrics() {
     });
 }
 
-future<> server_impl::elect_me_leader() {
+void server_impl::make_candidate() {
     while (_fsm->is_follower()) {
         _fsm->tick();
     }
+}
+future<> server_impl::elect_me_leader() {
     do {
         co_await later();
     } while (!_fsm->is_leader());

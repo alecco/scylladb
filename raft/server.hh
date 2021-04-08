@@ -120,6 +120,7 @@ public:
     virtual future<> read_barrier() = 0;
 
     // Ad hoc functions for testing
+    virtual void make_candidate() = 0;
     virtual future<> elect_me_leader() = 0;
     virtual future<> wait_log_idx(index_t) = 0;
     virtual index_t log_last_idx() = 0;
