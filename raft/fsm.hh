@@ -442,6 +442,7 @@ void fsm::step(server_id from, const follower& c, Message&& msg) {
         append_entries(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, vote_request>) {
         request_vote(from, std::move(msg));
+    } else if constexpr (std::is_same_v<Message, vote_reply>) { // XXX remove
     } else if constexpr (std::is_same_v<Message, install_snapshot>) {
         send_to(from, snapshot_reply{.current_term = _current_term,
                     .success = apply_snapshot(std::move(msg.snp), 0)});
