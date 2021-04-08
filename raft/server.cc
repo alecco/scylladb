@@ -70,7 +70,7 @@ public:
     future<> elect_me_leader() override;
     future<> wait_log_idx(index_t) override;
     index_t log_last_idx();
-    void elapse_election() override;
+    future<> elapse_election() override;
     bool is_leader() override;
     void tick() override;
 private:
@@ -718,9 +718,10 @@ bool server_impl::is_leader() {
     return _fsm->is_leader();
 }
 
-void server_impl::elapse_election() {
+future<> server_impl::elapse_election() {
     while (_fsm->election_elapsed() < ELECTION_TIMEOUT) {
         _fsm->tick();
+        co_await later(); // Output consumption and message propagation
     }
 }
 
