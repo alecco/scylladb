@@ -732,10 +732,44 @@ fmt::print("^^^^^^ new leader {} ^^^^^^\n", next_leader);
 
         } else if (std::holds_alternative<set_config>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
+<<<<<<< HEAD
             auto sc = std::get<set_config>(update);
 fmt::print("****** new user conf ******\n");
             in_configuration = co_await change_configuration(rafts, connected, in_configuration,
                     snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers);
+=======
+            set_config sc = std::get<set_config>(update);
+            raft::server_address_set set;
+            std::unordered_set<size_t> new_config;
+            for (auto s: sc) {
+                new_config.insert(s);
+                set.insert(to_server_address(s));
+                BOOST_CHECK_MESSAGE(s < test.nodes,
+                        format("Configuration element {} past node limit {}", s, test.nodes - 1));
+            }
+            tlogger.debug("changing configuration on leader {}", *leader);
+            co_await rafts[*leader].first->set_configuration(std::move(set));
+            // Reset removed nodes
+            for (auto s: in_configuration) {
+                if (!new_config.contains(s)) {
+                    tickers[s].cancel();
+fmt::print("        aborting {} (out of config)\n", s);
+                    co_await rafts[s].first->abort();
+                    rafts[s] = create_raft_server(to_raft_id(s), apply_changes, initial_state{.log = {}},
+                            test.total_values, connected, snaps, persisted_snaps, packet_drops);
+                    co_await rafts[s].first->start();
+                    tickers[s].set_callback([&rafts, s] { rafts[s].first->tick(); });
+                    tickers[s].rearm_periodic(tick_delta);
+                }
+            }
+            in_configuration = new_config;
+            // Now we know joint configuration was applied
+            // Add a dummy entry to confirm new configuration was committed
+            try {
+                co_await rafts[*leader].first->add_entry(create_command(dummy_command),
+                        raft::wait_type::committed);
+            } catch (raft::not_a_leader e) {} // leader stepped down, implying config fully changed
+>>>>>>> d79036f9ee (DEBUG AddressSanitizer: heap-use-after-free)
         }
     }
 
@@ -779,7 +813,7 @@ fmt::print("   waiting for node...\n");
 fmt::print("       done.\n");
     }
 
-fmt::print("Done\n");
+fmt::print("updates finished and waited, aborting all\n");
     for (auto& r: rafts) {
 fmt::print("   aborting node\n");
         co_await r.first->abort(); // Stop servers
@@ -811,215 +845,14 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
     run_test(std::move(test), prevote, packet_drops).get();
 }
 
-#define RAFT_TEST_CASE(test_name, test_body)  \
-    SEASTAR_THREAD_TEST_CASE(test_name) { \
-fmt::print("test: " #test_name " no pre no drop\n"); \
-        replication_test(test_body, false, false); }  \
-    SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
-fmt::print("test: " #test_name " no pre yes drop\n"); \
-        replication_test(test_body, false, true); } \
-    SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
-fmt::print("test: " #test_name " yes pre no drop\n"); \
-        replication_test(test_body, true, false); }  \
-    SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
-fmt::print("test: " #test_name " yes pre yes drop\n"); \
-        replication_test(test_body, true, true); }
-
-// 1 nodes, simple replication, empty, no updates
-RAFT_TEST_CASE(simple_replication, (test_case{
-         .nodes = 1}))
-
-// 2 nodes, 4 existing leader entries, 4 updates
-RAFT_TEST_CASE(non_empty_leader_log, (test_case{
-         .nodes = 2,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}},
-         .updates = {entries{4}}}));
-
-// 2 nodes, don't add more entries besides existing log
-RAFT_TEST_CASE(non_empty_leader_log_no_new_entries, (test_case{
-         .nodes = 2, .total_values = 4,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}}}));
-
-// 1 nodes, 12 client entries
-RAFT_TEST_CASE(simple_1_auto_12, (test_case{
-         .nodes = 1,
-         .initial_states = {}, .updates = {entries{12}}}));
-
-// 1 nodes, 12 client entries
-RAFT_TEST_CASE(simple_1_expected, (test_case{
-         .nodes = 1, .initial_states = {},
-         .updates = {entries{4}}}));
-
-// 1 nodes, 7 leader entries, 12 client entries
-RAFT_TEST_CASE(simple_1_pre, (test_case{
-         .nodes = 1,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12}},}));
-
-// 2 nodes, 7 leader entries, 12 client entries
-RAFT_TEST_CASE(simple_2_pre, (test_case{
-         .nodes = 2,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12}},}));
-
-// 3 nodes, 2 leader changes with 4 client entries each
-RAFT_TEST_CASE(leader_changes, (test_case{
-         .nodes = 3,
-         .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}}));
-
-//
-// NOTE: due to disrupting candidates protection leader doesn't vote for others, and
-//       servers with entries vote for themselves, so some tests use 3 servers instead of
-//       2 for simplicity and to avoid a stalemate. This behaviour can be disabled.
-//
-
-// 3 nodes, 7 leader entries, 12 client entries, change leader, 12 client entries
-RAFT_TEST_CASE(simple_3_pre_chg, (test_case{
-         .nodes = 3, .initial_term = 2,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12},new_leader{1},entries{12}},}));
-
-// 3 nodes, leader empty, follower has 3 spurious entries
-// node 1 was leader but did not propagate entries, node 0 becomes leader in new term
-// NOTE: on first leader election term is bumped to 3
-RAFT_TEST_CASE(replace_log_leaders_log_empty, (test_case{
-         .nodes = 3, .initial_term = 2,
-         .initial_states = {{}, {{{2,10},{2,20},{2,30}}}},
-         .updates = {entries{4}}}));
-
-// 3 nodes, 7 leader entries, follower has 9 spurious entries
-RAFT_TEST_CASE(simple_3_spurious_1, (test_case{
-         .nodes = 3, .initial_term = 2,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
-                            {{{2,10},{2,11},{2,12},{2,13},{2,14},{2,15},{2,16},{2,17},{2,18}}}},
-         .updates = {entries{4}},}));
-
-// 3 nodes, term 3, leader has 9 entries, follower has 5 spurious entries, 4 client entries
-RAFT_TEST_CASE(simple_3_spurious_2, (test_case{
-         .nodes = 3, .initial_term = 3,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
-                            {{{2,10},{2,11},{2,12},{2,13},{2,14}}}},
-         .updates = {entries{4}},}));
-
-// 3 nodes, term 2, leader has 7 entries, follower has 3 good and 3 spurious entries
-RAFT_TEST_CASE(simple_3_follower_4_1, (test_case{
-         .nodes = 3, .initial_term = 3,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
-                            {.le = {{1,0},{1,1},{1,2},{2,20},{2,30},{2,40}}}},
-         .updates = {entries{4}}}));
-
-// A follower and a leader have matching logs but leader's is shorter
-// 3 nodes, term 2, leader has 2 entries, follower has same and 5 more, 12 updates
-RAFT_TEST_CASE(simple_3_short_leader, (test_case{
-         .nodes = 3, .initial_term = 3,
-         .initial_states = {{.le = {{1,0},{1,1}}},
-                            {.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12}}}));
-
-// A follower and a leader have no common entries
-// 3 nodes, term 2, leader has 7 entries, follower has non-matching 6 entries, 12 updates
-RAFT_TEST_CASE(follower_not_matching, (test_case{
-         .nodes = 3, .initial_term = 3,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
-                            {.le = {{2,10},{2,20},{2,30},{2,40},{2,50},{2,60}}}},
-         .updates = {entries{12}},}));
-
-// A follower and a leader have one common entry
-// 3 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries, 12 updates
-RAFT_TEST_CASE(follower_one_common_1, (test_case{
-         .nodes = 3, .initial_term = 4,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2}}},
-                            {.le = {{1,0},{2,11},{2,12},{2,13}}}},
-         .updates = {entries{12}}}));
-
-// A follower and a leader have 2 common entries in different terms
-// 3 nodes, term 2, leader has 4 entries, follower has matching but in different term
-RAFT_TEST_CASE(follower_one_common_2, (test_case{
-         .nodes = 3, .initial_term = 5,
-         .initial_states = {{.le = {{1,0},{2,1},{3,2},{3,3}}},
-                            {.le = {{1,0},{2,1},{2,2},{2,13}}}},
-         .updates = {entries{4}}}));
-
-// 2 nodes both taking snapshot while simple replication
-RAFT_TEST_CASE(take_snapshot, (test_case{
-         .nodes = 2,
-         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
-         .updates = {entries{100}}}));
-
-// 2 nodes doing simple replication/snapshoting while leader's log size is limited
-RAFT_TEST_CASE(backpressure, (test_case{
-         .nodes = 2,
-         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_size = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
-         .updates = {entries{100}}}));
-
-// 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
-RAFT_TEST_CASE(drops_01, (test_case{
-         .nodes = 3,
-         .updates = {entries{4},partition{leader{1},2},entries{4}}}));
-
-// 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
-RAFT_TEST_CASE(drops_02, (test_case{
-         .nodes = 3,
-         .updates = {entries{4},partition{0,2},entries{4},partition{leader{2},1}}}));
-
-// 3 nodes, add entries, drop leader 0, custom leader, add entries [implicit re-join all]
-RAFT_TEST_CASE(drops_03, (test_case{
-         .nodes = 3,
-         .updates = {entries{4},partition{leader{1},2},entries{4}}}));
-
-// 4 nodes, add entries, drop follower 1, custom leader, add entries [implicit re-join all]
-RAFT_TEST_CASE(drops_04, (test_case{
-         .nodes = 4,
-         .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}}));
-
-// 3 nodes, leader 1, add entries, drop non-zero leader, implicit leader 0 and remaining entries
-RAFT_TEST_CASE(drops_05, (test_case{
-         .nodes = 3, .initial_leader = 1,
-         .updates = {entries{4},partition{0,2}}}));
-
-// TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
-SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
+SEASTAR_THREAD_TEST_CASE(remove_node_abort_asan_repro) {
+for (size_t i = 0; i < 100; ++i) {
+fmt::print("iter {} ============\n", i);
     replication_test(
-        // Snapshot automatic take and load
-        {.nodes = 3,
-         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
-         .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
-    , false, false);
-}
-
-// Check removing follower, change leader, remove old leader and add removed folloer
-RAFT_TEST_CASE(conf_changes_1, (test_case{
-         .nodes = 3,
-         .updates = {
-                     set_config{0,2},     // same leader, quorum
-                     entries{1},
-                     set_config{0,1},
-                     entries{1},
-                     new_leader{1},       // change leader (first log propagate 0->1)
-                     entries{1},
-                     set_config{0,1,2},   // add again the other follower (log propagate 1->0,2)
-                     }}));
-
-// Check removing a node from configuration, adding entries; cycle for all combinations
-SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
-    replication_test(
+         // add entry, change leader, remove first leader destroying server and its log_entry
         {.nodes = 4,
-         .updates = {set_config{0,1,2}, entries{2}, new_leader{1},
-                     set_config{1,2,3}, entries{2}, new_leader{2},
-                     set_config{2,3,0}, entries{2}, new_leader{3},
-                     set_config{3,0,1}, entries{2}, new_leader{0}}}
+         .updates = {entries{1}, new_leader{1}, set_config{1,2,3}}}
     , false, false);
 }
-
-// verifies that each node in a cluster can campaign
-// and be elected in turn. This ensures that elections work when not
-// starting from a clean slate (as they do in TestLeaderElection)
-// TODO: add pre-vote case
-RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
-         .nodes = 2,
-         .updates = {new_leader{1},new_leader{0},
-                     new_leader{1},new_leader{0},
-                     new_leader{1},new_leader{0},
-                     new_leader{1},new_leader{0}
-                     }}));
+}
 
