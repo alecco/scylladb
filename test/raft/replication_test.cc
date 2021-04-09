@@ -484,9 +484,11 @@ future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_mac
         connected& connected, std::unordered_set<size_t>& in_configuration, size_t leader) {
     // Wait for leader log to propagate
     auto leader_log_idx = rafts[leader].first->log_last_idx();
+// fmt::print("    wait_log leader {} log last idx {}\n", leader, leader_log_idx);
     for (size_t s = 0; s < rafts.size(); ++s) {
         if (s != leader && connected(to_raft_id(s), to_raft_id(leader)) &&
                 in_configuration.contains(s)) {
+// fmt::print("    waiting for {}\n", s);
             co_await rafts[s].first->wait_log_idx(leader_log_idx);
         }
     }
@@ -676,37 +678,61 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             restart_tickers(tickers);
 
         } else if (std::holds_alternative<set_config>(update)) {
+// pause_tickers(tickers); // XXX testing
+fmt::print("========== conf change on leader {} ============\n", leader);
+// fmt::print("  waiting logs\n");
+
+
             co_await wait_log(rafts, connected, in_configuration, leader);
-            set_config sc = std::get<set_config>(update);
+// fmt::print("  get new cfg\n");
+            auto sc = std::get<set_config>(update);
+// fmt::print("  server set\n");
             raft::server_address_set set;
+// fmt::print("  new config\n");
             std::unordered_set<size_t> new_config;
-            for (auto s: sc) {
+// fmt::print("  new conf \n");
+            for (int i = 0; i < sc.size(); ++i) {
+// fmt::print("     {}\n", i);
+                size_t s = sc[i];
                 new_config.insert(s);
                 set.insert(to_server_address(s));
                 BOOST_CHECK_MESSAGE(s < test.nodes,
                         format("Configuration element {} past node limit {}", s, test.nodes - 1));
             }
+// fmt::print(" applying...\n");
             tlogger.debug("changing configuration on leader {}", leader);
             co_await rafts[leader].first->set_configuration(std::move(set));
             // Reset removed nodes
+// fmt::print(" resetting removed nodes\n");
             for (auto s: in_configuration) {
                 if (!new_config.contains(s)) {
+// fmt::print("     {}\n", s);
+// fmt::print("        stopping ticker\n");
                     tickers[s].cancel();
+// fmt::print("        aborting\n");
                     co_await rafts[s].first->abort();
+// fmt::print("        re-creating\n");
                     rafts[s] = create_raft_server(to_raft_id(s), apply_changes, initial_state{.log = {}},
                             test.total_values, connected, snaps, persisted_snaps, packet_drops);
+// fmt::print("        starting\n");
                     co_await rafts[s].first->start();
+// fmt::print("        adding ticker\n");
                     tickers[s].set_callback([&rafts, s] { rafts[s].first->tick(); });
                     tickers[s].rearm_periodic(tick_delta);
                 }
             }
+// fmt::print(" replacing config\n");
             in_configuration = new_config;
             // Now we know joint configuration was applied
             // Add a dummy entry to confirm new configuration was committed
             try {
+// fmt::print(" adding dummy on leader {}\n", leader);
                 co_await rafts[leader].first->add_entry(create_command(dummy_command),
                         raft::wait_type::committed);
             } catch (raft::not_a_leader e) {} // leader stepped down, implying config fully changed
+// fmt::print("^^^^^^^^^^^^^^^ done ^^^^^^^^^^^^^^^^^^^^^^\n");
+
+// restart_tickers(tickers); // XXX testing
         }
     }
 
@@ -768,14 +794,36 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
     run_test(std::move(test), prevote, packet_drops).get();
 }
 
+// XXX XXX XXX
+SEASTAR_THREAD_TEST_CASE(remove_node_cycle_XXX) {
+fmt::print("test: remove_node_cycle_XXX\n"); // XXX
+    replication_test(
+        {.nodes = 4,
+         .updates = {set_config{0,1,2}
+#if 0
+         , entries{2}, new_leader{1},
+                     set_config{1,2,3}, entries{2}, new_leader{2},
+                     set_config{2,3,0}, entries{2}, new_leader{3},
+                     set_config{3,0,1}, entries{2}, new_leader{0}
+#endif
+                     }}
+    , false, false);
+}
+
+#if 1
+
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+        fmt::print("test: " # test_name "\n"); \
         replication_test(test_body, false, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+        fmt::print("test: " # test_name "_drops\n"); \
         replication_test(test_body, false, true); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+        fmt::print("test: " # test_name "_prevote\n"); \
         replication_test(test_body, true, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+        fmt::print("test: " # test_name "_prevote_drops\n"); \
         replication_test(test_body, true, true); }
 
 // 1 nodes, simple replication, empty, no updates
@@ -935,15 +983,18 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
     , false, false);
 }
 
+#if 0
 // Check removing all (but leader)
 RAFT_TEST_CASE(conf_changes_1, (test_case{
          .nodes = 3,
          .updates = {set_config{0},   entries{2},                            // no quorum
                      set_config{0,1}, entries{2}, new_leader{1},
                      set_config{1,2}, entries{2}, new_leader{2}, entries{2}}}));
+#endif
 
 // Check removing a node from configuration, adding entries; cycle for all combinations
 SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
+fmt::print("test: remove_node_cycle\n"); // XXX
     replication_test(
         {.nodes = 4,
          .updates = {set_config{0,1,2}, entries{2}, new_leader{1},
@@ -965,3 +1016,4 @@ RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
                      new_leader{1},new_leader{0}
                      }}));
 
+#endif
