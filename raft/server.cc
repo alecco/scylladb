@@ -614,6 +614,7 @@ future<> server_impl::abort() {
     auto snp_futures = _snapshot_transfers | boost::adaptors::map_values;
     auto snapshots = seastar::when_all_succeed(snp_futures.begin(), snp_futures.end());
 
+fmt::print("{} abort() ending waiting for rpc sm pers snaps\n\n", _id);
     return seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
             _rpc->abort(), _state_machine->abort(), _persistence->abort(), std::move(snapshots)).discard_result();
 }
