@@ -681,8 +681,12 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     connected.connect_all();
 
     BOOST_TEST_MESSAGE("Appending remaining values");
+    if (!leader.has_value()) {
+        BOOST_TEST_MESSAGE("No leader, electing 0 to add remaining entries");
+        rafts[0].first->make_candidate();
+        co_await rafts[0].first->elect_me_leader();
+    }
     if (next_val < test.total_values) {
-        BOOST_CHECK_MESSAGE(leader.has_value(), "Need leader for remaining entries");
         // Send remaining updates
         std::vector<int> values(test.total_values - next_val);
         std::iota(values.begin(), values.end(), next_val);
