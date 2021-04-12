@@ -644,29 +644,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                     connected.disconnect(to_raft_id(s));
                 }
             }
-            if (have_new_leader && leader.has_value() && new_leader.id != *leader) {
-                // New leader specified, elect it
+            if (have_new_leader) {
                 leader = co_await elect_new_leader(rafts, connected, leader, new_leader.id);
-            } else if (!leader.has_value() ||
-                    (partition_servers.find(*leader) == partition_servers.end() && p.size() > 0)) {
-                // Old leader disconnected and not specified new, free election
-                for (size_t s = 0; s < test.nodes; ++s) {
-                    co_await rafts[s].first->elapse_election();
-                }
-                for (bool have_leader = false; !have_leader; ) {
-                    for (auto s: partition_servers) {
-                        rafts[s].first->tick();
-                    }
-                    co_await later();                 // yield
-                    for (auto s: partition_servers) {
-                        if (rafts[s].first->is_leader()) {
-                            have_leader = true;
-                            leader = s;
-                            break;
-                        }
-                    }
-                }
-                tlogger.debug("confirmed new leader on {}", *leader);
             }
             restart_tickers(tickers);
         }
@@ -865,12 +844,12 @@ RAFT_TEST_CASE(backpressure, (test_case{
 // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
 RAFT_TEST_CASE(drops_01, (test_case{
          .nodes = 3,
-         .updates = {entries{4},partition{1,2},entries{4}}}));
+         .updates = {entries{4},partition{leader{1},2},entries{4}}}));
 
 // 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
 RAFT_TEST_CASE(drops_02, (test_case{
          .nodes = 3,
-         .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}}));
+         .updates = {entries{4},partition{0,2},entries{4},partition{leader{2},1}}}));
 
 // 3 nodes, add entries, drop leader 0, custom leader, add entries [implicit re-join all]
 RAFT_TEST_CASE(drops_03, (test_case{
@@ -881,6 +860,11 @@ RAFT_TEST_CASE(drops_03, (test_case{
 RAFT_TEST_CASE(drops_04, (test_case{
          .nodes = 4,
          .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}}));
+
+// 3 nodes, leader 1, add entries, drop non-zero leader, implicit leader 0 and remaining entries
+RAFT_TEST_CASE(drops_05, (test_case{
+         .nodes = 3, .initial_leader = 1,
+         .updates = {entries{4},partition{0,2}}}));
 
 // TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
