@@ -286,6 +286,8 @@ void server_impl::append_entries(server_id from, append_request append_request) 
 }
 
 void server_impl::append_entries_reply(server_id from, append_reply reply) {
+fmt::print("append_entries_reply...\n");
+fmt::print("{} append_entries_reply to {} ++++++++++++++++++++++++\n", _id, from);
     _stats.append_entries_reply_received++;
     _fsm->step(from, std::move(reply));
 }
@@ -411,7 +413,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
     try {
         while (true) {
             auto batch = co_await _fsm->poll_output();
+fmt::print("io_fiber polls vvvvvv\n");
             _stats.polls++;
+fmt::print("io_fiber polls ^^^^^\n");
 
             if (batch.term_and_vote) {
                 // Current term and vote are always persisted

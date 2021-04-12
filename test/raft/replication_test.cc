@@ -313,16 +313,20 @@ public:
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
+fmt::print("{} send_append_entries to {}\n", _id, id);
         if (!_connected(id, _id) || (_packet_drops && !(rand() % 5))) {
             return make_ready_future<>();
         }
+fmt::print("    SENT\n");
         net[id]->_client->append_entries(_id, append_request);
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+fmt::print("{} send_append_entries to {}\n", _id, id);
         if (!_connected(id, _id) || (_packet_drops && !(rand() % 5))) {
             return make_ready_future<>();
         }
+fmt::print("    SENT\n");
         net[id]->_client->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
@@ -694,11 +698,19 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
+<<<<<<< HEAD
 fmt::print("====== new leader {} =======\n", next_leader);
             leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
                     next_leader);
             restart_tickers(tickers);
 fmt::print("^^^^^^ new leader {} ^^^^^^\n", next_leader);
+=======
+fmt::print("=========== new leader {} ===========\n", to_raft_id(next_leader));
+            leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
+                    next_leader);
+            restart_tickers(tickers);
+fmt::print("^^^^^^^^^^^ new leader {} ^^^^^^^^^^^\n", to_raft_id(next_leader));
+>>>>>>> b60d33e341 (DEBUG ASAN complains server using bad _fsm (sometimes))
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
@@ -733,11 +745,15 @@ fmt::print("^^^^^^ new leader {} ^^^^^^\n", next_leader);
         } else if (std::holds_alternative<set_config>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
 <<<<<<< HEAD
+<<<<<<< HEAD
             auto sc = std::get<set_config>(update);
 fmt::print("****** new user conf ******\n");
             in_configuration = co_await change_configuration(rafts, connected, in_configuration,
                     snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers);
 =======
+=======
+            pause_tickers(tickers);
+>>>>>>> b60d33e341 (DEBUG ASAN complains server using bad _fsm (sometimes))
             set_config sc = std::get<set_config>(update);
             raft::server_address_set set;
             std::unordered_set<size_t> new_config;
@@ -747,22 +763,26 @@ fmt::print("****** new user conf ******\n");
                 BOOST_CHECK_MESSAGE(s < test.nodes,
                         format("Configuration element {} past node limit {}", s, test.nodes - 1));
             }
+fmt::print("=========== changing configuration on leader {} ==============\n", to_raft_id(*leader));
             tlogger.debug("changing configuration on leader {}", *leader);
             co_await rafts[*leader].first->set_configuration(std::move(set));
             // Reset removed nodes
             for (auto s: in_configuration) {
                 if (!new_config.contains(s)) {
                     tickers[s].cancel();
-fmt::print("        aborting {} (out of config)\n", s);
+fmt::print("        aborting {} (out of config) =========== \n\n", to_raft_id(s));
                     co_await rafts[s].first->abort();
+fmt::print("        re-creating {} (out of config) =========== \n\n", to_raft_id(s));
                     rafts[s] = create_raft_server(to_raft_id(s), apply_changes, initial_state{.log = {}},
                             test.total_values, connected, snaps, persisted_snaps, packet_drops);
+fmt::print("        starting {} (out of config) =========== \n\n", to_raft_id(s));
                     co_await rafts[s].first->start();
+fmt::print("        ticking {} (out of config) =========== \n\n", to_raft_id(s));
                     tickers[s].set_callback([&rafts, s] { rafts[s].first->tick(); });
-                    tickers[s].rearm_periodic(tick_delta);
                 }
             }
             in_configuration = new_config;
+            restart_tickers(tickers);
             // Now we know joint configuration was applied
             // Add a dummy entry to confirm new configuration was committed
             try {
@@ -772,6 +792,8 @@ fmt::print("        aborting {} (out of config)\n", s);
 >>>>>>> d79036f9ee (DEBUG AddressSanitizer: heap-use-after-free)
         }
     }
+
+fmt::print("=========== UPDATES DONE re-adding all to config ==============\n");
 
     // Reconnect and bring all nodes back into configuration, if needed
     connected.connect_all();
@@ -784,6 +806,7 @@ fmt::print("        aborting {} (out of config)\n", s);
     }
 
     if (in_configuration.size() < test.nodes) {
+<<<<<<< HEAD
         set_config sc;
         for (size_t s = 0; s < test.nodes; ++s) {
             sc.push_back(s);
@@ -793,6 +816,25 @@ fmt::print("        aborting {} (out of config)\n", s);
     }
 
 fmt::print("Appending remaining values to {}\n", *leader);
+=======
+        raft::server_address_set set;
+fmt::print("  new config: ");
+        for (size_t s = 0; s < test.nodes; ++s) {
+fmt::print("  {} ", to_raft_id(s));
+            set.insert(to_server_address(s));
+        }
+fmt::print("\n");
+fmt::print("        setting full config on leader {} =========== \n\n", to_raft_id(*leader));
+        co_await rafts[*leader].first->set_configuration(std::move(set));
+fmt::print("        dummy entry on leader {} =========== \n\n", to_raft_id(*leader));
+        try {
+            co_await rafts[*leader].first->add_entry(create_command(dummy_command),
+                    raft::wait_type::committed);
+        } catch (raft::not_a_leader e) {} // leader stepped down, implying config fully changed
+    }
+
+fmt::print("=========== Appending remaining values ==============\n");
+>>>>>>> b60d33e341 (DEBUG ASAN complains server using bad _fsm (sometimes))
     BOOST_TEST_MESSAGE("Appending remaining values");
     if (next_val < test.total_values) {
         // Send remaining updates
@@ -851,7 +893,12 @@ fmt::print("iter {} ============\n", i);
     replication_test(
          // add entry, change leader, remove first leader destroying server and its log_entry
         {.nodes = 4,
-         .updates = {entries{1}, new_leader{1}, set_config{1,2,3}}}
+         .updates = {
+               // (works) entries{1}, new_leader{1}, set_config{1,2,3},  // remove (abort) 0
+
+               // XXX stepdown (no new leader before config)
+               set_config{1,2,3}, new_leader{1}
+         }}
     , false, false);
 }
 }
