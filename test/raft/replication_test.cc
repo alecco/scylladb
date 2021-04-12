@@ -471,11 +471,14 @@ struct test_case {
 };
 
 future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        connected& connected, size_t leader) {
+        connected& connected, std::optional<size_t>& leader) {
     // Wait for leader log to propagate
-    auto leader_log_idx = rafts[leader].first->log_last_idx();
+    if (!leader.has_value()) {
+        co_return;
+    }
+    auto leader_log_idx = rafts[*leader].first->log_last_idx();
     for (size_t s = 0; s < rafts.size(); ++s) {
-        if (s != leader && connected(to_raft_id(s), to_raft_id(leader))) {
+        if (s != *leader && connected(to_raft_id(s), to_raft_id(*leader))) {
             co_await rafts[s].first->wait_log_idx(leader_log_idx);
         }
     }
@@ -527,17 +530,21 @@ void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
 future<> run_test(test_case test, bool prevote, bool packet_drops) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
-    size_t leader = test.initial_leader;
+    BOOST_CHECK_MESSAGE(test.nodes > 0,
+            format("Test must have at least one node"));
+    std::optional<size_t> leader = test.initial_leader;
 
-    states[leader].term = raft::term_t{test.initial_term};
+    states[*leader].term = raft::term_t{test.initial_term};
 
     int leader_initial_entries = 0;
-    if (leader < test.initial_states.size()) {
-        leader_initial_entries += test.initial_states[leader].le.size();  // Count existing leader entries
+    if (*leader < test.initial_states.size()) {
+        // Count existing leader entries
+        leader_initial_entries += test.initial_states[*leader].le.size();
     }
     int leader_snap_skipped = 0; // Next value to write
-    if (leader < test.initial_snapshots.size()) {
-        leader_snap_skipped = test.initial_snapshots[leader].snap.idx;  // Count existing leader entries
+    if (*leader < test.initial_snapshots.size()) {
+        // Count existing leader entries
+        leader_snap_skipped = test.initial_snapshots[*leader].snap.idx;
     }
 
     // Server initial logs, etc
@@ -578,21 +585,22 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         });
     }
 
-    BOOST_TEST_MESSAGE("Electing first leader " << leader);
-    rafts[leader].first->make_candidate();
-    co_await rafts[leader].first->elect_me_leader();
+    BOOST_TEST_MESSAGE("Electing first leader " << *leader);
+    rafts[*leader].first->make_candidate();
+    co_await rafts[*leader].first->elect_me_leader();
     BOOST_TEST_MESSAGE("Processing updates");
     // Process all updates in order
     size_t next_val = leader_snap_skipped + leader_initial_entries;
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
             auto n = std::get<entries>(update);
+            BOOST_CHECK_MESSAGE(leader.has_value(), "No leader for {} new entries");
             std::vector<int> values(n);
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
             co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
-                tlogger.debug("Adding command entry on leader {}", leader);
-                return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+                tlogger.debug("Adding command entry on leader {}", *leader);
+                return rafts[*leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
             co_await wait_log(rafts, connected, leader);
@@ -600,7 +608,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await wait_log(rafts, connected, leader);
             pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
-            leader = co_await elect_new_leader(rafts, connected, leader, next_leader);
+            leader = co_await elect_new_leader(rafts, connected, *leader, next_leader);
             restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, connected, leader);
@@ -627,10 +635,11 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                     connected.disconnect(to_raft_id(s));
                 }
             }
-            if (have_new_leader && new_leader.id != leader) {
+            if (have_new_leader && leader.has_value() && new_leader.id != *leader) {
                 // New leader specified, elect it
-                leader = co_await elect_new_leader(rafts, connected, leader, new_leader.id);
-            } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
+                leader = co_await elect_new_leader(rafts, connected, *leader, new_leader.id);
+            } else if (!leader.has_value() ||
+                    (partition_servers.find(*leader) == partition_servers.end() && p.size() > 0)) {
                 // Old leader disconnected and not specified new, free election
                 for (size_t s = 0; s < test.nodes; ++s) {
                     co_await rafts[s].first->elapse_election();
@@ -648,7 +657,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                         }
                     }
                 }
-                tlogger.debug("confirmed new leader on {}", leader);
+                tlogger.debug("confirmed new leader on {}", *leader);
             }
             restart_tickers(tickers);
         }
@@ -657,14 +666,15 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     connected.connect_all();
 
     BOOST_TEST_MESSAGE("Appending remaining values");
+    BOOST_CHECK_MESSAGE(leader.has_value(), "No leader for {} new entries");
     if (next_val < test.total_values) {
         // Send remaining updates
         std::vector<int> values(test.total_values - next_val);
         std::iota(values.begin(), values.end(), next_val);
         std::vector<raft::command> commands = create_commands<int>(values);
-        tlogger.debug("Adding remaining {} entries on leader {}", values.size(), leader);
+        tlogger.debug("Adding remaining {} entries on leader {}", values.size(), *leader);
         co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
-            return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+            return rafts[*leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
         });
     }
 
