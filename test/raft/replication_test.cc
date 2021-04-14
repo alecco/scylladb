@@ -272,6 +272,12 @@ struct connected {
     void connect_all() {
         _disconnected->clear();
     }
+    std::vector<connection> save() {
+        return std::vector<connection>(_disconnected->begin(), _disconnected->end());
+    }
+    void restore(std::vector<connection> prev) {
+        *_disconnected = std::unordered_set<connection, hash_connection>(_disconnected->begin(), _disconnected->end());
+    }
     bool operator()(raft::server_id id1, raft::server_id id2) {
         // It's connected if both ways are not disconnected
         return !_disconnected->contains({id1, id2}) && !_disconnected->contains({id1, id2});
