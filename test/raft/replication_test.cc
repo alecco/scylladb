@@ -496,6 +496,8 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
             format("Wrong next leader value {}", new_leader));
 
     if (leader.has_value() && new_leader != *leader) {
+        // Leader could be already partially disconnected, save current connectivity state
+        std::unordered_set<connection, hash_connection> prev_disconnected = *connected.disconnected;
         // Disconnect current leader from everyone
         connected.disconnect(to_raft_id(*leader));
         // Make move all nodes past election threshold, also making old leader follower
@@ -508,8 +510,8 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
         // Disconnect old leader from all nodes except new leader
         connected.disconnect(to_raft_id(*leader), to_raft_id(new_leader));
         co_await rafts[new_leader].first->elect_me_leader();
-        // Re-connect old leader to other nodes
-        connected.connect(to_raft_id(*leader));
+        // Restore connections to the original setting
+        *connected.disconnected = prev_disconnected;
     } else  {
         // Make move all nodes past election threshold
         co_await elapse_elections(rafts);
