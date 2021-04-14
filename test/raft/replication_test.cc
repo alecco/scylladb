@@ -488,8 +488,11 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
         connected& connected, size_t leader, size_t new_leader) {
     BOOST_CHECK_MESSAGE(new_leader < rafts.size(),
             format("Wrong next leader value {}", new_leader));
+
     if (new_leader != leader) {
         do {
+            // Leader could be already partially disconnected, save current connectivity state
+            std::unordered_set<connection, hash_connection> prev_disconnected = *connected.disconnected;
             // Disconnect current leader from everyone
             connected.disconnect(to_raft_id(leader));
             // Make move all nodes past election threshold, also making old leader follower
@@ -502,8 +505,8 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
             // Disconnect old leader from all nodes except new leader
             connected.disconnect(to_raft_id(leader), to_raft_id(new_leader));
             co_await rafts[new_leader].first->wait_election_done();
-            // Re-connect old leader to other nodes
-            connected.connect(to_raft_id(leader));
+            // Restore connections to the original setting
+            *connected.disconnected = prev_disconnected;
         } while (!rafts[new_leader].first->is_leader());
         tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
     }
