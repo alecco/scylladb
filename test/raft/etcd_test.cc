@@ -849,3 +849,18 @@ BOOST_AUTO_TEST_CASE(test_proposal_5) {
 
 // TestProposalByProxy
 // TBD when we support add_entry() on follower
+
+// TestUncommittedEntryLimit
+BOOST_AUTO_TEST_CASE(test_test_uncommitted_entry_limit) {
+    // Kostja: (in replication test??)
+    //  we should test it with clas sserver, since it requies a suspend.
+    //  do you have an idea how you could test this scenario in replication_test?
+    //  maybe configure the log with the limit of entries = 1 and see what happens?
+    //  I think the test case could be like this;
+    //  :
+    //  create a cluster of 3 nodes with limit = 1
+    //  add a bunch of entries, a configuration change, a bunch of entries, kill a node, a bunch of entries
+    //  the test will have to be constantly snapshotting the state machine...
+    //  I wonder what's the minimal number of entries the log can function with.. is it 1 or 2 ...
+    //  if it is 2, we much validate the config accordingly
+}
