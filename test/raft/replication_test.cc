@@ -557,7 +557,7 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<test_server>
         size_t total_values, lw_shared_ptr<connected> connected,
         std::unordered_set<size_t>& in_configuration, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops, set_config sc,
-        size_t& leader, std::vector<seastar::timer<lowres_clock>>& tickers) {
+        size_t& leader, std::vector<seastar::timer<lowres_clock>>& tickers, state_machine::apply_fn apply) {
 
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
     raft::server_address_set set;
@@ -594,7 +594,7 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<test_server>
         if (!new_config.contains(s)) {
             tickers[s].cancel();
             co_await rafts[s].server->abort();
-            rafts[s] = create_raft_server(to_raft_id(s), apply_changes, initial_state{.log = {}},
+            rafts[s] = create_raft_server(to_raft_id(s), apply, initial_state{.log = {}},
                     total_values, connected, snapshots, persisted_snapshots, packet_drops);
             co_await rafts[s].server->start();
             tickers[s].set_callback([&rafts, s] { rafts[s].server->tick(); });
@@ -744,7 +744,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             auto sc = std::get<set_config>(update);
             in_configuration = co_await change_configuration(rafts, test.total_values, connected,
-                    in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers);
+                    in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers, apply_changes);
         }
     }
 
@@ -757,7 +757,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         }
         in_configuration = co_await change_configuration(rafts, test.total_values, connected,
                 in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader,
-                tickers);
+                tickers, apply_changes);
     }
 
     BOOST_TEST_MESSAGE("Appending remaining values");
