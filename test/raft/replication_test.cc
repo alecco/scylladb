@@ -480,16 +480,10 @@ struct test_case {
     const std::vector<update> updates;
 };
 
-future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        connected& connected, std::unordered_set<size_t>& in_configuration, size_t leader) {
-    // Wait for leader log to propagate
-    auto leader_log_idx = rafts[leader].first->log_last_idx();
-    for (size_t s = 0; s < rafts.size(); ++s) {
-        if (s != leader && connected(to_raft_id(s), to_raft_id(leader)) &&
-                in_configuration.contains(s)) {
-            co_await rafts[s].first->wait_log_idx(leader_log_idx);
-        }
-    }
+// Wait for leader log to propagate to node
+future<> wait_log(std::unique_ptr<raft::server>& leader, std::unique_ptr<raft::server>& follower) {
+    auto leader_log_idx = leader->log_last_idx();
+    co_await follower->wait_log_idx(leader_log_idx);
 }
 
 void elapse_elections(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
@@ -578,6 +572,13 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<st
     }
     BOOST_CHECK_MESSAGE(new_config.contains(leader) || sc.size() < (rafts.size()/2 + 1),
             "New configuration without old leader and below quorum size (no election)");
+    if (!new_config.contains(leader)) {
+        // Wait log on all nodes in new config before change
+        for (auto s: sc) {
+            co_await wait_log(rafts[leader].first, rafts[s].first);
+        }
+    }
+
     tlogger.debug("Changing configuration on leader {}", leader);
     co_await rafts[leader].first->set_configuration(std::move(set));
 
@@ -691,17 +692,14 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
-            co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
-            co_await wait_log(rafts, connected, in_configuration, leader);
-            pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
+            co_await wait_log(rafts[leader].first, rafts[next_leader].first);
+            pause_tickers(tickers);
             leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
                     next_leader);
             restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
-            co_await wait_log(rafts, connected, in_configuration, leader);
-            pause_tickers(tickers);
             auto p = std::get<partition>(update);
             connected.connect_all();
             std::unordered_set<size_t> partition_servers;
@@ -718,6 +716,16 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                 }
                 partition_servers.insert(id);
             }
+            if (have_new_leader) {
+                // Wait for log to propagate to next leader, before disconnections
+                co_await wait_log(rafts[leader].first, rafts[new_leader.id].first);
+            } else {
+                // No leader specified, wait log for all connected servers, before disconnections
+                for (auto s: partition_servers) {
+                    co_await wait_log(rafts[leader].first, rafts[s].first);
+                }
+            }
+            pause_tickers(tickers);
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (partition_servers.find(s) == partition_servers.end()) {
                     // Disconnect servers not in main partition
@@ -735,7 +743,6 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             restart_tickers(tickers);
 
         } else if (std::holds_alternative<set_config>(update)) {
-            co_await wait_log(rafts, connected, in_configuration, leader);
             auto sc = std::get<set_config>(update);
             in_configuration = co_await change_configuration(rafts, test.total_values, connected,
                     in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers);
