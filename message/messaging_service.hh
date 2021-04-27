@@ -41,6 +41,7 @@
 #include "cache_temperature.hh"
 #include "service/paxos/prepare_response.hh"
 #include "raft/raft.hh"
+#include "service/raft/messaging.hh"
 
 #include <list>
 #include <vector>
@@ -156,7 +157,10 @@ enum class messaging_verb : int32_t {
     RAFT_READ_QUORUM_REPLY = 53,
     RAFT_EXECUTE_READ_BARRIER_ON_LEADER = 54,
     RAFT_ADD_ENTRY = 55,
-    LAST = 56,
+    RAFT_PEER_EXCHANGE = 56,
+    RAFT_ADD_SERVER = 57,
+    RAFT_REMOVE_SERVER = 58,
+    LAST = 59,
 };
 
 } // namespace netw
@@ -594,6 +598,18 @@ public:
     void register_raft_add_entry(std::function<future<raft::add_entry_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::command cmd)>&& func);
     future<> unregister_raft_add_entry();
     future<raft::add_entry_reply> send_raft_add_entry(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::command& cmd);
+
+    void register_raft_peer_exchange(std::function<future<service::raft_peer_exchange> (const rpc::client_info&, rpc::opt_time_point, std::vector<raft::server_address>)>&& func);
+    future<> unregister_raft_peer_exchange();
+    future<service::raft_peer_exchange> send_raft_peer_exchange(msg_addr id, clock_type::time_point timeout, const std::vector<raft::server_address>& peers);
+
+    void register_raft_add_server(std::function<future<service::raft_success_or_bounce>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_address addr)>&& func);
+    future<> unregister_raft_add_server();
+    future<service::raft_success_or_bounce> send_raft_add_server(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_address addr);
+
+    void register_raft_remove_server(std::function<future<service::raft_success_or_bounce>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id sid)>&& func);
+    future<> unregister_raft_remove_server();
+    future<service::raft_success_or_bounce> send_raft_remove_server(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id sid);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
