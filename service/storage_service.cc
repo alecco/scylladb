@@ -48,6 +48,7 @@
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/raft/raft_group0.hh"
 #include "to_string.hh"
 #include "gms/gossiper.hh"
 #include "gms/failure_detector.hh"
@@ -143,7 +144,6 @@ storage_service::storage_service(abort_source& abort_source,
     if (snitch.local_is_initialized()) {
         _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
-    (void) _raft_gr;
 }
 
 void storage_service::enable_all_features() {
@@ -438,6 +438,9 @@ void storage_service::join_token_ring(int delay) {
     container().invoke_on_all([] (auto&& ss) {
         ss._joined = true;
     }).get();
+
+    _group0->join_group0().get();
+
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
     // we'll skip streaming data from other nodes and jump directly into the ring.
@@ -638,6 +641,7 @@ void storage_service::join_token_ring(int delay) {
 
     // start participating in the ring.
     set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id);
+
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
     if (get_token_metadata().sorted_tokens().empty()) {
@@ -737,6 +741,7 @@ void storage_service::bootstrap() {
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             db::system_keyspace::remove_endpoint(*replace_addr).get();
         }
+        _group0->leave_group0().get();
     }
 
     _db.invoke_on_all([this] (database& db) {
@@ -1394,11 +1399,14 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::init_server(bind_messaging_port do_bind) {
+future<> storage_service::init_server(cql3::query_processor& qp, bind_messaging_port do_bind) {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, do_bind] {
+    return seastar::async([this, &qp, do_bind] {
         _initialized = true;
+
+        _group0 = std::make_unique<raft_group0>(_raft_gr, _messaging.local(), _gossiper, qp,
+            _migration_manager.local());
 
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state()) {
@@ -1506,9 +1514,13 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_singal_abort(std::nullopt);
     _listeners.clear();
-    return _schema_version_publisher.join().finally([this] {
-        return std::move(_node_ops_abort_thread);
-    });
+    future<> group0_f =_group0 ?  _group0->abort() : make_ready_future<>();
+    return when_all_succeed(
+        _schema_version_publisher.join().finally([this] {
+            return std::move(_node_ops_abort_thread);
+        }),
+        std::move(group0_f)
+    ).discard_result();
 }
 
 future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
@@ -2383,6 +2395,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
                         return make_ready_future<>();
                     });
                 }).get();
+                ss._group0->leave_group0().get();
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
                 // we need to revert the effect of prepare verb the removenode ops is failed
@@ -3611,12 +3624,41 @@ void storage_service::init_messaging_service() {
             return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
+
+    auto group0_peer_exchange_impl = [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            discovery::peer_list peers) -> future<group0_peer_exchange> {
+
+        return container().invoke_on(0 /* group 0 is on shard 0 */, [peers = std::move(peers)] (
+                storage_service& self) -> future<group0_peer_exchange> {
+
+            if (self._group0) {
+                return self._group0->peer_exchange(std::move(peers));
+            } else {
+                return make_ready_future<group0_peer_exchange>(group0_peer_exchange{std::monostate{}});
+            }
+        });
+    };
+
+    _messaging.local().register_group0_peer_exchange(group0_peer_exchange_impl);
+
+    auto group0_modify_config_impl = [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::group_id gid, std::vector<raft::server_address> add, std::vector<raft::server_id> del) -> future<> {
+
+        return container().invoke_on(0, [gid, add = std::move(add), del = std::move(del)] (
+                storage_service& self) -> future<> {
+
+            return self._raft_gr.get_server(gid).modify_config(std::move(add), std::move(del));
+        });
+    };
+    _messaging.local().register_group0_modify_config(group0_modify_config_impl);
 }
 
 future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
         _messaging.local().unregister_replication_finished(),
-        _messaging.local().unregister_node_ops_cmd()
+        _messaging.local().unregister_node_ops_cmd(),
+        _messaging.local().unregister_group0_peer_exchange(),
+        _messaging.local().unregister_group0_modify_config()
     ).discard_result();
 }
 
@@ -3685,6 +3727,7 @@ future<> storage_service::force_remove_completion() {
                         ss._gossiper.advertise_token_removed(endpoint, host_id).get();
                         std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
                         ss.excise(tokens_set, endpoint);
+                        ss._group0->leave_group0().get();
                     }
                     ss._replicating_nodes.clear();
                     ss._removing_node = std::nullopt;

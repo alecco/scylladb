@@ -136,7 +136,7 @@ future<raft::add_entry_reply> raft_rpc::send_add_entry(raft::server_id id, const
 future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
     const std::vector<raft::server_address>& add,
     const std::vector<raft::server_id>& del) {
-   return _messaging.send_raft_modify_config(netw::msg_addr(_raft_gr.get_inet_address(id)),
+   return _messaging.send_raft_modify_config(netw::msg_addr(_address_map.get_inet_address(id)),
        db::no_timeout, _group_id, _server_id, id, add, del);
 }
 
