@@ -116,4 +116,19 @@ struct timeout_now {
     raft::internal::tagged_uint64<raft::term_tag> current_term;
 };
 
+struct leader_info {
+    raft::group_id group0_id;
+    raft::server_address addr;
+};
+
+struct no_discovery {};
+
+struct peer_exchange {
+    std::variant<raft::no_discovery, raft::leader_info, std::vector<raft::server_address>> info;
+};
+
+struct success_or_bounce {
+    std::optional<raft::server_address> bounce;
+}
+
 } // namespace raft

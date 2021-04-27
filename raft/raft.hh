@@ -339,6 +339,58 @@ struct timeout_now {
 
 using rpc_message = std::variant<append_request, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply, timeout_now>;
 
+/////////////////////////////////////////
+// Discovery RPC supporting message types
+//
+
+// This Scylla server is still booting, the caller
+// has to retry after a pause. After booting, the
+// server will either return its leader info or
+// peer list.
+struct no_discovery {};
+
+// Used in a bootstrapped Scylla cluster, provides group  0
+// identifier and the current group leader address.
+struct leader_info {
+    group_id group0_id;
+    server_address addr;
+    bool operator==(const leader_info& rhs) const {
+        return rhs.group0_id == group0_id && rhs.addr == addr;
+    }
+};
+
+// When a fresh cluster is bootstrapping, peer list is
+// used to build a transitive closure of all cluster members
+// and select an initial Raft configuration of the cluster.
+using peer_list = std::vector<raft::server_address>;
+
+// If the peer has no cluster discovery running, it returns
+// no_discovery, which means the caller needs to retry
+// contacting this server after a pause. Otherwise it returns
+// its leader data or a list of peers.
+struct peer_exchange {
+    std::variant<no_discovery, leader_info, peer_list> info;
+};
+
+// Raft RPC such as add_entries may succeed or, if the server is
+// not a leader or failed while the operation is in progress,
+// suggest another server. Representation of this type of
+// response. It is legal to return success_or_bounce in cases
+// of uncertainty (operation may have succeeded), if the user
+// decides to retry with a returned bounce address, it must
+// ensure idempotency of the request. The user of
+// success_or_bounce should also be prepared to handle a standard
+// kind of exception, e.g. RPC timeout in which case it can
+// use the same leader address to retry.
+struct success_or_bounce {
+    // Set if the client should retry with another leader.
+    std::optional<server_address> bounce;
+};
+
+//
+// Discovery RPC messages end
+/////////////////////////////////////////
+
 // we need something that can be truncated form both sides.
 // std::deque move constructor is not nothrow hence cannot be used
 using log_entries = boost::container::deque<log_entry_ptr>;

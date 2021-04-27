@@ -547,6 +547,11 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GOSSIP_ECHO:
     case messaging_verb::GOSSIP_GET_ENDPOINT_STATES:
     case messaging_verb::GET_SCHEMA_VERSION:
+    // Raft peer exchange is mainly running at boot, but still
+    // should not be blocked by any data requests.
+    case messaging_verb::RAFT_PEER_EXCHANGE:
+    case messaging_verb::RAFT_ADD_SERVER:
+    case messaging_verb::RAFT_REMOVE_SERVER:
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
@@ -1581,6 +1586,41 @@ future<> messaging_service::unregister_hint_sync_point_check() {
 future<db::hints::sync_point_check_response> messaging_service::send_hint_sync_point_check(msg_addr id, clock_type::time_point timeout, db::hints::sync_point_check_request request) {
     return send_message_timeout<future<db::hints::sync_point_check_response>>(this, messaging_verb::HINT_SYNC_POINT_CHECK, std::move(id), timeout, std::move(request));
 }
+
+void messaging_service::register_raft_peer_exchange(std::function<future<raft::peer_exchange>(const rpc::client_info&, rpc::opt_time_point, raft::peer_list)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_PEER_EXCHANGE, std::move(func));
+}
+future<> messaging_service::unregister_raft_peer_exchange() {
+   return unregister_handler(netw::messaging_verb::RAFT_PEER_EXCHANGE);
+}
+future<raft::peer_exchange> messaging_service::send_raft_peer_exchange(msg_addr id, clock_type::time_point timeout, const raft::peer_list& peers) {
+   return send_message_timeout<raft::peer_exchange>(this, messaging_verb::RAFT_PEER_EXCHANGE, std::move(id), timeout, peers);
+}
+
+void messaging_service::register_raft_add_server(std::function<future<raft::success_or_bounce>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_address addr)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_ADD_SERVER, std::move(func));
+}
+
+future<> messaging_service::unregister_raft_add_server() {
+   return unregister_handler(netw::messaging_verb::RAFT_ADD_SERVER);
+}
+
+future<raft::success_or_bounce> messaging_service::send_raft_add_server(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_address addr) {
+   return send_message_timeout<raft::success_or_bounce>(this, messaging_verb::RAFT_ADD_SERVER, std::move(id), timeout, gid, addr);
+}
+
+void messaging_service::register_raft_remove_server(std::function<future<raft::success_or_bounce>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id sid)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_REMOVE_SERVER, std::move(func));
+}
+
+future<> messaging_service::unregister_raft_remove_server() {
+   return unregister_handler(netw::messaging_verb::RAFT_REMOVE_SERVER);
+}
+
+future<raft::success_or_bounce> messaging_service::send_raft_remove_server(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id sid) {
+   return send_message_timeout<raft::success_or_bounce>(this, messaging_verb::RAFT_REMOVE_SERVER, std::move(id), timeout, gid, sid);
+}
+
 
 void init_messaging_service(sharded<messaging_service>& ms,
                 messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,

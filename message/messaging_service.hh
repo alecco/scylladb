@@ -162,7 +162,10 @@ enum class messaging_verb : int32_t {
     RAFT_TIMEOUT_NOW = 51,
     HINT_SYNC_POINT_CREATE = 52,
     HINT_SYNC_POINT_CHECK = 53,
-    LAST = 54,
+    RAFT_PEER_EXCHANGE = 54,
+    RAFT_ADD_SERVER = 55,
+    RAFT_REMOVE_SERVER = 56,
+    LAST = 57,
 };
 
 } // namespace netw
@@ -592,6 +595,18 @@ public:
     void register_raft_timeout_now(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::timeout_now)>&& func);
     future<> unregister_raft_timeout_now();
     future<> send_raft_timeout_now(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::timeout_now& timeout_now);
+
+    void register_raft_peer_exchange(std::function<future<raft::peer_exchange> (const rpc::client_info&, rpc::opt_time_point, raft::peer_list)>&& func);
+    future<> unregister_raft_peer_exchange();
+    future<raft::peer_exchange> send_raft_peer_exchange(msg_addr id, clock_type::time_point timeout, const raft::peer_list& peers);
+
+    void register_raft_add_server(std::function<future<raft::success_or_bounce>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_address addr)>&& func);
+    future<> unregister_raft_add_server();
+    future<raft::success_or_bounce> send_raft_add_server(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_address addr);
+
+    void register_raft_remove_server(std::function<future<raft::success_or_bounce>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id sid)>&& func);
+    future<> unregister_raft_remove_server();
+    future<raft::success_or_bounce> send_raft_remove_server(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id sid);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
