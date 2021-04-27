@@ -703,22 +703,20 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             auto p = std::get<partition>(update);
             connected.connect_all();
             std::unordered_set<size_t> partition_servers;
-            struct leader new_leader;
-            bool have_new_leader = false;
+            std::optional<size_t> next_leader;
             for (auto s: p) {
                 size_t id;
                 if (std::holds_alternative<struct leader>(s)) {
-                    have_new_leader = true;
-                    new_leader = std::get<struct leader>(s);
-                    id = new_leader.id;
+                    next_leader = std::get<struct leader>(s).id;
+                    id = *next_leader;
                 } else {
                     id = std::get<int>(s);
                 }
                 partition_servers.insert(id);
             }
-            if (have_new_leader) {
+            if (next_leader.has_value()) {
                 // Wait for log to propagate to next leader, before disconnections
-                co_await wait_log(rafts[leader].first, rafts[new_leader.id].first);
+                co_await wait_log(rafts[leader].first, rafts[*next_leader].first);
             } else {
                 // No leader specified, wait log for all connected servers, before disconnections
                 for (auto s: partition_servers) {
@@ -732,10 +730,10 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                     connected.disconnect(to_raft_id(s));
                 }
             }
-            if (have_new_leader && new_leader.id != leader) {
+            if (next_leader.has_value()) {
                 // New leader specified, elect it
                 leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
-                        new_leader.id);
+                        *next_leader);
             } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
                 // Old leader disconnected and not specified new, free election
                 leader = co_await free_election(rafts);
