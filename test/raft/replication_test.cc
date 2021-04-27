@@ -143,8 +143,10 @@ public:
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen == _apply_entries) {
+fmt::print("sm::apply[{}] DONE\n", _id);
             _done.set_value();
         }
+// fmt::print("sm::apply[{}] got {}/{} entries\n", _id, _seen, _apply_entries);
         tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
         return make_ready_future<>();
     }
@@ -749,23 +751,29 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                 tickers);
     }
 
+fmt::print("Appending remaining values --------------\n");
     BOOST_TEST_MESSAGE("Appending remaining values");
     if (next_val < test.total_values) {
         // Send remaining updates
         std::vector<int> values(test.total_values - next_val);
         std::iota(values.begin(), values.end(), next_val);
         std::vector<raft::command> commands = create_commands<int>(values);
+fmt::print("Adding remaining {} entries on leader {}\n", values.size(), leader);
         tlogger.debug("Adding remaining {} entries on leader {}", values.size(), leader);
         co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
             return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
         });
+fmt::print(" .. done adding remaining entries\n");
     }
 
+size_t i = 0; fmt::print("\nWaiting for servers:\n");
     // Wait for all state_machine s to finish processing commands
     for (auto& r:  rafts) {
+fmt::print("  {}\n", i++);
         co_await r.second->done();
     }
 
+fmt::print("\nStopping\n");
     for (auto& r: rafts) {
         co_await r.first->abort(); // Stop servers
     }
@@ -797,12 +805,16 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+fmt::print("test name " # test_name "\n"); \
         replication_test(test_body, false, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+fmt::print("test name " # test_name " drops\n"); \
         replication_test(test_body, false, true); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+fmt::print("test name " # test_name " prevote \n"); \
         replication_test(test_body, true, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+fmt::print("test name " # test_name " prevote drops\n"); \
         replication_test(test_body, true, true); }
 
 // 1 nodes, simple replication, empty, no updates
