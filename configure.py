@@ -564,6 +564,7 @@ raft_tests = set([
     'test/raft/etcd_test',
     'test/raft/raft_sys_table_storage_test',
     'test/raft/raft_address_map_test',
+    'test/raft/discovery_test',
 ])
 
 apps = set([
@@ -1015,6 +1016,7 @@ scylla_core = (['database.cc',
                 'service/raft/raft_rpc.cc',
                 'service/raft/raft_gossip_failure_detector.cc',
                 'service/raft/raft_group_registry.cc',
+                'service/raft/discovery.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )
@@ -1277,6 +1279,10 @@ deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/raft/helpers.cc'
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
     scylla_core + scylla_tests_generic_dependencies
 deps['test/raft/raft_address_map_test'] = ['test/raft/raft_address_map_test.cc'] + scylla_core
+deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
+                                     'test/raft/helpers.cc',
+                                     'test/lib/log.cc',
+                                     'service/raft/discovery.cc'] + scylla_raft_dependencies
 
 deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
 
