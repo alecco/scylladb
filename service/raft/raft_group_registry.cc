@@ -114,7 +114,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::peer_list peers) -> future<raft::peer_exchange> {
 
         return container().invoke_on(0 /* group 0 is on shard 0 */, [peers = std::move(peers)] (
-                raft_services& self) -> future<raft::peer_exchange> {
+                raft_group_registry& self) -> future<raft::peer_exchange> {
 
             return make_ready_future<raft::peer_exchange>();
         });
@@ -126,7 +126,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_address addr) {
 
         return container().invoke_on(shard_for_group(gid), [gid, addr] (
-                raft_services& self) {
+                raft_group_registry& self) {
 
             return make_ready_future<raft::success_or_bounce>();
         });
@@ -138,7 +138,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id sid) {
 
         return container().invoke_on(shard_for_group(gid), [gid, sid] (
-                raft_services& self) {
+                raft_group_registry& self) {
 
             return make_ready_future<raft::success_or_bounce>();
         });

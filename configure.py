@@ -557,6 +557,7 @@ raft_tests = set([
     'test/raft/etcd_test',
     'test/raft/raft_sys_table_storage_test',
     'test/raft/raft_address_map_test',
+    'test/raft/discovery_test',
 ])
 
 apps = set([
@@ -656,6 +657,7 @@ scylla_raft_core = [
     'raft/fsm.cc',
     'raft/tracker.cc',
     'raft/log.cc',
+    'raft/discovery.cc'
 ]
 
 scylla_core = (['database.cc',
@@ -1260,6 +1262,7 @@ deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/lib/log.cc'] + s
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
     scylla_raft_dependencies + scylla_tests_generic_dependencies
 deps['test/raft/raft_address_map_test'] = ['test/raft/raft_address_map_test.cc'] + scylla_raft_dependencies
+deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc', 'test/lib/log.cc'] + scylla_minimal_raft_dependencies
 
 deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
 
