@@ -143,10 +143,8 @@ public:
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen == _apply_entries) {
-fmt::print("sm::apply[{}] DONE\n", _id);
             _done.set_value();
         }
-// fmt::print("sm::apply[{}] got {}/{} entries\n", _id, _seen, _apply_entries);
         tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
         return make_ready_future<>();
     }
@@ -527,6 +525,7 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
 // Run a free election of nodes in configuration
 // NOTE: there should be enough nodes capable of participating
 future<size_t> free_election(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+fmt::print("Running free election\n");
     tlogger.debug("Running free election");
     elapse_elections(rafts);
     size_t node = 0;
@@ -538,6 +537,7 @@ future<size_t> free_election(std::vector<std::pair<std::unique_ptr<raft::server>
         // find if we have a leader
         for (size_t s = 0; s < rafts.size(); ++s) {
             if (rafts[s].first->is_leader()) {
+fmt::print("New leader {}\n", s);
                 tlogger.debug("New leader {}", s);
                 co_return s;
             }
@@ -682,9 +682,19 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             std::vector<int> values(n);
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
-            co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
+            co_await seastar::do_for_each(commands, [&] (raft::command cmd) -> future<> {
+fmt::print("Adding command entry on leader {}\n", leader);
                 tlogger.debug("Adding command entry on leader {}", leader);
-                return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+fmt::print("    {} leader is {} \n", leader, rafts[leader].first->is_leader());
+                // return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+                try {
+                    co_await rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+                } catch (raft::not_a_leader& e) {
+                    // leader stepped down, implying config fully changed
+    fmt::print(" XXX not a leader {}\n", leader);
+                } catch (raft::commit_status_unknown& e) {
+    fmt::print(" XXX something else\n");
+                }
             });
             next_val += n;
             co_await wait_log(rafts, connected, in_configuration, leader);
@@ -754,14 +764,26 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
 fmt::print("Appending remaining values --------------\n");
     BOOST_TEST_MESSAGE("Appending remaining values");
     if (next_val < test.total_values) {
+fmt::print("     XXX\n");
         // Send remaining updates
         std::vector<int> values(test.total_values - next_val);
         std::iota(values.begin(), values.end(), next_val);
         std::vector<raft::command> commands = create_commands<int>(values);
+fmt::print("    {} leader is {} \n", leader, rafts[leader].first->is_leader());
+BOOST_CHECK_MESSAGE(rafts[leader].first->is_leader(),
+                format("Digest doesn't match for server [{}]: {} != {}", leader));
 fmt::print("Adding remaining {} entries on leader {}\n", values.size(), leader);
         tlogger.debug("Adding remaining {} entries on leader {}", values.size(), leader);
-        co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
-            return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+        co_await seastar::do_for_each(commands, [&] (raft::command cmd) -> future<> {
+            // return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+            try {
+                co_await rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
+            } catch (raft::not_a_leader& e) {
+                // leader stepped down, implying config fully changed
+fmt::print(" XXX not a leader {}\n", leader);
+            } catch (raft::commit_status_unknown& e) {
+fmt::print(" XXX something else\n");
+            }
         });
 fmt::print(" .. done adding remaining entries\n");
     }
