@@ -755,7 +755,6 @@ std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
     std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
     seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) {
     assert(uuid != raft::server_id{utils::UUID(0, 0)});
-    // XXX prev allocation
     return std::make_unique<raft::server_impl>(uuid, std::move(rpc), std::move(state_machine),
         std::move(persistence), failure_detector, config);
 }
