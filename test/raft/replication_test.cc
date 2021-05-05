@@ -101,6 +101,10 @@ raft::server_address to_server_address(size_t local_id) {
     return raft::server_address{raft::server_id{to_raft_uuid(local_id)}};
 }
 
+size_t to_local_id(utils::UUID uuid) {
+    return uuid.get_least_significant_bits() - 1;
+}
+
 class hasher_int : public xx_hasher {
 public:
     using xx_hasher::xx_hasher;
@@ -651,7 +655,7 @@ future<> add_entries(std::vector<test_server>& rafts,
         } catch (raft::not_a_leader& e) {
             // leader stepped down, update with new leader if present
             if (e.leader != raft::server_id{}) {
-                leader = e.leader.id.get_least_significant_bits() - 1;
+                leader = to_local_id(e.leader.id);
             }
         } catch (raft::commit_status_unknown& e) {
         }
