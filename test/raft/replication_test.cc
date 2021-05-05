@@ -24,6 +24,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/weak_ptr.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/later.hh>
 #include <seastar/testing/random.hh>
@@ -129,7 +130,7 @@ struct snapshot_value {
 using snapshots = std::unordered_map<raft::server_id, snapshot_value>;
 using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_value>>;
 
-class state_machine : public raft::state_machine {
+class state_machine : public raft::state_machine, public weakly_referencable<state_machine> {
 public:
     using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
 private:
@@ -290,7 +291,7 @@ public:
     }
 };
 
-class rpc : public raft::rpc {
+class rpc : public raft::rpc, public weakly_referencable<rpc> {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
     lw_shared_ptr<connected> _connected;
@@ -378,8 +379,8 @@ std::unordered_map<raft::server_id, rpc*> rpc::net;
 
 struct test_server {
     std::unique_ptr<raft::server> server;
-    state_machine* sm;
-    rpc* rpc;
+    weak_ptr<state_machine> sm;
+    weak_ptr<rpc> rpc;
 };
 
 test_server
@@ -388,19 +389,19 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
 
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), apply_entries, snapshots);
-    auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid, connected, snapshots, packet_drops);
-    auto& rpc_ref = *mrpc;
     auto mpersistence = std::make_unique<persistence>(uuid, state, snapshots, persisted_snapshots);
     auto fd = seastar::make_shared<failure_detector>(uuid, connected);
 
+    auto sm_wp = sm->weak_from_this();
+    auto rpc_wp = mrpc->weak_from_this();
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
         std::move(fd), state.server_config);
 
     return {
         std::move(raft),
-        &rsm,
-        &rpc_ref
+        std::move(sm_wp),
+        std::move(rpc_wp)
     };
 }
 
