@@ -377,19 +377,17 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-struct test_server {
-    std::unique_ptr<raft::server> server;
-    weak_ptr<state_machine> sm;
-    weak_ptr<rpc> rpc;
-};
-
 class RaftCluster {
-    std::vector<test_server> _servers{};
+    std::vector<std::unique_ptr<raft::server>> _servers;
+    std::vector<weak_ptr<state_machine>> _sm;
+    std::vector<weak_ptr<rpc>> _rpc;
     lw_shared_ptr<connected> _connected;
     lw_shared_ptr<snapshots> _snapshots;
     lw_shared_ptr<persisted_snapshots> _persisted_snapshots;
     size_t _apply_entries;
     bool _packet_drops;
+    void create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
+            initial_state state, size_t apply_entries);
 public:
     size_t n;
     RaftCluster(std::vector<initial_state> states, state_machine::apply_fn apply,
@@ -419,21 +417,18 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
         size_t apply_entries, lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
 
-    auto sm = std::make_unique<state_machine>(uuid, std::move(apply), apply_entries, snapshots);
-    auto mrpc = std::make_unique<rpc>(uuid, connected, snapshots, packet_drops);
-    auto mpersistence = std::make_unique<persistence>(uuid, state, snapshots, persisted_snapshots);
-    auto fd = seastar::make_shared<failure_detector>(uuid, connected);
+    auto sm = std::make_unique<state_machine>(uuid, std::move(apply), apply_entries,
+            _snapshots);
+    weak_ptr<state_machine> wp_sm = sm->weak_from_this();
+    size_t id = to_local_id(uuid.id);
+    _sm[id] = sm->weak_from_this();
+    auto mrpc = std::make_unique<rpc>(uuid, _connected, _snapshots, _packet_drops);
+    _rpc[id] = mrpc->weak_from_this();
+    auto mpersistence = std::make_unique<persistence>(uuid, state, _snapshots, _persisted_snapshots);
+    auto fd = seastar::make_shared<failure_detector>(uuid, _connected);
 
-    auto sm_wp = sm->weak_from_this();
-    auto rpc_wp = mrpc->weak_from_this();
-    auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
+    _servers[id] = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
         std::move(fd), state.server_config);
-
-    return {
-        std::move(raft),
-        std::move(sm_wp),
-        std::move(rpc_wp)
-    };
 }
 
 RaftCluster::RaftCluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries,
@@ -452,8 +447,7 @@ RaftCluster::RaftCluster(std::vector<initial_state> states, state_machine::apply
         auto& s = states[i].address;
         states[i].snapshot.config = config;
         (*_snapshots)[s.id] = states[i].snp_value;
-        auto& raft = *_servers.emplace_back(create_raft_server(s.id, apply, states[i],
-                        apply_entries, connected, _snapshots, _persisted_snapshots, _packet_drops)).server;
+        create_raft_server(s.id, apply, states[i], apply_entries);
     }
 }
 
@@ -686,7 +680,7 @@ future<std::unordered_set<size_t>> change_configuration(RaftCluster& rafts,
         if (!new_config.contains(s)) {
             tickers[s].cancel();
             co_await rafts[s].server->abort();
-            rafts[s] = create_raft_server(to_raft_id(s), apply, initial_state{.log = {}},
+            create_raft_server(to_raft_id(s), apply, initial_state{.log = {}},
                     total_values, connected, snapshots, persisted_snapshots, packet_drops);
             co_await rafts[s].server->start();
             tickers[s].set_callback([&rafts, s] { rafts[s].server->tick(); });
