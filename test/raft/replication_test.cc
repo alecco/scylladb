@@ -377,6 +377,16 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
+struct set_config_entry {
+    size_t node_idx;
+    bool can_vote;
+
+    set_config_entry(size_t idx, bool can_vote = true)
+        : node_idx(idx), can_vote(can_vote)
+    {}
+};
+using set_config = std::vector<set_config_entry>;
+
 struct test_server {
     std::unique_ptr<raft::server> server;
     weak_ptr<state_machine> sm;
@@ -520,16 +530,6 @@ struct leader {
     size_t id;
 };
 using partition = std::vector<std::variant<leader,int>>;
-
-struct set_config_entry {
-    size_t node_idx;
-    bool can_vote;
-
-    set_config_entry(size_t idx, bool can_vote = true)
-        : node_idx(idx), can_vote(can_vote)
-    {}
-};
-using set_config = std::vector<set_config_entry>;
 
 using update = std::variant<entries, new_leader, partition, set_config>;
 
