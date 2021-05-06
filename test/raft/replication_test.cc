@@ -439,6 +439,7 @@ class raft_cluster {
     size_t _next_val;
     bool _packet_drops;
     std::vector<seastar::timer<lowres_clock>> _tickers;
+    state_machine::apply_fn _apply;
 public:
     raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
             size_t apply_entries, lw_shared_ptr<connected> connected,
@@ -495,7 +496,7 @@ raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::app
         bool packet_drops) :
             _connected(connected), _snapshots(snapshots),
             _persisted_snapshots(persisted_snapshots), _next_val(first_val),
-            _packet_drops(packet_drops) {
+            _packet_drops(packet_drops), _apply(apply) {
     raft::configuration config;
 
     for (size_t i = 0; i < states.size(); i++) {
@@ -507,7 +508,7 @@ raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::app
         auto& s = states[i].address;
         states[i].snapshot.config = config;
         (*_snapshots)[s.id] = states[i].snp_value;
-        _servers.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries,
+        _servers.emplace_back(create_raft_server(s.id, _apply, states[i], apply_entries,
                     connected, _snapshots, _persisted_snapshots, _packet_drops));
     }
 }
