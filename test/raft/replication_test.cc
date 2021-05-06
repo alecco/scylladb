@@ -438,6 +438,7 @@ class raft_cluster {
     size_t _apply_entries;
     size_t _next_val;
     bool _packet_drops;
+    std::vector<seastar::timer<lowres_clock>> _tickers;
 public:
     raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
             size_t apply_entries, lw_shared_ptr<connected> connected,
@@ -457,6 +458,11 @@ public:
     future<> stop_all();
     future<> wait_all();
     void tick_all();
+    void init_raft_tickers();
+    void pause_tickers();
+    void restart_tickers();
+    void cancel_ticker(size_t id);
+    void set_ticker_callback(size_t id) noexcept;
     future<> add_entries(size_t n, size_t& leader);
     future<> add_remaining_entries(size_t& leader);
 };
@@ -510,6 +516,7 @@ future<> raft_cluster::start_all() {
     for (auto& r: _servers) {
         co_await r.server->start();
     }
+    init_raft_tickers();
 }
 
 future<> raft_cluster::stop_all() {
@@ -528,6 +535,38 @@ void raft_cluster::tick_all() {
     for (auto& r: _servers) {
         r.server->tick();
     }
+}
+
+void raft_cluster::init_raft_tickers() {
+    _tickers.resize(_servers.size());
+    for (size_t s = 0; s < _servers.size(); ++s) {
+        _tickers[s].arm_periodic(tick_delta);
+        _tickers[s].set_callback([&, s] {
+            _servers[s].server->tick();
+        });
+    }
+}
+
+void raft_cluster::pause_tickers() {
+    for (auto& ticker: _tickers) {
+        ticker.cancel();
+    }
+}
+
+void raft_cluster::restart_tickers() {
+    for (auto& ticker: _tickers) {
+        ticker.rearm_periodic(tick_delta);
+    }
+}
+
+void raft_cluster::cancel_ticker(size_t id) {
+    _tickers[id].cancel();
+}
+
+void raft_cluster::set_ticker_callback(size_t id) noexcept {
+    _tickers[id].set_callback([&, id] {
+        _servers[id].server->tick();
+    });
 }
 
 std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned start_idx) {
@@ -628,23 +667,11 @@ future<size_t> free_election(raft_cluster& rafts) {
     }
 }
 
-void pause_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
-    for (auto& ticker: tickers) {
-        ticker.cancel();
-    }
-}
-
-void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
-    for (auto& ticker: tickers) {
-        ticker.rearm_periodic(tick_delta);
-    }
-}
-
 future<std::unordered_set<size_t>> change_configuration(raft_cluster& rafts,
         size_t total_values, lw_shared_ptr<connected> connected,
         std::unordered_set<size_t>& in_configuration, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops, set_config sc,
-        size_t& leader, std::vector<seastar::timer<lowres_clock>>& tickers, state_machine::apply_fn apply) {
+        size_t& leader, state_machine::apply_fn apply) {
 
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
     raft::server_address_set set;
@@ -683,18 +710,18 @@ future<std::unordered_set<size_t>> change_configuration(raft_cluster& rafts,
     } catch (raft::commit_status_unknown& e) {}
 
     // Reset removed nodes
-    pause_tickers(tickers);  // stop all tickers
+    rafts.pause_tickers();
     for (auto s: in_configuration) {
         if (!new_config.contains(s)) {
-            tickers[s].cancel();
+            rafts.cancel_ticker(s);
             co_await rafts[s].server->abort();
             rafts[s] = create_raft_server(to_raft_id(s), apply, initial_state{.log = {}},
                     total_values, connected, snapshots, persisted_snapshots, packet_drops);
             co_await rafts[s].server->start();
-            tickers[s].set_callback([&rafts, s] { rafts[s].server->tick(); });
+            rafts.set_ticker_callback(s);
         }
     }
-    restart_tickers(tickers); // start all tickers
+    rafts.restart_tickers();
 
     co_return new_config;
 }
@@ -791,9 +818,6 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             snaps, persisted_snaps, get_first_val(test), packet_drops);
     co_await rafts.start_all();
 
-    // Tickers for servers
-    std::vector<raft_ticker_type> tickers = init_raft_tickers(rafts);
-
     // Keep track of what servers are in the current configuration
     std::unordered_set<size_t> in_configuration;
     for (size_t s = 0; s < test.nodes; ++s) {
@@ -815,10 +839,10 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
             co_await wait_log(rafts[leader].server, rafts[next_leader].server);
-            pause_tickers(tickers);
+            rafts.pause_tickers();
             leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
                     next_leader);
-            restart_tickers(tickers);
+            rafts.restart_tickers();
         } else if (std::holds_alternative<partition>(update)) {
             auto p = std::get<partition>(update);
             connected->connect_all();
@@ -843,7 +867,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                     co_await wait_log(rafts[leader].server, rafts[s].server);
                 }
             }
-            pause_tickers(tickers);
+            rafts.pause_tickers();
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (partition_servers.find(s) == partition_servers.end()) {
                     // Disconnect servers not in main partition
@@ -858,11 +882,11 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                 // Old leader disconnected and not specified new, free election
                 leader = co_await free_election(rafts);
             }
-            restart_tickers(tickers);
+            rafts.restart_tickers();
         } else if (std::holds_alternative<set_config>(update)) {
             auto sc = std::get<set_config>(update);
             in_configuration = co_await change_configuration(rafts, test.total_values, connected,
-                    in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers, apply_changes);
+                    in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, apply_changes);
         }
     }
 
@@ -875,7 +899,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         }
         in_configuration = co_await change_configuration(rafts, test.total_values, connected,
                 in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader,
-                tickers, apply_changes);
+                apply_changes);
     }
 
     BOOST_TEST_MESSAGE("Appending remaining values");
@@ -926,8 +950,7 @@ raft::server_address_set full_cluster_address_set(size_t nodes) {
 }
 
 using test_func = seastar::noncopyable_function<
-    future<>(raft_cluster&, lw_shared_ptr<connected>, std::vector<raft_ticker_type>&,
-        size_t, std::unordered_set<size_t>&)>;
+    future<>(raft_cluster&, lw_shared_ptr<connected>, size_t, std::unordered_set<size_t>&)>;
 
 size_t dummy_apply_fn(raft::server_id id, const std::vector<raft::command_cref>& commands,
         lw_shared_ptr<hasher_int> hasher) {
@@ -936,11 +959,10 @@ size_t dummy_apply_fn(raft::server_id id, const std::vector<raft::command_cref>&
 
 future<std::unordered_set<size_t>> rpc_test_change_configuration(raft_cluster& rafts,
         lw_shared_ptr<connected> connected, std::unordered_set<size_t>& in_configuration,
-        set_config sc, size_t& leader,
-        std::vector<seastar::timer<lowres_clock>>& tickers) {
+        set_config sc, size_t& leader) {
     return change_configuration(rafts, 1, connected, in_configuration,
         make_lw_shared<snapshots>(), make_lw_shared<persisted_snapshots>(),
-        false, sc, leader, tickers, dummy_apply_fn);
+        false, sc, leader, dummy_apply_fn);
 }
 
 // Wrapper function for running RPC tests that provides a convenient
@@ -953,7 +975,6 @@ future<> rpc_test(size_t nodes, test_func test_case_body) {
     raft_cluster rafts(states, dummy_apply_fn, 1, conn,
         make_lw_shared<snapshots>(), make_lw_shared<persisted_snapshots>(), 0, false);
     co_await rafts.start_all();
-    auto tickers = init_raft_tickers(rafts);
     // Keep track of what servers are in the current configuration
     std::unordered_set<size_t> in_configuration;
     for (size_t s = 0; s < rafts.size(); ++s) {
@@ -965,9 +986,7 @@ future<> rpc_test(size_t nodes, test_func test_case_body) {
     co_await rafts[initial_leader].server->wait_election_done();
     co_await wait_log_all(rafts, initial_leader);
     // Execute the test
-    co_await test_case_body(rafts, conn, tickers, initial_leader, in_configuration);
-    // Stop tickers
-    pause_tickers(tickers);
+    co_await test_case_body(rafts, conn, initial_leader, in_configuration);
     co_await rafts.stop_all();
 }
 
@@ -1216,11 +1235,10 @@ SEASTAR_TEST_CASE(rpc_propose_conf_change) {
     // Test that both configuration changes update RPC configuration correspondingly
     // on all nodes.
     return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            std::vector<raft_ticker_type>& tickers, size_t leader,
-            std::unordered_set<size_t>& in_configuration) -> future<> {
+            size_t leader, std::unordered_set<size_t>& in_configuration) -> future<> {
         // Remove node C from the cluster configuration.
         in_configuration = co_await rpc_test_change_configuration(rafts, connected,
-            in_configuration, set_config{0, 1}, leader, tickers);
+            in_configuration, set_config{0, 1}, leader);
 
         // Check that RPC config is updated both on leader and on follower nodes,
         // i.e. `rpc::remove_server` is called.
@@ -1231,7 +1249,7 @@ SEASTAR_TEST_CASE(rpc_propose_conf_change) {
 
         // Re-add node C to the cluster configuration.
         in_configuration = co_await rpc_test_change_configuration(rafts, connected,
-            in_configuration, set_config{0, 1, 2}, leader, tickers);
+            in_configuration, set_config{0, 1, 2}, leader);
 
         // Check that both A (leader) and B (follower) call `rpc::add_server`,
         // also the newly integrated node gets the actual RPC configuration, too.
@@ -1246,8 +1264,7 @@ SEASTAR_TEST_CASE(rpc_leader_election) {
     // 3 node cluster {A, B, C}.
     // Test that leader elections don't change RPC configuration.
     return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            std::vector<raft_ticker_type>& tickers, size_t initial_leader,
-            std::unordered_set<size_t>& in_configuration) -> future<> {
+            size_t initial_leader, std::unordered_set<size_t>& in_configuration) -> future<> {
         auto all_nodes = full_cluster_address_set(rafts.size());
         for (size_t s = 0; s < rafts.size(); ++s) {
             BOOST_CHECK(rafts[s].rpc->known_peers() == all_nodes);
@@ -1271,8 +1288,7 @@ SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
     // Test that demoting of node C to learner state and then promoting back
     // to voter doesn't involve any RPC configuration changes. 
     return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            std::vector<raft_ticker_type>& tickers, size_t leader,
-            std::unordered_set<size_t>& in_configuration) -> future<> {
+            size_t leader, std::unordered_set<size_t>& in_configuration) -> future<> {
         const auto all_voter_nodes = full_cluster_address_set(rafts.size());
         for (size_t s = 0; s < rafts.size(); ++s) {
             BOOST_CHECK(rafts[s].rpc->known_peers() == all_voter_nodes);
@@ -1281,7 +1297,7 @@ SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
 
         // Make C a non-voting member.
         in_configuration = co_await rpc_test_change_configuration(rafts, connected,
-            in_configuration, set_config{0, 1, set_config_entry(2, false)}, leader, tickers);
+            in_configuration, set_config{0, 1, set_config_entry(2, false)}, leader);
 
         // Check that RPC configuration didn't change.
         for (size_t s = 0; s < rafts.size(); ++s) {
@@ -1291,7 +1307,7 @@ SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
 
         // Make C a voting member.
         in_configuration = co_await rpc_test_change_configuration(rafts, connected,
-            in_configuration, set_config{0, 1, 2}, leader, tickers);
+            in_configuration, set_config{0, 1, 2}, leader);
 
         // RPC configuration shouldn't change.
         for (size_t s = 0; s < rafts.size(); ++s) {
@@ -1317,10 +1333,9 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
     // The RPC configuration on A is restored from initial snapshot configuration,
     // which is {A, B, C}.
     return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            std::vector<raft_ticker_type>& tickers, size_t initial_leader,
-            std::unordered_set<size_t>& in_configuration) -> future<> {
+            size_t initial_leader, std::unordered_set<size_t>& in_configuration) -> future<> {
         const auto all_nodes = full_cluster_address_set(rafts.size());
-        pause_tickers(tickers);
+        rafts.pause_tickers();
         // Disconnect A from B and C.
         connected->disconnect(to_raft_id(0));
         // Try to change configuration (remove node C)
@@ -1356,7 +1371,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
         rafts[initial_leader] = create_raft_server(to_raft_id(initial_leader), dummy_apply_fn, restart_state, 1,
             connected, make_lw_shared<snapshots>(), make_lw_shared<persisted_snapshots>(), false);
         co_await rafts[initial_leader].server->start();
-        tickers[initial_leader].set_callback([&rafts, s=initial_leader] { rafts[s].server->tick(); });
+        rafts.set_ticker_callback(initial_leader);
         // Elect B as leader
         auto new_leader = co_await elect_new_leader(rafts, connected, in_configuration,
             initial_leader, 1);
@@ -1372,7 +1387,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
         // Heal network partition.
         connected->connect_all();
 
-        restart_tickers(tickers);
+        rafts.restart_tickers();
         // wait to synchronize logs between current leader (B) and the rest of the cluster
         co_await wait_log_all(rafts, initial_leader);
         // A should have truncated an offending configuration entry and revert its RPC configuration.
@@ -1416,21 +1431,20 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
     // After healing the network and synchronizing with new leader B, RPC config
     // should be reverted back to committed state {A, B, C}.
     return rpc_test(4, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            std::vector<raft_ticker_type>& tickers, size_t initial_leader,
-            std::unordered_set<size_t>& in_configuration) -> future<> {
+            size_t initial_leader, std::unordered_set<size_t>& in_configuration) -> future<> {
         const auto all_nodes = full_cluster_address_set(rafts.size());
 
         // Remove node D from the cluster configuration.
         auto committed_conf = address_set({to_raft_id(0), to_raft_id(1), to_raft_id(2)});
         in_configuration = co_await rpc_test_change_configuration(rafts, connected,
-            in_configuration, set_config{0, 1, 2}, initial_leader, tickers);
+            in_configuration, set_config{0, 1, 2}, initial_leader);
         // {A, B, C} configuration is committed by now.
 
         //
         // First case: shrink cluster (remove node C).
         //
 
-        pause_tickers(tickers);
+        rafts.pause_tickers();
         // Disconnect A from the rest of the cluster.
         connected->disconnect(to_raft_id(0));
         // Try to change configuration (remove node C)
@@ -1465,7 +1479,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         rafts[initial_leader] = create_raft_server(to_raft_id(initial_leader), dummy_apply_fn, restart_state, 1,
             connected, make_lw_shared<snapshots>(), make_lw_shared<persisted_snapshots>(), false);
         co_await rafts[initial_leader].server->start();
-        tickers[initial_leader].set_callback([&rafts, s=initial_leader] { rafts[s].server->tick(); });
+        rafts.set_ticker_callback(initial_leader);
         // Elect B as leader
         auto new_leader = co_await elect_new_leader(rafts, connected, in_configuration,
             initial_leader, 1);
@@ -1479,7 +1493,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         // Heal network partition.
         connected->connect_all();
 
-        restart_tickers(tickers);
+        rafts.restart_tickers();
         // wait to synchronize logs between current leader (B) and the rest of the cluster
         co_await wait_log(rafts[new_leader].server, rafts[0].server);
         co_await wait_log(rafts[new_leader].server, rafts[2].server);
@@ -1500,7 +1514,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         co_await elect_new_leader(rafts, connected, in_configuration,
             new_leader, initial_leader);
 
-        pause_tickers(tickers);
+        rafts.pause_tickers();
         // Disconnect A from the rest of the cluster.
         connected->disconnect(to_raft_id(0));
 
@@ -1527,7 +1541,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         rafts[initial_leader] = create_raft_server(to_raft_id(initial_leader), dummy_apply_fn, restart_state_2, 1,
             connected, make_lw_shared<snapshots>(), make_lw_shared<persisted_snapshots>(), false);
         co_await rafts[initial_leader].server->start();
-        tickers[initial_leader].set_callback([&rafts, s=initial_leader] { rafts[s].server->tick(); });
+        rafts.set_ticker_callback(initial_leader);
         // Elect B as leader
         new_leader = co_await elect_new_leader(rafts, connected, in_configuration,
             initial_leader, 1);
@@ -1542,7 +1556,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         // Heal network partition.
         connected->connect_all();
 
-        restart_tickers(tickers);
+        rafts.restart_tickers();
         // wait to synchronize logs between current leader (B) and the rest of the cluster
         co_await wait_log(rafts[new_leader].server, rafts[0].server);
         co_await wait_log(rafts[new_leader].server, rafts[2].server);
