@@ -464,6 +464,8 @@ public:
     void restart_tickers();
     void cancel_ticker(size_t id);
     void set_ticker_callback(size_t id) noexcept;
+    future<> start_node(size_t s);
+    future<> stop_node(size_t s);
     future<> add_entries(size_t n, size_t& leader);
     future<> add_remaining_entries(size_t& leader);
 };
@@ -570,6 +572,20 @@ void raft_cluster::set_ticker_callback(size_t id) noexcept {
     });
 }
 
+future<> raft_cluster::start_node(size_t s) {
+    // XXX
+    _servers.emplace_back(create_raft_server(s, _apply_fn, states[i], apply_entries,
+                connected, _snapshots, _persisted_snapshots, _packet_drops));
+    co_await _servers[s].server->start();
+    _tickers[s].set_callback([&] { _servers[s].server->tick();});
+}
+
+future<> raft_cluster::stop_node(size_t s) {
+    ticker_cancel(s);
+    co_await _servers[s].server->abort();
+}
+
+>>>>>>> fc8bc87426 (raft: replication test: raft_cluster stop start node)
 std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned start_idx) {
     std::vector<raft::log_entry> log;
 
