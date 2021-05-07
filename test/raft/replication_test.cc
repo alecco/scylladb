@@ -471,8 +471,7 @@ public:
             lw_shared_ptr<connected> connected, std::unordered_set<size_t>& in_configuration,
             lw_shared_ptr<snapshots> snapshots,
             lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops,
-            set_config sc, size_t& leader, std::vector<seastar::timer<lowres_clock>>& tickers,
-            state_machine::apply_fn apply);
+            set_config sc, size_t& leader, std::vector<seastar::timer<lowres_clock>>& tickers);
 };
 
 test_server
@@ -678,8 +677,7 @@ future<std::unordered_set<size_t>> raft_cluster::change_configuration(size_t tot
         lw_shared_ptr<connected> connected, std::unordered_set<size_t>& in_configuration,
         lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops, set_config sc,
-        size_t& leader, std::vector<seastar::timer<lowres_clock>>& tickers,
-        state_machine::apply_fn apply) {
+        size_t& leader, std::vector<seastar::timer<lowres_clock>>& tickers) {
 
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
     raft::server_address_set set;
@@ -723,7 +721,7 @@ future<std::unordered_set<size_t>> raft_cluster::change_configuration(size_t tot
         if (!new_config.contains(s)) {
             tickers[s].cancel();
             co_await _servers[s].server->abort();
-            _servers[s] = create_raft_server(to_raft_id(s), apply, initial_state{.log = {}},
+            _servers[s] = create_raft_server(to_raft_id(s), _apply, initial_state{.log = {}},
                     total_values, connected, snapshots, persisted_snapshots, packet_drops);
             co_await _servers[s].server->start();
             tickers[s].set_callback([&, s] { _servers[s].server->tick(); });
@@ -867,7 +865,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         } else if (std::holds_alternative<set_config>(update)) {
             auto sc = std::get<set_config>(update);
             in_configuration = co_await rafts.change_configuration(test.total_values, connected,
-                    in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers, apply_changes);
+                    in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader,
+                    tickers);
         }
     }
 
@@ -880,7 +879,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         }
         in_configuration = co_await rafts.change_configuration(test.total_values, connected,
                 in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader,
-                tickers, apply_changes);
+                tickers);
     }
 
     BOOST_TEST_MESSAGE("Appending remaining values");
@@ -945,7 +944,7 @@ future<std::unordered_set<size_t>> rpc_test_change_configuration(raft_cluster& r
         std::vector<seastar::timer<lowres_clock>>& tickers) {
     return rafts.change_configuration(1, connected, in_configuration,
         make_lw_shared<snapshots>(), make_lw_shared<persisted_snapshots>(),
-        false, sc, leader, tickers, dummy_apply_fn);
+        false, sc, leader, tickers);
 }
 
 // Wrapper function for running RPC tests that provides a convenient
