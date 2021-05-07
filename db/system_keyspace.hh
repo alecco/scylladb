@@ -651,5 +651,18 @@ future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 future<bool> cdc_is_rewritten();
 future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
+// Load Raft Group 0 id from scylla.local
+future<utils::UUID> get_raft_group0_id();
+
+// Load this server id from scylla.local
+future<utils::UUID> get_raft_server_id();
+
+// Persist Raft Group 0 id. Should be a TIMEUUID.
+future<> set_raft_group0_id(utils::UUID id);
+
+// Called once at fresh server startup to make sure every server
+// has a Raft ID
+future<> set_raft_server_id(utils::UUID id);
+
 } // namespace system_keyspace
 } // namespace db
