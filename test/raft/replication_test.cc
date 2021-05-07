@@ -516,6 +516,7 @@ public:
     void disconnect(size_t id, std::optional<raft::server_id> except = std::nullopt);
     void connect_all();
     void elapse_elections();
+    future<size_t> elect_new_leader(size_t leader, size_t new_leader);
     future<> add_entries(size_t n, size_t& leader);
     future<> add_remaining_entries(size_t& leader);
 };
@@ -669,30 +670,29 @@ void raft_cluster::elapse_elections() {
     }
 }
 
-future<size_t> elect_new_leader(raft_cluster& rafts,
-        lw_shared_ptr<connected> connected, size_t leader, size_t new_leader) {
-    BOOST_CHECK_MESSAGE(new_leader < rafts.size(),
+future<size_t> raft_cluster::elect_new_leader(size_t leader, size_t new_leader) {
+    BOOST_CHECK_MESSAGE(new_leader < _servers.size(),
             format("Wrong next leader value {}", new_leader));
 
     if (new_leader != leader) {
         do {
             // Leader could be already partially disconnected, save current connectivity state
-            struct connected prev_disconnected = *connected;
+            struct connected prev_disconnected = *_connected;
             // Disconnect current leader from everyone
-            connected->disconnect(to_raft_id(leader));
+            _connected->disconnect(to_raft_id(leader));
             // Make move all nodes past election threshold, also making old leader follower
-            rafts.elapse_elections();
+            elapse_elections();
             // Consume leader output messages since a stray append might make new leader step down
             co_await later();                 // yield
-            rafts[new_leader].server->wait_until_candidate();
+            _servers[new_leader].server->wait_until_candidate();
             // Re-connect old leader
-            connected->connect(to_raft_id(leader));
+            _connected->connect(to_raft_id(leader));
             // Disconnect old leader from all nodes except new leader
-            connected->disconnect(to_raft_id(leader), to_raft_id(new_leader));
-            co_await rafts[new_leader].server->wait_election_done();
+            _connected->disconnect(to_raft_id(leader), to_raft_id(new_leader));
+            co_await _servers[new_leader].server->wait_election_done();
             // Restore connections to the original setting
-            *connected = prev_disconnected;
-        } while (!rafts[new_leader].server->is_leader());
+            *_connected = prev_disconnected;
+        } while (!_servers[new_leader].server->is_leader());
         tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
     }
     co_return new_leader;
@@ -867,7 +867,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
             co_await wait_log(rafts[leader].server, rafts[next_leader].server);
-            leader = co_await elect_new_leader(rafts, connected, leader, next_leader);
+            leader = co_await rafts.elect_new_leader(leader, next_leader);
         } else if (std::holds_alternative<partition>(update)) {
             auto p = std::get<partition>(update);
             connected->connect_all();
@@ -901,7 +901,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             }
             if (next_leader) {
                 // New leader specified, elect it
-                leader = co_await elect_new_leader(rafts, connected, leader, *next_leader);
+                leader = co_await rafts.elect_new_leader(leader, *next_leader);
             } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
                 // Old leader disconnected and not specified new, free election
                 leader = co_await free_election(rafts);
@@ -1331,7 +1331,7 @@ SEASTAR_TEST_CASE(rpc_leader_election) {
         // Elect 2nd node a leader
         constexpr size_t new_leader = 1;
         pause_tickers(tickers);
-        co_await elect_new_leader(rafts, connected, initial_leader, new_leader);
+        co_await rafts.elect_new_leader(initial_leader, new_leader);
         restart_tickers(tickers);
 
         // Check that no attempts to update RPC were made.
@@ -1439,7 +1439,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
 
         // Elect B as leader
         pause_tickers(tickers);
-        auto new_leader = co_await elect_new_leader(rafts, connected, initial_leader, 1);
+        auto new_leader = co_await rafts.elect_new_leader(initial_leader, 1);
         restart_tickers(tickers);
 
         // Heal network partition.
@@ -1548,7 +1548,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
 
         // Elect B as leader
         pause_tickers(tickers);
-        auto new_leader = co_await elect_new_leader(rafts, connected, initial_leader, 1);
+        auto new_leader = co_await rafts.elect_new_leader(initial_leader, 1);
         restart_tickers(tickers);
 
         // Heal network partition.
@@ -1574,7 +1574,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
 
         // Elect A leader again.
         pause_tickers(tickers);
-        co_await elect_new_leader(rafts, connected, new_leader, initial_leader);
+        co_await rafts.elect_new_leader(new_leader, initial_leader);
         restart_tickers(tickers);
 
         co_await wait_log(rafts[new_leader].server, rafts[1].server);
@@ -1613,7 +1613,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
 
         // Elect B as leader
         pause_tickers(tickers);
-        new_leader = co_await elect_new_leader(rafts, connected, initial_leader, 1);
+        new_leader = co_await rafts.elect_new_leader(initial_leader, 1);
         restart_tickers(tickers);
 
         // Heal network partition.
