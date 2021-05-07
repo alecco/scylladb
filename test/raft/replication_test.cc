@@ -463,6 +463,7 @@ public:
     future<> add_entries(size_t n, size_t& leader);
     future<> add_remaining_entries(size_t& leader);
     future<> wait_log(size_t leader, size_t follower);
+    future<> wait_log_all(size_t leader);
 };
 
 test_server
@@ -589,11 +590,11 @@ future<> raft_cluster::wait_log(size_t leader, size_t follower) {
     co_await _servers[follower].server->wait_log_idx(leader_log_idx);
 }
 
-future<> wait_log_all(raft_cluster& rafts, size_t leader) {
-    auto leader_log_idx = rafts[leader].server->log_last_idx();
-    for (size_t s = 0; s < rafts.size(); ++s) {
+future<> raft_cluster::wait_log_all(size_t leader) {
+    auto leader_log_idx = _servers[leader].server->log_last_idx();
+    for (size_t s = 0; s < _servers.size(); ++s) {
         if (s != leader) {
-            co_await rafts[s].server->wait_log_idx(leader_log_idx);
+            co_await _servers[s].server->wait_log_idx(leader_log_idx);
         }
     }
 }
@@ -956,7 +957,7 @@ future<> rpc_test(size_t nodes, test_func test_case_body) {
     constexpr size_t initial_leader = 0;
     rafts[initial_leader].server->wait_until_candidate();
     co_await rafts[initial_leader].server->wait_election_done();
-    co_await wait_log_all(rafts, initial_leader);
+    co_await rafts.wait_log_all(initial_leader);
     // Execute the test
     co_await test_case_body(rafts, conn, tickers, initial_leader, in_configuration);
     // Stop tickers
@@ -1366,7 +1367,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
 
         restart_tickers(tickers);
         // wait to synchronize logs between current leader (B) and the rest of the cluster
-        co_await wait_log_all(rafts, initial_leader);
+        co_await rafts.wait_log_all(initial_leader);
         // A should have truncated an offending configuration entry and revert its RPC configuration.
         //
         // Since B's log is effectively empty (does not contain any configuration
