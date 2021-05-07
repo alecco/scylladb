@@ -599,6 +599,7 @@ future<> raft_cluster::start_all() {
 }
 
 future<> raft_cluster::stop_all() {
+    pause_tickers();
     for (auto& r: _servers) {
         co_await r.server->abort();
     }
@@ -1035,7 +1036,6 @@ future<> rpc_test(size_t nodes, test_func test_case_body) {
         BOOST_ERROR(format("RPC test failed unexpectedly with error: {}", std::current_exception()));
     }
     // Stop tickers
-    rafts.pause_tickers();
     co_await rafts.stop_all();
 }
 
