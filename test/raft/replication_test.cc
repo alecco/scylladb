@@ -439,6 +439,7 @@ class raft_cluster {
     size_t _next_val;
     bool _packet_drops;
     state_machine::apply_fn _apply;
+    std::unordered_set<size_t> _in_configuration;   // Servers in current configuration
 public:
     raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
             size_t apply_entries, lw_shared_ptr<connected> connected,
@@ -516,6 +517,11 @@ raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::app
         (*_snapshots)[s.id] = states[i].snp_value;
         _servers.emplace_back(create_raft_server(s.id, _apply, states[i], apply_entries,
                     connected, _snapshots, _persisted_snapshots, _packet_drops));
+    }
+
+    std::unordered_set<size_t> _in_configuration;
+    for (size_t s = 0; s < states.size(); ++s) {
+        _in_configuration.insert(s);
     }
 }
 
@@ -802,12 +808,6 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
     // Tickers for servers
     std::vector<raft_ticker_type> tickers = init_raft_tickers(rafts);
-
-    // Keep track of what servers are in the current configuration
-    std::unordered_set<size_t> in_configuration;
-    for (size_t s = 0; s < test.nodes; ++s) {
-        in_configuration.insert(s);
-    }
 
     BOOST_TEST_MESSAGE("Electing first leader " << leader);
     rafts[leader].server->wait_until_candidate();
