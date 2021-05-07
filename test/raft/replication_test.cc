@@ -531,6 +531,27 @@ void raft_cluster::tick_all() {
     }
 }
 
+// Add consecutive integer entries to a leader
+future<> raft_cluster::add_entries(size_t n, size_t& leader) {
+    size_t end = _next_val + n;
+    while (_next_val != end) {
+        try {
+            co_await _servers[leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
+            _next_val++;
+        } catch (raft::not_a_leader& e) {
+            // leader stepped down, update with new leader if present
+            if (e.leader != raft::server_id{}) {
+                leader = to_local_id(e.leader.id);
+            }
+        } catch (raft::commit_status_unknown& e) {
+        }
+    }
+}
+
+future<> raft_cluster::add_remaining_entries(size_t& leader) {
+    co_await add_entries(_apply_entries - _next_val, leader);
+}
+
 std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned start_idx) {
     std::vector<raft::log_entry> log;
 
@@ -698,27 +719,6 @@ future<std::unordered_set<size_t>> change_configuration(raft_cluster& rafts,
     restart_tickers(tickers); // start all tickers
 
     co_return new_config;
-}
-
-// Add consecutive integer entries to a leader
-future<> raft_cluster::add_entries(size_t n, size_t& leader) {
-    size_t end = _next_val + n;
-    while (_next_val != end) {
-        try {
-            co_await _servers[leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
-            _next_val++;
-        } catch (raft::not_a_leader& e) {
-            // leader stepped down, update with new leader if present
-            if (e.leader != raft::server_id{}) {
-                leader = to_local_id(e.leader.id);
-            }
-        } catch (raft::commit_status_unknown& e) {
-        }
-    }
-}
-
-future<> raft_cluster::add_remaining_entries(size_t& leader) {
-    co_await add_entries(_apply_entries - _next_val, leader);
 }
 
 using raft_ticker_type = seastar::timer<lowres_clock>;
