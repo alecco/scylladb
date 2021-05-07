@@ -462,6 +462,7 @@ public:
     future<size_t> elect_new_leader(size_t leader, size_t new_leader);
     future<> add_entries(size_t n, size_t& leader);
     future<> add_remaining_entries(size_t& leader);
+    future<> wait_log(size_t leader, size_t follower);
 };
 
 test_server
@@ -583,9 +584,9 @@ size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& 
 };
 
 // Wait for leader log to propagate to node
-future<> wait_log(std::unique_ptr<raft::server>& leader, std::unique_ptr<raft::server>& follower) {
-    auto leader_log_idx = leader->log_last_idx();
-    co_await follower->wait_log_idx(leader_log_idx);
+future<> raft_cluster::wait_log(size_t leader, size_t follower) {
+    auto leader_log_idx = _servers[leader].server->log_last_idx();
+    co_await _servers[follower].server->wait_log_idx(leader_log_idx);
 }
 
 future<> wait_log_all(raft_cluster& rafts, size_t leader) {
@@ -684,7 +685,7 @@ future<std::unordered_set<size_t>> change_configuration(raft_cluster& rafts,
     if (!new_config.contains(leader)) {
         // Wait log on all nodes in new config before change
         for (auto s: sc) {
-            co_await wait_log(rafts[leader].server, rafts[s.node_idx].server);
+            co_await rafts.wait_log(leader, s.node_idx);
         }
     }
 
@@ -810,7 +811,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.add_entries(n, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
-            co_await wait_log(rafts[leader].server, rafts[next_leader].server);
+            co_await rafts.wait_log(leader, next_leader);
             leader = co_await rafts.elect_new_leader(leader, next_leader);
         } else if (std::holds_alternative<partition>(update)) {
             auto p = std::get<partition>(update);
@@ -829,11 +830,11 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             }
             if (next_leader.has_value()) {
                 // Wait for log to propagate to next leader, before disconnections
-                co_await wait_log(rafts[leader].server, rafts[*next_leader].server);
+                co_await rafts.wait_log(leader, *next_leader);
             } else {
                 // No leader specified, wait log for all connected servers, before disconnections
                 for (auto s: partition_servers) {
-                    co_await wait_log(rafts[leader].server, rafts[s].server);
+                    co_await rafts.wait_log(leader, s);
                 }
             }
             pause_tickers(tickers);
@@ -1471,8 +1472,8 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
 
         restart_tickers(tickers);
         // wait to synchronize logs between current leader (B) and the rest of the cluster
-        co_await wait_log(rafts[new_leader].server, rafts[0].server);
-        co_await wait_log(rafts[new_leader].server, rafts[2].server);
+        co_await rafts.wait_log(new_leader, 0);
+        co_await rafts.wait_log(new_leader, 2);
 
         // Again, A's RPC configuration is the same as before despite the
         // real cfg being reverted to the committed state as it is the union
@@ -1532,8 +1533,8 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
 
         restart_tickers(tickers);
         // wait to synchronize logs between current leader (B) and the rest of the cluster
-        co_await wait_log(rafts[new_leader].server, rafts[0].server);
-        co_await wait_log(rafts[new_leader].server, rafts[2].server);
+        co_await rafts.wait_log(new_leader, 0);
+        co_await rafts.wait_log(new_leader, 2);
         // A's RPC configuration is reverted to committed configuration {A, B, C}.
         BOOST_CHECK(rafts[0].rpc->known_peers() == committed_conf);
         BOOST_CHECK(rafts[1].rpc->known_peers() == committed_conf);
