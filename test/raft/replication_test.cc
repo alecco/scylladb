@@ -772,10 +772,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             unsigned next_leader = std::get<new_leader>(update).id;
             auto leader_log_idx = rafts[leader].server->log_last_idx();
             co_await rafts[next_leader].server->wait_log_idx(leader_log_idx);
-            pause_tickers(tickers);
             leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
                     next_leader);
-            restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
