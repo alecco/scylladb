@@ -734,11 +734,9 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
-            pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
             leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
                     next_leader);
-            restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
