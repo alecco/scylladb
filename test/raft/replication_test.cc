@@ -550,8 +550,7 @@ void elapse_elections(std::vector<test_server>& rafts) {
 }
 
 future<size_t> elect_new_leader(std::vector<test_server>& rafts,
-        lw_shared_ptr<connected> connected, std::unordered_set<size_t>& in_configuration,
-        size_t leader, size_t new_leader) {
+        lw_shared_ptr<connected> connected, size_t leader, size_t new_leader) {
     BOOST_CHECK_MESSAGE(new_leader < rafts.size(),
             format("Wrong next leader value {}", new_leader));
 
@@ -772,8 +771,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             unsigned next_leader = std::get<new_leader>(update).id;
             auto leader_log_idx = rafts[leader].server->log_last_idx();
             co_await rafts[next_leader].server->wait_log_idx(leader_log_idx);
-            leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
-                    next_leader);
+            leader = co_await elect_new_leader(rafts, connected, leader, next_leader);
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             pause_tickers(tickers);
@@ -801,8 +799,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             }
             if (have_new_leader && new_leader.id != leader) {
                 // New leader specified, elect it
-                leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
-                        new_leader.id);
+                leader = co_await elect_new_leader(rafts, connected, leader, new_leader.id);
             } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
                 // Old leader disconnected and not specified new, free election
                 leader = co_await free_election(rafts);
@@ -1246,7 +1243,7 @@ SEASTAR_TEST_CASE(rpc_leader_election) {
         // Elect 2nd node a leader
         constexpr size_t new_leader = 1;
         pause_tickers(tickers);
-        co_await elect_new_leader(rafts, connected, in_configuration, initial_leader, new_leader);
+        co_await elect_new_leader(rafts, connected, initial_leader, new_leader);
         restart_tickers(tickers);
 
         // Check that no attempts to update RPC were made.
@@ -1354,8 +1351,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
 
         // Elect B as leader
         pause_tickers(tickers);
-        auto new_leader = co_await elect_new_leader(rafts, connected, in_configuration,
-            initial_leader, 1);
+        auto new_leader = co_await elect_new_leader(rafts, connected, initial_leader, 1);
         restart_tickers(tickers);
 
         // Heal network partition.
@@ -1464,8 +1460,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
 
         // Elect B as leader
         pause_tickers(tickers);
-        auto new_leader = co_await elect_new_leader(rafts, connected, in_configuration,
-            initial_leader, 1);
+        auto new_leader = co_await elect_new_leader(rafts, connected, initial_leader, 1);
         restart_tickers(tickers);
 
         // Heal network partition.
@@ -1490,8 +1485,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
 
         // Elect A leader again.
         pause_tickers(tickers);
-        co_await elect_new_leader(rafts, connected, in_configuration,
-            new_leader, initial_leader);
+        co_await elect_new_leader(rafts, connected, new_leader, initial_leader);
         restart_tickers(tickers);
 
         co_await wait_log(rafts, connected, in_configuration, initial_leader);
@@ -1529,8 +1523,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
 
         // Elect B as leader
         pause_tickers(tickers);
-        new_leader = co_await elect_new_leader(rafts, connected, in_configuration,
-            initial_leader, 1);
+        new_leader = co_await elect_new_leader(rafts, connected, initial_leader, 1);
         restart_tickers(tickers);
 
         // Heal network partition.
