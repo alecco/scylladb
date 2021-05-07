@@ -1578,19 +1578,31 @@ template future<> update_peer_info<sstring>(gms::inet_address ep, sstring column
 template future<> update_peer_info<utils::UUID>(gms::inet_address ep, sstring column_name, utils::UUID);
 template future<> update_peer_info<net::inet_address>(gms::inet_address ep, sstring column_name, net::inet_address);
 
-future<> set_scylla_local_param(const sstring& key, const sstring& value) {
+template <typename T>
+future<> set_scylla_local_param_as(const sstring& key, const T& value) {
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", SCYLLA_LOCAL);
-    return qctx->execute_cql(req, value, key).discard_result();
+    auto type = data_type_for<T>();
+    return qctx->execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
+}
+
+
+template <typename T>
+future<std::optional<T>> get_scylla_local_param_as(const sstring& key){
+    sstring req = format("SELECT value FROM system.{} WHERE key = ?", SCYLLA_LOCAL);
+    ::shared_ptr<cql3::untyped_result_set> res = co_await qctx->execute_cql(req, key);
+    if (res->empty() || !res->one().has("value")) {
+        co_return std::optional<T>();
+    }
+    auto type = data_type_for<T>();
+    co_return value_cast<T>(type->deserialize(type->from_string(res->one().get_as<sstring>("value"))));
+}
+
+future<> set_scylla_local_param(const sstring& key, const sstring& value) {
+    return set_scylla_local_param_as<sstring>(key, value);
 }
 
 future<std::optional<sstring>> get_scylla_local_param(const sstring& key){
-    sstring req = format("SELECT value FROM system.{} WHERE key = ?", SCYLLA_LOCAL);
-    return qctx->execute_cql(req, key).then([] (::shared_ptr<cql3::untyped_result_set> res) {
-        if (res->empty() || !res->one().has("value")) {
-            return std::optional<sstring>();
-        }
-        return std::optional<sstring>(res->one().get_as<sstring>("value"));
-    });
+    return get_scylla_local_param_as<sstring>(key);
 }
 
 future<> update_schema_version(utils::UUID version) {
@@ -2383,6 +2395,24 @@ future<> delete_paxos_decision(const schema& s, const partition_key& key, const 
             to_legacy(*key.get_compound_type(s), key.representation()),
             s.id()
         ).discard_result();
+}
+
+future<utils::UUID> get_raft_group0_id() {
+    auto opt = co_await get_scylla_local_param_as<utils::UUID>("raft_group0_id");
+    co_return opt.value_or<utils::UUID>({});
+}
+
+future<utils::UUID> get_raft_server_id() {
+    auto opt = co_await get_scylla_local_param_as<utils::UUID>("raft_server_id");
+    co_return opt.value_or<utils::UUID>({});
+}
+
+future<> set_raft_group0_id(utils::UUID uuid) {
+    return set_scylla_local_param_as<utils::UUID>("raft_group0_id", uuid);
+}
+
+future<> set_raft_server_id(utils::UUID uuid) {
+    return set_scylla_local_param_as<utils::UUID>("raft_server_id", uuid);
 }
 
 } // namespace system_keyspace
