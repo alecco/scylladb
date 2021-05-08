@@ -464,6 +464,7 @@ public:
     // No copy
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
+    future<> stop_server(size_t id);
     size_t size() {
         return _servers.size();
     }
@@ -547,6 +548,11 @@ raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::app
     }
 }
 
+future<> raft_cluster::stop_server(size_t id) {
+    cancel_ticker(id);
+    co_await _servers[id].server->abort();
+}
+
 future<> raft_cluster::start_all() {
     for (auto& r: _servers) {
         co_await r.server->start();
@@ -558,9 +564,8 @@ future<> raft_cluster::start_all() {
 }
 
 future<> raft_cluster::stop_all() {
-    pause_tickers();
-    for (auto& r: _servers) {
-        co_await r.server->abort();
+    for (size_t s = 0; s < _servers.size(); ++s) {
+        co_await stop_server(s);
     }
 }
 
@@ -775,8 +780,7 @@ future<> raft_cluster::change_configuration(size_t total_values, set_config sc) 
     pause_tickers();
     for (auto s: _in_configuration) {
         if (!new_config.contains(s)) {
-            cancel_ticker(s);
-            co_await _servers[s].server->abort();
+            co_await stop_server(s);
             _servers[s] = create_raft_server(to_raft_id(s), _apply, initial_state{.log = {}},
                     total_values, _connected, _snapshots, _persisted_snapshots, _packet_drops);
             co_await _servers[s].server->start();
@@ -1460,7 +1464,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
             [](auto exc_ptr){
                 // ignore since the node is supposed to be forcefully aborted
             });
-        co_await rafts[initial_leader].server->abort();
+        co_await rafts.stop_server(initial_leader);
         // Restart A with a synthetic initial state that contains two entries
         // in the log:
         //   1. {A, B, C} configuration committed before crash + partition.
