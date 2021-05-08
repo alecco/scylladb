@@ -199,7 +199,7 @@ public:
     lw_shared_ptr<hasher_int> hasher;
     state_machine(raft::server_id id, apply_fn apply, size_t apply_entries,
             lw_shared_ptr<snapshots> snapshots):
-        _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
+        _id(id), _apply(apply), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(const std::vector<raft::command_cref> commands) override {
         auto n = _apply(_id, commands, hasher);
