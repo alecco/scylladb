@@ -522,11 +522,11 @@ test_server raft_cluster::create_server(size_t id, initial_state state) {
 raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
         size_t apply_entries, lw_shared_ptr<persisted_snapshots> persisted_snapshots, size_t first_val,
         size_t first_leader, bool packet_drops) :
-            _persisted_snapshots(persisted_snapshots), _apply_entries(apply_entries),
+            _connected(make_lw_shared<struct connected>(states.size())),
+                    _persisted_snapshots(persisted_snapshots), _apply_entries(apply_entries),
             _next_val(first_val), _packet_drops(packet_drops), _apply(apply), _leader(first_leader) {
     raft::configuration config;
     _snapshots = make_lw_shared<snapshots>();
-    _connected = make_lw_shared<struct connected>(states.size());
 
     for (size_t i = 0; i < states.size(); i++) {
         states[i].address = raft::server_address{to_raft_id(i)};
@@ -954,6 +954,7 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+fmt::print("test " # test_name "\n"); \
         replication_test(test_body, false, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
         replication_test(test_body, false, true); } \
@@ -1202,6 +1203,7 @@ RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
 ///
 
 SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
+fmt::print("test rpc_load_conf_from_snapshot\n");
     // 1 node cluster with an initial configuration from a snapshot.
     // Test that RPC configuration is set up correctly when the raft server
     // instance is started.
@@ -1221,6 +1223,7 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
 }
 
 SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
+fmt::print("test rpc_load_conf_from_log\n");
     // 1 node cluster.
     // Initial configuration is taken from the persisted log.
     constexpr size_t nodes = 1;
@@ -1241,6 +1244,7 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
 }
 
 SEASTAR_TEST_CASE(rpc_propose_conf_change) {
+fmt::print("test rpc_propose_conf_change\n");
     // 3 node cluster {A, B, C}.
     // Shrinked later to 2 nodes and then expanded back to 3 nodes.
     // Test that both configuration changes update RPC configuration correspondingly
@@ -1270,6 +1274,7 @@ SEASTAR_TEST_CASE(rpc_propose_conf_change) {
 }
 
 SEASTAR_TEST_CASE(rpc_leader_election) {
+fmt::print("test rpc_leader_election\n");
     // 3 node cluster {A, B, C}.
     // Test that leader elections don't change RPC configuration.
     return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
@@ -1293,6 +1298,7 @@ SEASTAR_TEST_CASE(rpc_leader_election) {
 }
 
 SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
+fmt::print("test rpc_voter_non_voter_transision\n");
     // 3 node cluster {A, B, C}.
     // Test that demoting of node C to learner state and then promoting back
     // to voter doesn't involve any RPC configuration changes. 
@@ -1326,6 +1332,7 @@ SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
 }
 
 SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
+fmt::print("test rpc_configuration_truncate_restore_from_snp\n");
     // 3 node cluster {A, B, C}.
     // Issue a configuration change on leader (A): remove node C.
     // Fail the node before the entry is committed (disconnect from the
@@ -1406,6 +1413,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
 }
 
 SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
+fmt::print("test rpc_configuration_truncate_restore_from_log\n");
     // 4 node cluster {A, B, C, D}.
     // Change configuration to {A, B, C} from A and wait for it to become
     // committed.
@@ -1459,6 +1467,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
             [](auto exc_ptr){
                 // ignore since the node is supposed to be forcefully aborted
             });
+fmt::print(" XXX 1\n");
         co_await rafts.stop_server(initial_leader);
         // Restart A with a synthetic initial state that contains two entries
         // in the log:
@@ -1479,6 +1488,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
             },
             .snapshot = {.config = all_nodes}
         };
+fmt::print(" XXX 2\n");
         co_await rafts.reset_server(initial_leader, restart_state);
         // Elect B as leader
         co_await rafts.elect_new_leader(1);
@@ -1505,6 +1515,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         BOOST_CHECK(rafts[1].rpc->known_peers() == committed_conf);
         BOOST_CHECK(rafts[2].rpc->known_peers() == committed_conf);
 
+fmt::print(" XXX 3\n");
         //
         // Second case: expand cluster (re-add node D).
         //
@@ -1516,12 +1527,14 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         // Disconnect A from the rest of the cluster.
         connected->disconnect(to_raft_id(0));
 
+fmt::print(" XXX 4\n");
         // Try to add D back.
         (void)rafts[initial_leader].server->set_configuration(all_nodes).handle_exception(
             [](auto exc_ptr){
                 // ignore since the node is supposed to be forcefully aborted
             });
         co_await rafts[initial_leader].server->abort();
+fmt::print(" XXX 5\n");
         initial_state restart_state_2{
             .log = {
                 raft::log_entry{raft::term_t(1), raft::index_t(1),
@@ -1536,6 +1549,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
             },
             .snapshot = {.config = all_nodes}
         };
+fmt::print(" XXX 6\n");
         co_await rafts.reset_server(initial_leader, restart_state_2);
         // Elect B as leader
         co_await rafts.elect_new_leader(1);
@@ -1550,6 +1564,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         // Heal network partition.
         connected->connect_all();
 
+fmt::print(" XXX 7\n");
         rafts.restart_tickers();
         // wait to synchronize logs between current leader (B) and the rest of the cluster
         co_await rafts.wait_log(0);
@@ -1558,5 +1573,6 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         BOOST_CHECK(rafts[0].rpc->known_peers() == committed_conf);
         BOOST_CHECK(rafts[1].rpc->known_peers() == committed_conf);
         BOOST_CHECK(rafts[2].rpc->known_peers() == committed_conf);
+fmt::print(" XXX 8\n");
     });
 }
