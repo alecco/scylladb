@@ -557,8 +557,8 @@ future<> raft_cluster::reset_server(size_t id, initial_state state) {
 }
 
 future<> raft_cluster::start_all() {
-    for (auto& r: _servers) {
-        co_await r.server->start();
+    for (auto s: _in_configuration) {
+        co_await _servers[s].server->start();
     }
     init_raft_tickers();
     BOOST_TEST_MESSAGE("Electing first leader " << _leader);
@@ -567,20 +567,20 @@ future<> raft_cluster::start_all() {
 }
 
 future<> raft_cluster::stop_all() {
-    for (size_t s = 0; s < _servers.size(); ++s) {
+    for (auto s: _in_configuration) {
         co_await stop_server(s);
     }
 }
 
 future<> raft_cluster::wait_all() {
-    for (auto& r: _servers) {
-        co_await r.sm->done();
+    for (auto s: _in_configuration) {
+        co_await _servers[s].sm->done();
     }
 }
 
 void raft_cluster::tick_all() {
-    for (auto& r: _servers) {
-        r.server->tick();
+    for (auto s: _in_configuration) {
+        _servers[s].server->tick();
     }
 }
 
@@ -613,6 +613,7 @@ future<> raft_cluster::add_remaining_entries() {
     co_await add_entries(_apply_entries - _next_val);
 }
 
+// XXX this should only be servers in config!!
 void raft_cluster::init_raft_tickers() {
     _tickers.resize(_servers.size());
     for (size_t s = 0; s < _servers.size(); ++s) {
@@ -764,6 +765,15 @@ future<> raft_cluster::change_configuration(set_config sc) {
         }
     }
 
+    // Start nodes in new configuration but not in current configuration (re-added)
+    for (auto s: new_config) {
+        if (!_in_configuration.contains(s)) {
+            tlogger.debug("Starting node being re-added to configuration {}", s);
+            co_await reset_server(s, initial_state{.log = {}});
+            _tickers[s].rearm_periodic(tick_delta);
+        }
+    }
+
     tlogger.debug("Changing configuration on leader {}", _leader);
     co_await _servers[_leader].server->set_configuration(std::move(set));
 
@@ -780,13 +790,11 @@ future<> raft_cluster::change_configuration(set_config sc) {
         // leader stepped down, implying config fully changed
     } catch (raft::commit_status_unknown& e) {}
 
-    // Reset removed nodes
+    // Stop nodes no longer in configuration
     for (auto s: _in_configuration) {
         if (!new_config.contains(s)) {
             _tickers[s].cancel();
             co_await stop_server(s);
-            co_await reset_server(s, initial_state{.log = {}});
-            _tickers[s].rearm_periodic(tick_delta);
         }
     }
 
