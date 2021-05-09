@@ -532,7 +532,7 @@ public:
     future<> add_remaining_entries();
     future<> wait_log(size_t follower);
     future<> wait_log_all();
-    future<> change_configuration(size_t total_values, set_config sc);
+    future<> change_configuration(set_config sc);
     future<> reconfigure_all();
     future<> partition(::partition p);
     const std::unordered_set<size_t>& get_configuration() {
@@ -792,7 +792,7 @@ future<> raft_cluster::free_election() {
     }
 }
 
-future<> raft_cluster::change_configuration(size_t total_values, set_config sc) {
+future<> raft_cluster::change_configuration(set_config sc) {
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
     raft::server_address_set set;
     std::unordered_set<size_t> new_config;
@@ -848,7 +848,7 @@ future<> raft_cluster::reconfigure_all() {
         for (size_t s = 0; s < _servers.size(); ++s) {
             sc.push_back(s);
         }
-        co_await change_configuration(_servers.size(), std::move(sc));
+        co_await change_configuration(std::move(sc));
     }
 }
 
@@ -948,7 +948,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.partition(std::get<partition>(update));
         } else if (std::holds_alternative<set_config>(update)) {
             auto sc = std::get<set_config>(update);
-            co_await rafts.change_configuration(test.total_values, std::move(sc));
+            co_await rafts.change_configuration(std::move(sc));
         } else if (std::holds_alternative<tick>(update)) {
             auto t = std::get<tick>(update);
             for (uint64_t i = 0; i < t.ticks; i++) {
@@ -1020,7 +1020,7 @@ size_t dummy_apply_fn(raft::server_id id, const std::vector<raft::command_cref>&
 }
 
 future<> rpc_test_change_configuration(raft_cluster& rafts, set_config sc) {
-    return rafts.change_configuration(1, sc);
+    return rafts.change_configuration(sc);
 }
 
 // Wrapper function for running RPC tests that provides a convenient
