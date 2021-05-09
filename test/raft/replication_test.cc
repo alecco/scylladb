@@ -596,10 +596,9 @@ future<> raft_cluster::start_all() {
 }
 
 future<> raft_cluster::stop_all() {
-    pause_tickers();
-    co_await parallel_for_each(_servers, [] (auto& r) {
-        return r.server->abort();
-    });
+    for (auto s: _in_configuration) {
+        co_await stop_server(s);
+    };
 }
 
 future<> raft_cluster::wait_all() {
@@ -647,7 +646,8 @@ future<> raft_cluster::add_remaining_entries() {
 
 void raft_cluster::init_raft_tickers() {
     _tickers.resize(_servers.size());
-    for (size_t s = 0; s < _servers.size(); ++s) {
+    // Only start tickers for servers in configuration
+    for (auto s: _in_configuration) {
         _tickers[s].arm_periodic(tick_delta);
         _tickers[s].set_callback([&, s] {
             _servers[s].server->tick();
@@ -713,7 +713,7 @@ future<> raft_cluster::wait_log(size_t follower) {
 
 future<> raft_cluster::wait_log_all() {
     auto leader_log_idx = _servers[_leader].server->log_last_idx();
-    for (size_t s = 0; s < _servers.size(); ++s) {
+    for (auto s: _in_configuration) {
         if (s != _leader) {
             co_await _servers[s].server->wait_log_idx(leader_log_idx);
         }
@@ -721,7 +721,7 @@ future<> raft_cluster::wait_log_all() {
 }
 
 void raft_cluster::elapse_elections() {
-    for (size_t s = 0; s < _servers.size(); ++s) {
+    for (auto s: _in_configuration) {
         _servers[s].server->elapse_election();
     }
 }
@@ -765,7 +765,7 @@ future<> raft_cluster::free_election() {
         tick_all();
         co_await seastar::sleep(10us);   // Wait for election rpc exchanges
         // find if we have a leader
-        for (size_t s = 0; s < _servers.size(); ++s) {
+        for (auto s: _in_configuration) {
             if (_servers[s].server->is_leader()) {
                 tlogger.debug("New leader {}", s);
                 _leader = s;
@@ -861,6 +861,7 @@ future<> raft_cluster::partition(::partition p) {
         }
     }
     pause_tickers();
+    // NOTE: connectivity is independent of configuration so it's for all servers
     for (size_t s = 0; s < _servers.size(); ++s) {
         if (partition_servers.find(s) == partition_servers.end()) {
             // Disconnect servers not in main partition
@@ -880,7 +881,7 @@ future<> raft_cluster::partition(::partition p) {
 void raft_cluster::verify() {
     BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
     auto expected = hasher_int::hash_range(_apply_entries).finalize_uint64();
-    for (size_t i = 0; i < _servers.size(); ++i) {
+    for (auto i: _in_configuration) {
         auto digest = _servers[i].sm->hasher->finalize_uint64();
         BOOST_CHECK_MESSAGE(digest == expected,
                 format("Digest doesn't match for server [{}]: {} != {}", i, digest, expected));
@@ -1595,5 +1596,6 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         BOOST_CHECK(rafts[0].rpc->known_peers() == committed_conf);
         BOOST_CHECK(rafts[1].rpc->known_peers() == committed_conf);
         BOOST_CHECK(rafts[2].rpc->known_peers() == committed_conf);
+        co_await rafts.stop_server(3); // server out of config
     });
 }
