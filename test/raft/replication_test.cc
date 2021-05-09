@@ -945,12 +945,16 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+fmt::print("\ntest test_name) \n"); \
         replication_test(test_body, false, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+fmt::print("\ntest " # test_name "_drops\n"); \
         replication_test(test_body, false, true); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+fmt::print("\ntest " # test_name "_prevote\n"); \
         replication_test(test_body, true, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+fmt::print("\ntest " # test_name "_prevote_drops\n"); \
         replication_test(test_body, true, true); }
 
 raft::server_address_set full_cluster_address_set(size_t nodes) {
@@ -1141,6 +1145,7 @@ RAFT_TEST_CASE(drops_04, (test_case{
 
 // TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
+fmt::print("\ntest test_take_snapshot_and_stream\n");
     replication_test(
         // Snapshot automatic take and load
         {.nodes = 3,
@@ -1163,6 +1168,7 @@ RAFT_TEST_CASE(conf_changes_2, (test_case{
 
 // Check removing a node from configuration, adding entries; cycle for all combinations
 SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
+fmt::print("\ntest remove_node_cycle\n");
     replication_test(
         {.nodes = 4,
          .updates = {set_config{0,1,2}, entries{2}, new_leader{1},
@@ -1191,6 +1197,7 @@ RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
 ///
 
 SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
+fmt::print("\ntest rpc_load_conf_from_snapshot\n");
     // 1 node cluster with an initial configuration from a snapshot.
     // Test that RPC configuration is set up correctly when the raft server
     // instance is started.
@@ -1209,6 +1216,7 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
 }
 
 SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
+fmt::print("\ntest rpc_load_conf_from_log\n");
     // 1 node cluster.
     // Initial configuration is taken from the persisted log.
     constexpr size_t nodes = 1;
@@ -1228,6 +1236,7 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
 }
 
 SEASTAR_TEST_CASE(rpc_propose_conf_change) {
+fmt::print("\ntest rpc_propose_conf_change\n");
     // 3 node cluster {A, B, C}.
     // Shrinked later to 2 nodes and then expanded back to 3 nodes.
     // Test that both configuration changes update RPC configuration correspondingly
@@ -1256,6 +1265,7 @@ SEASTAR_TEST_CASE(rpc_propose_conf_change) {
 }
 
 SEASTAR_TEST_CASE(rpc_leader_election) {
+fmt::print("\ntest rpc_leader_election\n");
     // 3 node cluster {A, B, C}.
     // Test that leader elections don't change RPC configuration.
     return rpc_test(3, [] (raft_cluster& rafts, size_t initial_leader) -> future<> {
@@ -1278,6 +1288,7 @@ SEASTAR_TEST_CASE(rpc_leader_election) {
 }
 
 SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
+fmt::print("\ntest rpc_voter_non_voter_transision\n");
     // 3 node cluster {A, B, C}.
     // Test that demoting of node C to learner state and then promoting back
     // to voter doesn't involve any RPC configuration changes. 
@@ -1310,6 +1321,7 @@ SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
 }
 
 SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
+fmt::print("\ntest rpc_configuration_truncate_restore_from_snp\n");
     // 3 node cluster {A, B, C}.
     // Issue a configuration change on leader (A): remove node C.
     // Fail the node before the entry is committed (disconnect from the
@@ -1390,6 +1402,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
 }
 
 SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
+fmt::print("\ntest rpc_configuration_truncate_restore_from_log\n");
     // 4 node cluster {A, B, C, D}.
     // Change configuration to {A, B, C} from A and wait for it to become
     // committed.
