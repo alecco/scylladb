@@ -667,6 +667,9 @@ future<size_t> raft_cluster::elect_new_leader(size_t leader, size_t new_leader) 
             format("Wrong next leader value {}", new_leader));
 
     if (new_leader != leader) {
+        if ((*_connected)(to_raft_id(leader), to_raft_id(new_leader))) {
+            co_await wait_log(leader, new_leader);
+        }
         do {
             // Leader could be already partially disconnected, save current connectivity state
             struct connected prev_disconnected = *_connected;
@@ -858,7 +861,6 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.add_entries(n, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update).id;
-            co_await rafts.wait_log(leader, next_leader);
             leader = co_await rafts.elect_new_leader(leader, next_leader);
         } else if (std::holds_alternative<partition>(update)) {
             auto p = std::get<partition>(update);
