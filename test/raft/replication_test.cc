@@ -681,6 +681,9 @@ future<size_t> raft_cluster::elect_new_leader(size_t leader, size_t new_leader) 
             format("Wrong next leader value {}", new_leader));
 
     if (new_leader != leader) {
+        if ((*_connected)(to_raft_id(leader), to_raft_id(new_leader))) {
+            co_await wait_log(leader, new_leader);
+        }
         do {
             // Leader could be already partially disconnected, save current connectivity state
             struct connected prev_disconnected = *_connected;
