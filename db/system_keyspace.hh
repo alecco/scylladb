@@ -144,7 +144,7 @@ static constexpr auto FUNCTIONS = "schema_functions";
 static constexpr auto AGGREGATES = "schema_aggregates";
 }
 
-static constexpr const char* extra_durable_tables[] = { PAXOS };
+static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL };
 
 bool is_extra_durable(const sstring& name);
 
