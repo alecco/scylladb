@@ -79,6 +79,8 @@ namespace service {
 class raft_group_registry;
 }
 
+namespace cql3 { class query_processor; }
+
 namespace cql_transport { class controller; }
 
 namespace cdc {
@@ -106,6 +108,7 @@ namespace service {
 
 class storage_service;
 class migration_manager;
+class raft_group0;
 
 enum class disk_error { regular, commit };
 
@@ -168,6 +171,7 @@ private:
     gms::gossiper& _gossiper;
     // Container for all Raft instances running on this shard.
     raft_group_registry& _raft_gr;
+    std::unique_ptr<service::raft_group0> _group0;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
     sharded<repair_service>& _repair;
@@ -416,7 +420,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> init_server(bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> init_server(cql3::query_processor& qp, bind_messaging_port do_bind = bind_messaging_port::yes);
 
     future<> join_cluster();
 

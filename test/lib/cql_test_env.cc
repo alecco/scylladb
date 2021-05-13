@@ -559,8 +559,9 @@ public:
             sharded<repair_service> repair;
             sharded<cql3::query_processor> qp;
             sharded<service::raft_group_registry> raft_gr;
-            raft_gr.start(std::ref(ms), std::ref(gms::get_gossiper()), std::ref(qp)).get();
-            auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
+            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
+                std::ref(ms), std::ref(gms::get_gossiper())).get();
+            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
             sharded<service::storage_service> ss;
             service::storage_service_config sscfg;
@@ -679,24 +680,16 @@ public:
             auto stop_database_d = defer([&db] {
                 stop_database(db).get();
             });
+            // XXX: stop_raft before stopping the database and
+            // query processor. Group registry stop raft groups
+            // when stopped, and until then the groups may use
+            // the database and the query processor.
+            auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
-
-            const bool raft_enabled = cfg->check_experimental(db::experimental_features_t::RAFT);
-            if (raft_enabled) {
-                // We need to have a system keyspace started and
-                // initialized to initialize Raft service.
-                raft_gr.invoke_on_all(&service::raft_group_registry::init).get();
-            }
-            auto stop_raft_rpc = defer([&raft_gr] {
-                raft_gr.invoke_on_all(&service::raft_group_registry::uninit).get();
-            });
-            if (!raft_enabled) {
-                stop_raft_rpc.cancel();
-            }
 
             cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service)).get();
             auto stop_cdc_generation_service = defer([&cdc_generation_service] {
@@ -710,8 +703,13 @@ public:
                 cdc.stop().get();
             });
 
-            ss.local().init_server(service::bind_messaging_port(false)).get();
-            ss.local().join_cluster().get();
+            ss.local().init_server(qp.local(), service::bind_messaging_port(false)).get();
+            try {
+                ss.local().join_cluster().get();
+            } catch (std::exception& e) {
+                testlog.error("{}", e.what());
+                throw;
+            }
 
             auth::permissions_cache_config perm_cache_config;
             perm_cache_config.max_entries = cfg->permissions_cache_max_entries();
