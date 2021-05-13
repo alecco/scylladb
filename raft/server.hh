@@ -84,6 +84,12 @@ public:
     // Return the currently known configuration
     virtual raft::configuration get_configuration() const = 0;
 
+    // Take the first state machine snapshot and persist it
+    // along with the initial configuration of a new Raft group.
+    // To be called before start for a new group.
+    // Do nothing if the snapshot already exists (idempotency).
+    virtual future<> bootstrap(raft::configuration initial_configuration) = 0;
+
     // Load persisted state and start background work that needs
     // to run for this Raft server to function; The object cannot
     // be used until the returned future is resolved.
