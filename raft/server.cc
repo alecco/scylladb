@@ -80,6 +80,7 @@ public:
     future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
     future<> set_configuration(server_address_set c_new) override;
     raft::configuration get_configuration() const override;
+    future<> bootstrap(raft::configuration initial_configuation) override;
     future<> start() override;
     future<> abort() override;
     term_t get_current_term() const override;
@@ -277,6 +278,22 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
     if (_config.snapshot_threshold > _config.max_log_size) {
         throw config_error("snapshot_threshold has to be smaller than max_log_size");
     }
+}
+
+future<> server_impl::bootstrap(raft::configuration initial_configuation) {
+    auto snapshot  = co_await _persistence->load_snapshot();
+
+    if (snapshot.id) {
+        co_return;
+    }
+    // We have no snapshot for this server yet. Store the
+    // first one - the state of the server must be persistent
+    // from the start.
+    snapshot.id = co_await _state_machine->take_snapshot();
+    snapshot.term = term_t{};
+    snapshot.idx = raft::index_t{};
+    snapshot.config = std::move(initial_configuation);
+    co_await _persistence->store_snapshot(snapshot, _config.snapshot_trailing);
 }
 
 future<> server_impl::start() {
