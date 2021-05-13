@@ -89,8 +89,9 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         service::storage_service_config sscfg;
         sscfg.available_memory =  memory::stats().total_memory();
 
-        raft_gr.start(std::ref(_messaging), std::ref(gms::get_gossiper()), std::ref(qp)).get();
+        raft_gr.start(true, std::ref(_messaging), std::ref(gms::get_gossiper())).get();
         auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
+        raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
         elc_notif.start().get();
         auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
