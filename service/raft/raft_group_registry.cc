@@ -109,6 +109,42 @@ void raft_group_registry::init_rpc_verbs() {
             return make_ready_future<>();
         });
     });
+
+    auto peer_exchange_impl = [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::peer_list peers) -> future<raft::peer_exchange> {
+
+        return container().invoke_on(0 /* group 0 is on shard 0 */, [peers = std::move(peers)] (
+                raft_services& self) -> future<raft::peer_exchange> {
+
+            return make_ready_future<raft::peer_exchange>();
+        });
+    };
+
+    _ms.register_raft_peer_exchange(peer_exchange_impl);
+
+    auto raft_add_server_impl = [this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::group_id gid, raft::server_address addr) {
+
+        return container().invoke_on(shard_for_group(gid), [gid, addr] (
+                raft_services& self) {
+
+            return make_ready_future<raft::success_or_bounce>();
+        });
+    };
+
+    _ms.register_raft_add_server(raft_add_server_impl);
+
+    auto raft_remove_server_impl = [this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::group_id gid, raft::server_id sid) {
+
+        return container().invoke_on(shard_for_group(gid), [gid, sid] (
+                raft_services& self) {
+
+            return make_ready_future<raft::success_or_bounce>();
+        });
+    };
+
+    _ms.register_raft_remove_server(raft_remove_server_impl);
 }
 
 future<> raft_group_registry::uninit_rpc_verbs() {
@@ -118,7 +154,10 @@ future<> raft_group_registry::uninit_rpc_verbs() {
         _ms.unregister_raft_append_entries_reply(),
         _ms.unregister_raft_vote_request(),
         _ms.unregister_raft_vote_reply(),
-        _ms.unregister_raft_timeout_now()
+        _ms.unregister_raft_timeout_now(),
+        _ms.unregister_raft_peer_exchange(),
+        _ms.unregister_raft_add_server(),
+        _ms.unregister_raft_remove_server()
     ).discard_result();
 }
 
