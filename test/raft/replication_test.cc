@@ -1166,6 +1166,10 @@ RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
                      new_leader{1},new_leader{0}
                      }}));
 
+RAFT_TEST_CASE(my_test_case, (test_case{
+         .nodes = 3,
+         .updates = {partition{leader{1}, 2}, partition{leader{0}, 1, 2}}}));
+
 ///
 /// RPC-related tests
 ///
