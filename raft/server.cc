@@ -306,11 +306,16 @@ template <typename T>
 future<> server_impl::add_entry_internal(T command, wait_type type) {
     logger.trace("An entry is submitted on a leader");
 
-    // Wait for a new slot to become available
+    // Wait for a new slot to become available. Note that this
+    // works fine with server::cas() since if we lose leadership
+    // while waiting the semaphore is set to broken state.
+    // Concurrent cas() is not possible due to a lock around the
+    // cas() itself.
     co_await _fsm->wait_max_log_size();
 
     logger.trace("An entry proceeds after wait");
 
+    // Sic: sever::cas() assumes this doesn't yield.
     const log_entry& e = _fsm->add_entry(std::move(command));
 
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;

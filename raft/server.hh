@@ -20,6 +20,7 @@
  */
 #pragma once
 #include "raft.hh"
+#include <seastar/core/semaphore.hh>
 
 namespace raft {
 
@@ -124,23 +125,42 @@ public:
     //    machine and add_entry() will be linearised as well.
     //
     // To sum up, @read_barrier() can be used as a poor man
-    // distributed Compare-And-Swap:
+    // distributed Compare-And-Swap. You can find example use in
+    // raft::server::cas()
     //
-    // lock()
-    // term_t term = get_current_term()
-    // co_await read_barrier()
-    // ... Read previous value from the state machine ...
-    // ... Create a new value ...
-    // if (term == get_current_term())) {
-    //      co_await add_entry();
-    // }
-    // unlock()
     virtual future<> read_barrier() = 0;
 
     // Initiate leader stepdown process.
     // If the node is not a leader returns not_a_leader exception.
     // In case of a timeout returns timeout_error.
     virtual future<> stepdown(logical_clock::duration timeout) = 0;
+
+    // Atomically read the state of the state machine and apply
+    // the function output to it. Please note that since the lock
+    // protection here is advisory, only the state which is
+    // always modified through cas() can be accessed in a linearizable
+    // manner, if the state is modified both via cas() and
+    // a simple add_entry() linearizability is not guaranteed.
+    template<typename Func>
+    requires (std::is_invocable_r_v<future<raft::command>, Func, raft::server&> ||
+              std::is_invocable_r_v<future<raft::server_address_set>, Func, const raft::server&>)
+    future<> cas(Func func) {
+        co_await with_semaphore(_cas_sem, 1, [this, func1 = std::move(func)] () -> future<> {
+            // Workaround https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95111
+            auto func = std::move(func1);
+            term_t term = get_current_term();
+            co_await read_barrier();
+            auto r = co_await func(*this);
+            if (term == get_current_term()) {
+                using T = std::decay_t<decltype(r)>;
+                if constexpr (std::is_same_v<T, raft::command>) {
+                    co_await add_entry(r, wait_type::applied);
+                } else if constexpr (std::is_same_v<T, raft::server_address_set>) {
+                    co_await set_configuration(r);
+                }
+            }
+        });
+    }
 
     // Ad hoc functions for testing
     virtual void wait_until_candidate() = 0;
@@ -150,6 +170,10 @@ public:
     virtual void elapse_election() = 0;
     virtual bool is_leader() = 0;
     virtual void tick() = 0;
+private:
+    // Serialize concurrent CAS operations in a single Raft group
+    // XXX: the semaphore should be parameterized with clock type?
+    semaphore _cas_sem{1};
 };
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
