@@ -22,10 +22,13 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/abort_source.hh>
 
 #include "message/messaging_service_fwd.hh"
 #include "gms/inet_address.hh"
 #include "raft/raft.hh"
+#include "raft/discovery.hh"
 #include "raft/server.hh"
 #include "service/raft/raft_address_map.hh"
 
@@ -64,6 +67,8 @@ public:
     // TODO: should be configurable.
     static constexpr ticker_type::duration tick_interval = std::chrono::milliseconds(100);
 private:
+    seastar::gate _shutdown_gate;
+    seastar::abort_source _abort_source;
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
     sharded<cql3::query_processor>& _qp;
@@ -73,6 +78,12 @@ private:
     raft::server_address _my_addr;
     // Serialize read/write to _my_addr on a given shard
     semaphore _my_addr_sem{1};
+    // Status of leader discovery. Initially there is no group 0,
+    // and the variant contains no state. During initial cluster
+    // bootstrap a discovery object is created, which is then
+    // substituted by group0 id when a leader is discovered or
+    // created.
+    std::variant<raft::no_discovery, raft::discovery, raft::group_id> _group0;
 
     struct server_for_group {
         raft::group_id gid;
@@ -93,6 +104,32 @@ private:
     server_for_group create_server_for_group(raft::group_id id);
 
     server_for_group& get_server_for_group(raft::group_id id);
+    // A helper function to get the current Raft group leader.
+    // Checks if this server is a leader, and if it's the
+    // case, returns its address.
+    // Otherwise one of the two cases are possible:
+    // 1. This is a follower of a stable leader.
+    //    Returns the address of this leader.
+    // 2. This server is not a leader and not a follower of an
+    //    existing leader. E.g. election is in progress or this server
+    //    lost leadership just recently and is a follower with no
+    //    leader. Instead of waiting for election to finish, orders
+    //    the configuration lexicographically and returns the next
+    //    server address. This helps avoid a deadlock if e.g. this
+    //    server is partitioned away from the majority. Instead of
+    //    waiting for election to finish, perhaps indefinitely, we
+    //    switch to another server.
+    //
+    // Internal errors are propagated up unchanged.
+    //
+    future<raft::server_address> guess_leader(raft::group_id gid);
+
+    // A helper function to discover Raft Group 0 leader in
+    // absence of running group 0 server.
+    future<raft::leader_info> discover_leader();
+    // A helper to run Raft RPC in a loop handling bounces
+    // and trying different leaders until it succeeds.
+    future<> rpc_until_success(raft::server_address addr, auto rpc);
 public:
 
     raft_group_registry(netw::messaging_service& ms, gms::gossiper& gs, sharded<cql3::query_processor>& qp);
@@ -129,6 +166,22 @@ public:
     void update_address_mapping(raft::server_id id, gms::inet_address addr, bool expiring);
     // Remove inet_address mapping for a raft server
     void remove_address_mapping(raft::server_id);
+
+    // Join this node to the cluster-wide Raft group
+    // Called during bootstrap. Is idempotent - it
+    // does nothing if already done, or resumes from the
+    // unifinished state if aborted. The result is that
+    // raft service has group 0 running.
+    future<> join_raft_group0();
+
+    // Remove the node from the cluster-wide raft group.
+    // This procedure is idempotent. In case of replace node,
+    // it removes the replaced node from the group, since
+    // it can't do it by itself (it's dead).
+    future<> leave_raft_group0();
+
+    // Handle peer_exchange RPC
+    future<raft::peer_exchange> peer_exchange(raft::peer_list peers);
 };
 
 } // end of namespace service
