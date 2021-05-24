@@ -27,6 +27,8 @@
 #include "message/messaging_service.hh"
 #include "cql3/query_processor.hh"
 #include "gms/gossiper.hh"
+#include "gms/inet_address_serializer.hh"
+#include "db/system_keyspace.hh"
 
 #include <seastar/core/smp.hh>
 #include <seastar/core/coroutine.hh>
@@ -130,6 +132,21 @@ future<> raft_group_registry::stop_servers() {
 }
 
 seastar::future<> raft_group_registry::init() {
+    // Load or initialize a Raft server id. Avoid races on
+    // different shards by always querying shard 0.
+    _my_addr = co_await container().invoke_on(0, [] (raft_group_registry& self) -> future<raft::server_address> {
+        return with_semaphore(self._my_addr_sem, 1, [&self] () -> future<raft::server_address> {
+            if (self._my_addr.id == raft::server_id{}) {
+                self._my_addr.id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
+                if (self._my_addr.id == raft::server_id{}) {
+                    self._my_addr.id = raft::server_id::create_random_id();
+                    co_await db::system_keyspace::set_raft_server_id(self._my_addr.id.id);
+                }
+                self._my_addr.info = ser::serialize_to_buffer<bytes>(self._gossiper.get_broadcast_address());
+            }
+            co_return self._my_addr;
+        });
+    });
     // Once a Raft server starts, it soon times out
     // and starts an election, so RPC must be ready by
     // then to send VoteRequest messages.
@@ -160,13 +177,12 @@ raft::server& raft_group_registry::get_server(raft::group_id gid) {
 
 raft_group_registry::server_for_group raft_group_registry::create_server_for_group(raft::group_id gid) {
 
-    raft::server_id my_id = raft::server_id::create_random_id();
-    auto rpc = std::make_unique<raft_rpc>(_ms, *this, gid, my_id);
+    auto rpc = std::make_unique<raft_rpc>(_ms, *this, gid, _my_addr.id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(_qp.local(), gid);
     auto state_machine = std::make_unique<schema_raft_state_machine>();
-    auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
+    auto server = raft::create_server(_my_addr.id, std::move(rpc), std::move(state_machine),
             std::move(storage), _fd, raft::server::configuration());
 
     // initialize the corresponding timer to tick the raft server instance

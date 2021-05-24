@@ -69,6 +69,10 @@ private:
     sharded<cql3::query_processor>& _qp;
     // Shard-local failure detector instance shared among all raft groups
     shared_ptr<raft_gossip_failure_detector> _fd;
+    // Raft Server ID of this server. Valid after init().
+    raft::server_address _my_addr;
+    // Serialize read/write to _my_addr on a given shard
+    semaphore _my_addr_sem{1};
 
     struct server_for_group {
         raft::group_id gid;
