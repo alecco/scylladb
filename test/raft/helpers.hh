@@ -241,3 +241,12 @@ raft::server_address to_server_address(size_t local_id) {
 size_t to_local_id(utils::UUID uuid) {
     return uuid.get_least_significant_bits() - 1;
 }
+
+std::vector<raft::server_id> to_raft_id_vec(std::vector<size_t> local_ids) {
+    std::vector<raft::server_id> ret;
+    for (auto local_id: local_ids) {
+        ret.push_back(raft::server_id{to_raft_uuid(local_id)});
+    }
+    return ret;
+}
+
