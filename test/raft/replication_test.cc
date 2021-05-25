@@ -96,15 +96,22 @@ struct set_config_entry {
 };
 using set_config = std::vector<set_config_entry>;
 
+struct check_config {
+    std::vector<size_t> nodes;
+    std::vector<size_t> addrs;
+    check_config(size_t node, std::vector<size_t> addrs) : nodes({node}), addrs(addrs) {}
+    check_config(std::vector<size_t> nodes, std::vector<size_t> addrs) : nodes(nodes), addrs(addrs) {}
+};
+
 struct tick {
     uint64_t ticks;
 };
 
-using update = std::variant<entries, new_leader, partition, set_config, tick>;
+using update = std::variant<entries, new_leader, partition, set_config, check_config, tick>;
 
 struct log_entry {
     unsigned term;
-    int value;
+    std::variant<int, raft::configuration> data;
 };
 
 struct initial_log {
@@ -168,6 +175,14 @@ raft::server_address to_server_address(size_t local_id) {
 
 size_t to_local_id(utils::UUID uuid) {
     return uuid.get_least_significant_bits() - 1;
+}
+
+std::vector<raft::server_id> to_raft_id_vec(std::vector<size_t> local_ids) {
+    std::vector<raft::server_id> ret;
+    for (auto local_id: local_ids) {
+        ret.push_back(raft::server_id{to_raft_uuid(local_id)});
+    }
+    return ret;
 }
 
 class hasher_int : public xx_hasher {
@@ -530,6 +545,7 @@ public:
     future<> wait_log(size_t follower);
     future<> wait_log_all();
     future<> change_configuration(set_config sc);
+    void check_configuration(check_config cc);
     future<> reconfigure_all();
     future<> partition(::partition p);
     const std::unordered_set<size_t>& get_configuration() {
@@ -621,8 +637,10 @@ future<> raft_cluster::stop_all() {
 }
 
 future<> raft_cluster::wait_all() {
-    for (auto s: _in_configuration) {
-        co_await _servers[s].sm->done();
+    if (_apply_entries > 0) {
+        for (auto s: _in_configuration) {
+            co_await _servers[s].sm->done();
+        }
     }
 }
 
@@ -660,7 +678,9 @@ future<> raft_cluster::add_entries(size_t n) {
 }
 
 future<> raft_cluster::add_remaining_entries() {
-    co_await add_entries(_apply_entries - _next_val);
+    if (_apply_entries > 0) {
+        co_await add_entries(_apply_entries - _next_val);
+    }
 }
 
 void raft_cluster::init_raft_tickers() {
@@ -701,7 +721,13 @@ std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned st
 
     unsigned i = start_idx;
     for (auto e : list) {
-        log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++), create_command(e.value)});
+        if (std::holds_alternative<int>(e.data)) {
+            log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++),
+                    create_command(std::get<int>(e.data))});
+        } else {
+            log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++),
+                    std::get<raft::configuration>(e.data)});
+        }
     }
 
     return log;
@@ -851,6 +877,14 @@ future<> raft_cluster::change_configuration(set_config sc) {
     _in_configuration = new_config;
 }
 
+void raft_cluster::check_configuration(check_config cc) {
+    auto as = address_set(to_raft_id_vec(cc.addrs));
+    for (auto local_id: cc.nodes) {
+        BOOST_CHECK(local_id < _servers.size());
+        BOOST_CHECK(_servers[local_id].rpc->known_peers() == as);
+    }
+}
+
 future<> raft_cluster::reconfigure_all() {
     if (_in_configuration.size() < _servers.size()) {
         set_config sc;
@@ -903,6 +937,9 @@ future<> raft_cluster::partition(::partition p) {
 }
 
 void raft_cluster::verify() {
+    if (_apply_entries == 0) {
+        return;
+    }
     BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
     auto expected = hasher_int::hash_range(_apply_entries).finalize_uint64();
     for (auto i: _in_configuration) {
@@ -972,6 +1009,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.partition(std::get<partition>(update));
         } else if (std::holds_alternative<set_config>(update)) {
             co_await rafts.change_configuration(std::get<set_config>(update));
+        } else if (std::holds_alternative<check_config>(update)) {
+            rafts.check_configuration(std::get<check_config>(update));
         } else if (std::holds_alternative<tick>(update)) {
             auto t = std::get<tick>(update);
             for (uint64_t i = 0; i < t.ticks; i++) {
@@ -1265,42 +1304,24 @@ RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
 /// RPC-related tests
 ///
 
-SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
-    // 1 node cluster with an initial configuration from a snapshot.
-    // Test that RPC configuration is set up correctly when the raft server
-    // instance is started.
-    constexpr size_t nodes = 1;
+// 1 node cluster with an initial configuration from a snapshot.
+// Test that RPC configuration is set up correctly when the raft server
+// instance is started.
+RAFT_TEST_CASE(rpc_load_conf_from_snapshot, (test_case{
+         .nodes = 1, .total_values = 0,
+         .initial_snapshots = {{.snap = {
+                .config = raft::configuration{raft::server_id{to_raft_id(0)}}}}},
+         .updates = {check_config{0,{0}}
+         }}));
 
-    raft::server_id sid{to_raft_id(0)};
-    std::vector<initial_state> states(1);
-    states[0].snapshot.config = raft::configuration{sid};
+// 1 node cluster.
+// Initial configuration is taken from the persisted log.
+RAFT_TEST_CASE(rpc_load_conf_from_log, (test_case{
+         .nodes = 1, .total_values = 0,
+         .initial_states = {{.le = {{1, raft::configuration{raft::server_id{to_raft_id(0)}}}}}},
+         .updates = {check_config{0,{0}}
+         }}));
 
-    raft_cluster rafts(states, dummy_apply_fn, 0, 0, 0, false);
-    co_await rafts.start_all();
-
-    BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
-
-    co_await rafts.stop_all();
-}
-
-SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
-    // 1 node cluster.
-    // Initial configuration is taken from the persisted log.
-    constexpr size_t nodes = 1;
-
-    std::vector<initial_state> states(1);
-    raft::server_id sid{to_raft_id(0)};
-    initial_state state;
-    raft::log_entry conf_entry{.idx = raft::index_t{1}, .data = raft::configuration{sid}};
-    states[0].log.emplace_back(std::move(conf_entry));
-
-    raft_cluster rafts(states, dummy_apply_fn, 0, 0, to_local_id(sid.id), false);
-    co_await rafts.start_all();
-
-    BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
-
-    co_await rafts.stop_all();
-}
 
 SEASTAR_TEST_CASE(rpc_propose_conf_change) {
     // 3 node cluster {A, B, C}.
