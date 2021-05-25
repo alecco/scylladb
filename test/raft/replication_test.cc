@@ -141,16 +141,57 @@ struct set_config_entry {
 };
 using set_config = std::vector<set_config_entry>;
 
+struct config {
+    std::vector<node_id> curr;
+    std::vector<node_id> prev;
+
+// using server_address_set = std::unordered_set<server_address>;
+// struct configuration {
+    // server_address_set current;
+    // server_address_set previous;
+
+    // XXX overload conversion
+    operator raft::configuration() {
+        // XXX use to_server_address
+        return raft::configuration{raft::server_address_set{raft::server_address{}}};
+    }
+};
+
+using rpc_address_set = std::vector<size_t>;
+
+struct check_rpc_config {
+    std::vector<node_id> nodes;
+    rpc_address_set addrs;
+    check_rpc_config(node_id node, rpc_address_set addrs) : nodes({node}), addrs(addrs) {}
+    check_rpc_config(std::vector<node_id> nodes, rpc_address_set addrs) : nodes(nodes), addrs(addrs) {}
+};
+
+struct check_rpc_added {
+    std::vector<node_id> nodes;
+    size_t expected;
+    check_rpc_added(node_id node, size_t expected) : nodes({node}), expected(expected) {}
+    check_rpc_added(std::vector<node_id> nodes, size_t expected) : nodes(nodes), expected(expected) {}
+};
+
+struct check_rpc_removed {
+    std::vector<node_id> nodes;
+    size_t expected;
+    check_rpc_removed(node_id node, size_t expected) : nodes({node}), expected(expected) {}
+    check_rpc_removed(std::vector<node_id> nodes, size_t expected) : nodes(nodes), expected(expected) {}
+};
+
+using rpc_reset_counters = std::vector<node_id>;
+
 struct tick {
     uint64_t ticks;
 };
 
 using update = std::variant<entries, new_leader, partition, disconnect, stop, reset,
-      set_config, tick>;
+      set_config, check_rpc_config, check_rpc_added, check_rpc_removed, rpc_reset_counters, tick>;
 
 struct log_entry {
     unsigned term;
-    int value;
+    std::variant<int, raft::configuration> data;
 };
 
 struct initial_log {
@@ -526,7 +567,11 @@ public:
     future<> add_remaining_entries();
     future<> wait_log(size_t follower);
     future<> wait_log_all();
-    future<> change_configuration(set_config sc);
+    future<> change_configuration(::set_config sc);
+    void check_configuration(::check_rpc_config cc);
+    void check_rpc_added(::check_rpc_added expected) const;
+    void check_rpc_removed(::check_rpc_removed expected) const;
+    void rpc_reset_counters(::rpc_reset_counters nodes);
     future<> reconfigure_all();
     future<> partition(::partition p);
     future<> stop(::stop server);
@@ -701,7 +746,13 @@ std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned st
 
     unsigned i = start_idx;
     for (auto e : list) {
-        log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++), create_command(e.value)});
+        if (std::holds_alternative<int>(e.data)) {
+            log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++),
+                    create_command(std::get<int>(e.data))});
+        } else {
+            log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++),
+                    std::get<raft::configuration>(e.data)});
+        }
     }
 
     return log;
@@ -851,6 +902,36 @@ future<> raft_cluster::change_configuration(set_config sc) {
     _in_configuration = new_config;
 }
 
+void raft_cluster::check_configuration(check_rpc_config cc) {
+    auto as = address_set(to_raft_id_vec(cc.addrs));
+    for (auto local_id: cc.nodes) {
+        BOOST_CHECK(local_id < _servers.size());
+        BOOST_CHECK(_servers[local_id].rpc->known_peers() == as);
+    }
+}
+
+void raft_cluster::check_rpc_added(::check_rpc_added expected) const {
+    for (auto id: expected.nodes) {
+        BOOST_CHECK_MESSAGE(_servers[id].rpc->servers_added() == expected.expected,
+                format("RPC added {} does not match expected {}", _servers[id].rpc->servers_added(),
+                        expected.expected));
+    }
+}
+
+void raft_cluster::check_rpc_removed(::check_rpc_removed expected) const {
+    for (auto id: expected.nodes) {
+        BOOST_CHECK_MESSAGE(_servers[id].rpc->servers_removed() == expected.expected,
+                format("RPC removed {} does not match expected {}", _servers[id].rpc->servers_removed(),
+                        expected.expected));
+    }
+}
+
+void raft_cluster::rpc_reset_counters(::rpc_reset_counters nodes) {
+    for (auto id: nodes) {
+        _servers[id].rpc->reset_counters();
+    }
+}
+
 future<> raft_cluster::reconfigure_all() {
     if (_in_configuration.size() < _servers.size()) {
         set_config sc;
@@ -988,6 +1069,14 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.reset(std::get<reset>(update));
         } else if (std::holds_alternative<set_config>(update)) {
             co_await rafts.change_configuration(std::get<set_config>(update));
+        } else if (std::holds_alternative<check_rpc_config>(update)) {
+            rafts.check_configuration(std::get<check_rpc_config>(update));
+        } else if (std::holds_alternative<check_rpc_added>(update)) {
+            rafts.check_rpc_added(std::get<check_rpc_added>(update));
+        } else if (std::holds_alternative<check_rpc_removed>(update)) {
+            rafts.check_rpc_removed(std::get<check_rpc_removed>(update));
+        } else if (std::holds_alternative<rpc_reset_counters>(update)) {
+            rafts.rpc_reset_counters(std::get<rpc_reset_counters>(update));
         } else if (std::holds_alternative<tick>(update)) {
             auto t = std::get<tick>(update);
             for (uint64_t i = 0; i < t.ticks; i++) {
@@ -1285,147 +1374,119 @@ RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
 /// RPC-related tests
 ///
 
-SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
-    // 1 node cluster with an initial configuration from a snapshot.
-    // Test that RPC configuration is set up correctly when the raft server
-    // instance is started.
-    constexpr size_t nodes = 1;
+// 1 node cluster with an initial configuration from a snapshot.
+// Test that RPC configuration is set up correctly when the raft server
+// instance is started.
+RAFT_TEST_CASE(rpc_load_conf_from_snapshot, (test_case{
+         .nodes = 1, .total_values = 0,
+         .initial_snapshots = {{.snap = {
+                .config = raft::configuration{to_raft_id(0)}}}},
+         .updates = {check_rpc_config{node_id{0},rpc_address_set{0}}
+         }}));
 
-    raft::server_id sid{to_raft_id(0)};
-    std::vector<initial_state> states(1);
-    states[0].snapshot.config = raft::configuration{sid};
+// 1 node cluster.
+// Initial configuration is taken from the persisted log.
+RAFT_TEST_CASE(rpc_load_conf_from_log, (test_case{
+         .nodes = 1, .total_values = 0,
+         .initial_states = {{.le = {{1, raft::configuration{to_raft_id(0)}}}}},
+         .updates = {check_rpc_config{node_id{0},rpc_address_set{0}}
+         }}));
 
-    raft_cluster rafts(states, dummy_apply_fn, 0, 0, 0, false);
-    co_await rafts.start_all();
 
-    BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
+// 3 node cluster {A, B, C}.
+// Shrinked later to 2 nodes and then expanded back to 3 nodes.
+// Test that both configuration changes update RPC configuration correspondingly
+// on all nodes.
+RAFT_TEST_CASE(rpc_propose_conf_change, (test_case{
+         .nodes = 3, .total_values = 0,
+         .updates = {
+            // Remove node C from the cluster configuration.
+            set_config{0,1},
+            // Check that RPC config is updated both on leader and on follower nodes,
+            // i.e. `rpc::remove_server` is called.
+            check_rpc_config{{node_id{0},node_id{1}},rpc_address_set{0,1}},
+            // Re-add node C to the cluster configuration.
+            set_config{0,1,2},
+            // Check that both A (leader) and B (follower) call `rpc::add_server`,
+            // also the newly integrated node gets the actual RPC configuration, too.
+            check_rpc_config{{node_id{0},node_id{1},node_id{2}},rpc_address_set{0,1,2}},
+         }}));
 
-    co_await rafts.stop_all();
-}
+// 3 node cluster {A, B, C}.
+// Test that leader elections don't change RPC configuration.
+RAFT_TEST_CASE(rpc_leader_election, (test_case{
+         .nodes = 3, .total_values = 0,
+         .updates = {
+            check_rpc_config{{node_id{0},node_id{1},node_id{2}},rpc_address_set{0,1,2}},
+            // Elect 2nd node a leader
+            new_leader{1},
+            check_rpc_config{{node_id{0},node_id{1},node_id{2}},rpc_address_set{0,1,2}},
+         }}));
 
-SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
-    // 1 node cluster.
-    // Initial configuration is taken from the persisted log.
-    constexpr size_t nodes = 1;
+// 3 node cluster {A, B, C}.
+// Test that demoting of node C to learner state and then promoting back
+// to voter doesn't involve any RPC configuration changes. 
+RAFT_TEST_CASE(rpc_voter_non_voter_transision, (test_case{
+         .nodes = 3, .total_values = 0,
+         .updates = {
+            check_rpc_config{{node_id{0},node_id{1},node_id{2}},rpc_address_set{0,1,2}},
+            rpc_reset_counters{{node_id{0},node_id{1},node_id{2}}},
+            // Make C a non-voting member.
+            set_config{0, 1, set_config_entry(2, false)},
+            // Check that RPC configuration didn't change.
+            check_rpc_added{{node_id{0},node_id{1},node_id{2}},0},
+            check_rpc_removed{{node_id{0},node_id{1},node_id{2}},0},
+            // Make C a voting member.
+            set_config{0, 1, 2},
+            // RPC configuration shouldn't change.
+            check_rpc_added{{node_id{0},node_id{1},node_id{2}},0},
+            check_rpc_removed{{node_id{0},node_id{1},node_id{2}},0},
+         }}));
 
-    std::vector<initial_state> states(1);
-    raft::server_id sid{to_raft_id(0)};
-    initial_state state;
-    raft::log_entry conf_entry{.idx = raft::index_t{1}, .data = raft::configuration{sid}};
-    states[0].log.emplace_back(std::move(conf_entry));
+// 3 node cluster {A, B, C}.
+// Issue a configuration change on leader (A): add node D.
+// Fail the node before the entry is committed (disconnect from the
+// rest of the cluster and restart the node).
+//
+// In the meanwhile, elect a new leader within the connected part of the
+// cluster (B). A becomes an isolated follower in this case.
+// A should observe {A, B, C, D} RPC configuration: when in joint
+// consensus, we need to account for servers in both configurations.
+//
+// Heal network partition and observe that A's log is truncated (actually,
+// it's empty since B does not have any entries at all, except for dummies).
+// The RPC configuration on A is restored from initial snapshot configuration,
+// which is {A, B, C}.
 
-    raft_cluster rafts(states, dummy_apply_fn, 0, 0, to_local_id(sid.id), false);
-    co_await rafts.start_all();
+RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_snp, (test_case{
+         .nodes = 3, .total_values = 0,
+         .updates = {
 
-    BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
+            // Disconnect A from B and C.
+            partition{1,2},
+            // Emulate a failed configuration change on A (add node D) by
+            // restarting A with a modified initial log containing one extraneous
+            // configuration entry.
+            stop{0},
+            reset{.id = 0, .state = {
+                .log = {
+                    raft::log_entry{raft::term_t(1), raft::index_t(1),
+                        config{.curr = {node_id{0},node_id{1},node_id{2},node_id{3}},
+                               .prev = {node_id{0},node_id{1},node_id{2}}}
+                    }
+                }
+                }
+            },
+         } // .updates
+}));
 
-    co_await rafts.stop_all();
-}
-
-SEASTAR_TEST_CASE(rpc_propose_conf_change) {
-    // 3 node cluster {A, B, C}.
-    // Shrinked later to 2 nodes and then expanded back to 3 nodes.
-    // Test that both configuration changes update RPC configuration correspondingly
-    // on all nodes.
-    return rpc_test(3, [] (raft_cluster& rafts, size_t leader) -> future<> {
-        // Remove node C from the cluster configuration.
-        co_await rpc_test_change_configuration(rafts, set_config{0, 1});
-
-        // Check that RPC config is updated both on leader and on follower nodes,
-        // i.e. `rpc::remove_server` is called.
-        auto reduced_config = address_set({to_raft_id(0), to_raft_id(1)});
-        for (const auto& node : rafts.get_configuration()) {
-            BOOST_CHECK(rafts[node].rpc->known_peers() == reduced_config);
-        }
-
-        // Re-add node C to the cluster configuration.
-        co_await rpc_test_change_configuration(rafts, set_config{0, 1, 2});
-
-        // Check that both A (leader) and B (follower) call `rpc::add_server`,
-        // also the newly integrated node gets the actual RPC configuration, too.
-        const auto initial_cluster_conf = full_cluster_address_set(rafts.size());
-        for (size_t s = 0; s < rafts.size(); ++s) {
-            BOOST_CHECK(rafts[s].rpc->known_peers() == initial_cluster_conf);
-        }
-    });
-}
-
-SEASTAR_TEST_CASE(rpc_leader_election) {
-    // 3 node cluster {A, B, C}.
-    // Test that leader elections don't change RPC configuration.
-    return rpc_test(3, [] (raft_cluster& rafts, size_t initial_leader) -> future<> {
-        auto all_nodes = full_cluster_address_set(rafts.size());
-        for (size_t s = 0; s < rafts.size(); ++s) {
-            BOOST_CHECK(rafts[s].rpc->known_peers() == all_nodes);
-            rafts[s].rpc->reset_counters();
-        }
-
-        // Elect 2nd node a leader
-        constexpr size_t new_leader = 1;
-        rafts.pause_tickers();
-        co_await rafts.elect_new_leader(new_leader);
-        rafts.restart_tickers();
-
-        // Check that no attempts to update RPC were made.
-        for (size_t s = 0; s < rafts.size(); ++s) {
-            BOOST_CHECK(!rafts[s].rpc->servers_added());
-            BOOST_CHECK(!rafts[s].rpc->servers_removed());
-        }
-    });
-}
-
-SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
-    // 3 node cluster {A, B, C}.
-    // Test that demoting of node C to learner state and then promoting back
-    // to voter doesn't involve any RPC configuration changes. 
-    return rpc_test(3, [] (raft_cluster& rafts, size_t leader) -> future<> {
-        const auto all_voter_nodes = full_cluster_address_set(rafts.size());
-        for (size_t s = 0; s < rafts.size(); ++s) {
-            BOOST_CHECK(rafts[s].rpc->known_peers() == all_voter_nodes);
-            rafts[s].rpc->reset_counters();
-        }
-
-        // Make C a non-voting member.
-        co_await rpc_test_change_configuration(rafts, set_config{0, 1,
-                set_config_entry(2, false)});
-
-        // Check that RPC configuration didn't change.
-        for (size_t s = 0; s < rafts.size(); ++s) {
-            BOOST_CHECK(!rafts[s].rpc->servers_added());
-            BOOST_CHECK(!rafts[s].rpc->servers_removed());
-        }
-
-        // Make C a voting member.
-        co_await rpc_test_change_configuration(rafts, set_config{0, 1, 2});
-
-        // RPC configuration shouldn't change.
-        for (size_t s = 0; s < rafts.size(); ++s) {
-            BOOST_CHECK(!rafts[s].rpc->servers_added());
-            BOOST_CHECK(!rafts[s].rpc->servers_removed());
-        }
-    });
-}
-
-SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
-    // 3 node cluster {A, B, C}.
-    // Issue a configuration change on leader (A): add node D.
-    // Fail the node before the entry is committed (disconnect from the
-    // rest of the cluster and restart the node).
-    //
-    // In the meanwhile, elect a new leader within the connected part of the
-    // cluster (B). A becomes an isolated follower in this case.
-    // A should observe {A, B, C, D} RPC configuration: when in joint
-    // consensus, we need to account for servers in both configurations.
-    //
-    // Heal network partition and observe that A's log is truncated (actually,
-    // it's empty since B does not have any entries at all, except for dummies).
-    // The RPC configuration on A is restored from initial snapshot configuration,
-    // which is {A, B, C}.
+SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp_OLD) {
     return rpc_test(3, [] (raft_cluster& rafts, size_t initial_leader) -> future<> {
         const auto all_nodes = full_cluster_address_set(rafts.size());
         rafts.pause_tickers();
         // Disconnect A from B and C.
         rafts.disconnect(0);
+
         // Emulate a failed configuration change on A (add node D) by
         // restarting A with a modified initial log containing one extraneous
         // configuration entry.
