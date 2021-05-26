@@ -119,6 +119,9 @@ struct leader {
 };
 using partition = std::vector<std::variant<leader,int>>;
 
+// Disconnect 2 servers both ways
+using disconnect = std::pair<size_t, size_t>;
+
 struct set_config_entry {
     size_t node_idx;
     bool can_vote;
@@ -133,7 +136,7 @@ struct tick {
     uint64_t ticks;
 };
 
-using update = std::variant<entries, new_leader, partition, set_config, tick>;
+using update = std::variant<entries, new_leader, partition, disconnect, set_config, tick>;
 
 struct log_entry {
     unsigned term;
@@ -535,6 +538,7 @@ public:
     future<> change_configuration(set_config sc);
     future<> reconfigure_all();
     future<> partition(::partition p);
+    void disconnect(::disconnect nodes);
     const std::unordered_set<size_t>& get_configuration() {
         return _in_configuration;   // Servers in current configuration
     }
@@ -903,6 +907,10 @@ future<> raft_cluster::partition(::partition p) {
         co_await free_election();
     }
     restart_tickers();
+}
+
+void raft_cluster::disconnect(::disconnect nodes) {
+    _connected->cut(to_raft_id(nodes.first), to_raft_id(nodes.second));
 }
 
 void raft_cluster::verify() {
