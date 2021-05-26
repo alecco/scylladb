@@ -105,6 +105,9 @@ struct initial_state {
     raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
 };
 
+// For verbosity in test declaration (i.e. node_id{x})
+using node_id = size_t;
+
 // Updates can be
 //  - Entries
 //  - Leader change
