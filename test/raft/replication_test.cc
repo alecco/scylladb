@@ -55,6 +55,7 @@
 //          set_config{a,b,c}        Change configuration on leader
 //          check_rpc_config{a,cfg}  Check rpc config of a matches
 //          check_rpc_config{[],cfg} Check rpc config multiple nodes matches
+//          check_rpc_config_eventually{a,cfg}  Check rpc config of a eventually matches
 //
 //      run_test
 //      - Creates the servers and initializes logs and snapshots
@@ -169,6 +170,12 @@ struct check_rpc_config {
     check_rpc_config(std::vector<node_id> nodes, rpc_address_set addrs) : nodes(nodes), addrs(addrs) {}
 };
 
+struct check_rpc_config_eventually {
+    node_id node;
+    rpc_address_set addrs;
+    check_rpc_config_eventually(node_id node, rpc_address_set addrs) : node(node), addrs(addrs) {}
+};
+
 struct check_rpc_added {
     std::vector<node_id> nodes;
     size_t expected;
@@ -190,7 +197,8 @@ struct tick {
 };
 
 using update = std::variant<entries, new_leader, partition, disconnect, stop, reset, wait_log,
-      set_config, check_rpc_config, check_rpc_added, check_rpc_removed, rpc_reset_counters, tick>;
+      set_config, check_rpc_config, check_rpc_config_eventually, check_rpc_added, check_rpc_removed,
+      rpc_reset_counters, tick>;
 
 struct log_entry {
     unsigned term;
@@ -573,6 +581,7 @@ public:
     future<> wait_log_all();
     future<> change_configuration(::set_config sc);
     void check_rpc_config(::check_rpc_config cc);
+    future<> check_rpc_config_eventually(::check_rpc_config_eventually cc);
     void check_rpc_added(::check_rpc_added expected) const;
     void check_rpc_removed(::check_rpc_removed expected) const;
     void rpc_reset_counters(::rpc_reset_counters nodes);
@@ -922,6 +931,14 @@ void raft_cluster::check_rpc_config(::check_rpc_config cc) {
     }
 }
 
+future<> raft_cluster::check_rpc_config_eventually(::check_rpc_config_eventually cc) {
+    auto as = address_set(cc.addrs);
+
+    co_await seastar::async([&] {
+        CHECK_EVENTUALLY_EQUAL(_servers[cc.node].rpc->known_peers(), as);
+    });
+}
+
 void raft_cluster::check_rpc_added(::check_rpc_added expected) const {
     for (auto id: expected.nodes) {
         BOOST_CHECK_MESSAGE(_servers[id].rpc->servers_added() == expected.expected,
@@ -1096,6 +1113,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.change_configuration(std::get<set_config>(update));
         } else if (std::holds_alternative<check_rpc_config>(update)) {
             rafts.check_rpc_config(std::get<check_rpc_config>(update));
+        } else if (std::holds_alternative<check_rpc_config_eventually>(update)) {
+            co_await rafts.check_rpc_config_eventually(std::get<check_rpc_config_eventually>(update));
         } else if (std::holds_alternative<check_rpc_added>(update)) {
             rafts.check_rpc_added(std::get<check_rpc_added>(update));
         } else if (std::holds_alternative<check_rpc_removed>(update)) {
@@ -1481,7 +1500,7 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_snp, (test_case{
             // Since B's log is effectively empty (does not contain any configuration
             // entries), A's configuration view ({A, B, C}) is restored from
             // initial snapshot.
-            check_rpc_config{node_id{0},rpc_address_set{0,1,2}}}}));
+            check_rpc_config_eventually{node_id{0},rpc_address_set{0,1,2}}}}));
 
 // 4 node cluster {A, B, C, D}.
 // Change configuration to {A, B, C} from A and wait for it to become
@@ -1573,7 +1592,8 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
             // real cfg being reverted to the committed state as it is the union
             // between current and previous configurations in case of
             // joint cfg, anyway.
-            check_rpc_config{{node_id{0},node_id{1},node_id{2}}, rpc_address_set{0,1,2}},
+            check_rpc_config_eventually{node_id{0}, rpc_address_set{0,1,2}},
+            check_rpc_config{{node_id{1},node_id{2}}, rpc_address_set{0,1,2}},
 
             //
             // Second case: expand cluster (re-add node D).
