@@ -1404,7 +1404,8 @@ RAFT_TEST_CASE(rpc_propose_conf_change, (test_case{
             set_config{0,1,2},
             // Check that both A (leader) and B (follower) call `rpc::add_server`,
             // also the newly integrated node gets the actual RPC configuration, too.
-            check_rpc_config{{node_id{0},node_id{1},node_id{2}},rpc_address_set{0,1,2}},
+            check_rpc_config{{node_id{0},node_id{1}},rpc_address_set{0,1,2}},
+            check_rpc_config_eventually{node_id{2}, rpc_address_set{0,1,2}},
          }}));
 
 // 3 node cluster {A, B, C}.
