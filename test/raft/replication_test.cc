@@ -282,10 +282,82 @@ raft::snapshot_id delay_apply_snapshot{utils::UUID(0, 0xdeadbeaf)};
 // sending of a snaphot with that id will be delayed until snapshot_sync is signaled
 raft::snapshot_id delay_send_snapshot{utils::UUID(0xdeadbeaf, 0)};
 
-class state_machine : public raft::state_machine {
-public:
+class raft_cluster {
     using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
+    class state_machine;
+    class persistence;
+    struct connection;
+    struct hash_connection;
+    class connected;
+    class failure_detector;
+    class rpc;
+    struct test_server {
+        std::unique_ptr<raft::server> server;
+        state_machine* sm;
+        rpc* rpc;
+    };
+    std::vector<test_server> _servers;
+    lw_shared_ptr<connected> _connected;
+    lw_shared_ptr<snapshots> _snapshots;
+    lw_shared_ptr<persisted_snapshots> _persisted_snapshots;
+    size_t _apply_entries;
+    size_t _next_val;
+    bool _packet_drops;
+    apply_fn _apply;
+    std::unordered_set<size_t> _in_configuration;   // Servers in current configuration
+    std::vector<seastar::timer<lowres_clock>> _tickers;
+    size_t _leader;
+    std::vector<initial_state> get_states(test_case test, bool prevote);
+public:
+    raft_cluster(test_case test,
+            apply_fn apply,
+            size_t apply_entries, size_t first_val, size_t first_leader,
+            bool prevote, bool packet_drops);
+    // No copy
+    raft_cluster(const raft_cluster&) = delete;
+    raft_cluster(raft_cluster&&) = default;
+    future<> stop_server(size_t id);
+    future<> reset_server(size_t id, initial_state state); // Reset a stopped server
+    size_t size() {
+        return _servers.size();
+    }
+    future<> start_all();
+    future<> stop_all();
+    future<> wait_all();
+    void tick_all();
+    void disconnect(size_t id, std::optional<raft::server_id> except = std::nullopt);
+    void connect_all();
+    void elapse_elections();
+    future<> elect_new_leader(size_t new_leader);
+    future<> free_election();
+    void init_raft_tickers();
+    void pause_tickers();
+    void restart_tickers();
+    void cancel_ticker(size_t id);
+    void set_ticker_callback(size_t id) noexcept;
+    future<> add_entries(size_t n);
+    future<> add_remaining_entries();
+    future<> wait_log(size_t follower);
+    future<> wait_log(::wait_log followers);
+    future<> wait_log_all();
+    future<> change_configuration(::set_config sc);
+    void check_rpc_config(::check_rpc_config cc);
+    future<> check_rpc_config_eventually(::check_rpc_config_eventually cc);
+    void check_rpc_added(::check_rpc_added expected) const;
+    void check_rpc_removed(::check_rpc_removed expected) const;
+    void rpc_reset_counters(::rpc_reset_counters nodes);
+    future<> reconfigure_all();
+    future<> partition(::partition p);
+    future<> tick(::tick t);
+    future<> stop(::stop server);
+    future<> reset(::reset server);
+    void disconnect(::disconnect nodes);
+    void verify();
 private:
+    test_server create_server(size_t id, initial_state state);
+};
+
+class raft_cluster::state_machine : public raft::state_machine {
     raft::server_id _id;
     apply_fn _apply;
     size_t _apply_entries;
@@ -337,7 +409,7 @@ public:
     }
 };
 
-class persistence : public raft::persistence {
+class raft_cluster::persistence : public raft::persistence {
     raft::server_id _id;
     initial_state _conf;
     lw_shared_ptr<snapshots> _snapshots;
@@ -373,7 +445,7 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
-struct connection {
+struct raft_cluster::connection {
    raft::server_id from;
    raft::server_id to;
    bool operator==(const connection &o) const {
@@ -381,13 +453,13 @@ struct connection {
    }
 };
 
-struct hash_connection {
+struct raft_cluster::hash_connection {
     std::size_t operator() (const connection &c) const {
         return std::hash<utils::UUID>()(c.from.id);
     }
 };
 
-struct connected {
+struct raft_cluster::connected {
     // Map of from->to disconnections
     std::unordered_set<connection, hash_connection> disconnected;
     size_t n;
@@ -427,7 +499,7 @@ struct connected {
     }
 };
 
-class failure_detector : public raft::failure_detector {
+class raft_cluster::failure_detector : public raft::failure_detector {
     raft::server_id _id;
     lw_shared_ptr<connected> _connected;
 public:
@@ -437,7 +509,7 @@ public:
     }
 };
 
-class rpc : public raft::rpc {
+class raft_cluster::rpc : public raft::rpc {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
     lw_shared_ptr<connected> _connected;
@@ -549,74 +621,7 @@ public:
     }
 };
 
-std::unordered_map<raft::server_id, rpc*> rpc::net;
-
-class raft_cluster {
-    struct test_server {
-        std::unique_ptr<raft::server> server;
-        state_machine* sm;
-        rpc* rpc;
-    };
-    std::vector<test_server> _servers;
-    lw_shared_ptr<connected> _connected;
-    lw_shared_ptr<snapshots> _snapshots;
-    lw_shared_ptr<persisted_snapshots> _persisted_snapshots;
-    size_t _apply_entries;
-    size_t _next_val;
-    bool _packet_drops;
-    state_machine::apply_fn _apply;
-    std::unordered_set<size_t> _in_configuration;   // Servers in current configuration
-    std::vector<seastar::timer<lowres_clock>> _tickers;
-    size_t _leader;
-    std::vector<initial_state> get_states(test_case test, bool prevote);
-public:
-    raft_cluster(test_case test,
-            state_machine::apply_fn apply,
-            size_t apply_entries, size_t first_val, size_t first_leader,
-            bool prevote, bool packet_drops);
-    // No copy
-    raft_cluster(const raft_cluster&) = delete;
-    raft_cluster(raft_cluster&&) = default;
-    future<> stop_server(size_t id);
-    future<> reset_server(size_t id, initial_state state); // Reset a stopped server
-    size_t size() {
-        return _servers.size();
-    }
-    future<> start_all();
-    future<> stop_all();
-    future<> wait_all();
-    void tick_all();
-    void disconnect(size_t id, std::optional<raft::server_id> except = std::nullopt);
-    void connect_all();
-    void elapse_elections();
-    future<> elect_new_leader(size_t new_leader);
-    future<> free_election();
-    void init_raft_tickers();
-    void pause_tickers();
-    void restart_tickers();
-    void cancel_ticker(size_t id);
-    void set_ticker_callback(size_t id) noexcept;
-    future<> add_entries(size_t n);
-    future<> add_remaining_entries();
-    future<> wait_log(size_t follower);
-    future<> wait_log(::wait_log followers);
-    future<> wait_log_all();
-    future<> change_configuration(::set_config sc);
-    void check_rpc_config(::check_rpc_config cc);
-    future<> check_rpc_config_eventually(::check_rpc_config_eventually cc);
-    void check_rpc_added(::check_rpc_added expected) const;
-    void check_rpc_removed(::check_rpc_removed expected) const;
-    void rpc_reset_counters(::rpc_reset_counters nodes);
-    future<> reconfigure_all();
-    future<> partition(::partition p);
-    future<> tick(::tick t);
-    future<> stop(::stop server);
-    future<> reset(::reset server);
-    void disconnect(::disconnect nodes);
-    void verify();
-private:
-    test_server create_server(size_t id, initial_state state);
-};
+std::unordered_map<raft::server_id, raft_cluster::rpc*> raft_cluster::rpc::net;
 
 raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state state) {
 
@@ -624,7 +629,7 @@ raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state s
     auto sm = std::make_unique<state_machine>(uuid, _apply, _apply_entries, _snapshots);
     auto& rsm = *sm;
 
-    auto mrpc = std::make_unique<rpc>(uuid, _connected, _snapshots, _packet_drops);
+    auto mrpc = std::make_unique<raft_cluster::rpc>(uuid, _connected, _snapshots, _packet_drops);
     auto& rpc_ref = *mrpc;
 
     auto mpersistence = std::make_unique<persistence>(uuid, state, _snapshots, _persisted_snapshots);
@@ -641,7 +646,7 @@ raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state s
 }
 
 raft_cluster::raft_cluster(test_case test,
-        state_machine::apply_fn apply,
+        apply_fn apply,
         size_t apply_entries, size_t first_val, size_t first_leader,
         bool prevote, bool packet_drops) :
             _connected(make_lw_shared<struct connected>(test.nodes)),
