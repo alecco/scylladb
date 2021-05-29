@@ -26,6 +26,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/later.hh>
+#include <seastar/util/variant_utils.hh>
 #include <seastar/testing/random.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_case.hh>
@@ -1122,34 +1123,51 @@ future<> raft_cluster::run() {
 
     // Process all updates in order
     for (auto update: _updates) {
-        if (std::holds_alternative<entries>(update)) {
-            co_await add_entries(std::get<entries>(update).n);
-        } else if (std::holds_alternative<new_leader>(update)) {
-            co_await elect_new_leader(std::get<new_leader>(update).id);
-        } else if (std::holds_alternative<::disconnect>(update)) {
-            disconnect(std::get<::disconnect>(update));
-        } else if (std::holds_alternative<::partition>(update)) {
-            co_await partition(std::get<::partition>(update));
-        } else if (std::holds_alternative<::stop>(update)) {
-            co_await stop(std::get<::stop>(update));
-        } else if (std::holds_alternative<::reset>(update)) {
-            co_await reset(std::get<::reset>(update));
-        } else if (std::holds_alternative<::wait_log>(update)) {
-            co_await wait_log(std::get<::wait_log>(update));
-        } else if (std::holds_alternative<set_config>(update)) {
-            co_await change_configuration(std::get<set_config>(update));
-        } else if (std::holds_alternative<::check_rpc_config>(update)) {
-            co_await check_rpc_config(std::get<::check_rpc_config>(update));
-        } else if (std::holds_alternative<::check_rpc_added>(update)) {
-            check_rpc_added(std::get<::check_rpc_added>(update));
-        } else if (std::holds_alternative<::check_rpc_removed>(update)) {
-            check_rpc_removed(std::get<::check_rpc_removed>(update));
-        } else if (std::holds_alternative<::rpc_reset_counters>(update)) {
-            rpc_reset_counters(std::get<::rpc_reset_counters>(update));
-        } else if (std::holds_alternative<::tick>(update)) {
-            auto t = std::get<::tick>(update);
-            co_await tick(t);
+        co_await std::visit(make_visitor(
+        [this] (::entries update) -> future<> {
+            co_await add_entries(update.n);
+        },
+        [this] (::new_leader update) -> future<> {
+            co_await elect_new_leader(update.id);
+        },
+        [this] (::disconnect update) -> future<> {
+            disconnect(update);
+            co_return;
+        },
+        [this] (::partition update) -> future<> {
+            co_await partition(update);
+        },
+        [this] (::stop update) -> future<> {
+            co_await stop(update);
+        },
+        [this] (::reset update) -> future<> {
+            co_await reset(update);
+        },
+        [this] (::wait_log update) -> future<> {
+            co_await wait_log(update);
+        },
+        [this] (::set_config update) -> future<> {
+            co_await change_configuration(update);
+        },
+        [this] (::check_rpc_config update) -> future<> {
+            co_await check_rpc_config(update);
+        },
+        [this] (::check_rpc_added update) -> future<> {
+            check_rpc_added(update);
+            co_return;
+        },
+        [this] (::check_rpc_removed update) -> future<> {
+            check_rpc_removed(update);
+            co_return;
+        },
+        [this] (::rpc_reset_counters update) -> future<> {
+            rpc_reset_counters(update);
+            co_return;
+        },
+        [this] (::tick update) -> future<> {
+            co_await tick(update);
         }
+        ), std::move(update));
     }
 
     // Reconnect and bring all nodes back into configuration, if needed
