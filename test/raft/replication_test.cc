@@ -116,7 +116,9 @@ using node_id = size_t;
 //  - Entries
 //  - Leader change
 //  - Configuration change
-using entries = unsigned;
+struct entries {
+    size_t n;
+};
 using new_leader = int;
 struct leader {
     size_t id;
@@ -1104,7 +1106,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     // Process all updates in order
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
-            co_await rafts.add_entries(std::get<entries>(update));
+            co_await rafts.add_entries(std::get<entries>(update).n);
         } else if (std::holds_alternative<new_leader>(update)) {
             co_await rafts.elect_new_leader(std::get<new_leader>(update));
         } else if (std::holds_alternative<partition>(update)) {
