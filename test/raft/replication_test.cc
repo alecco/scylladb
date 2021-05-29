@@ -1679,7 +1679,9 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
             wait_log{0,2},
 
             // A's RPC configuration is reverted to committed configuration {A, B, C}.
-            check_rpc_config{{node_id{0},node_id{1},node_id{2}},
+            check_rpc_config_eventually{node_id{0},
+                              rpc_address_set{node_id{0},node_id{1},node_id{2}}},
+            check_rpc_config{{node_id{1},node_id{2}},
                               rpc_address_set{node_id{0},node_id{1},node_id{2}}},
          }}));
 
