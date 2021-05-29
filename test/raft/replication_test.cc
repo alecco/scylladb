@@ -1105,34 +1105,36 @@ future<> raft_cluster::run() {
 
     // Process all updates in order
     for (auto update: _updates) {
-        if (std::holds_alternative<entries>(update)) {
-            co_await add_entries(std::get<entries>(update));
-        } else if (std::holds_alternative<new_leader>(update)) {
-            co_await elect_new_leader(std::get<new_leader>(update));
-        } else if (std::holds_alternative<::partition>(update)) {
-            co_await partition(std::get<::partition>(update));
-        } else if (std::holds_alternative<::stop>(update)) {
-            co_await stop(std::get<::stop>(update));
-        } else if (std::holds_alternative<::reset>(update)) {
-            co_await reset(std::get<::reset>(update));
-        } else if (std::holds_alternative<::wait_log>(update)) {
-            co_await wait_log(std::get<::wait_log>(update));
-        } else if (std::holds_alternative<set_config>(update)) {
-            co_await change_configuration(std::get<set_config>(update));
-        } else if (std::holds_alternative<::check_rpc_config>(update)) {
-            check_rpc_config(std::get<::check_rpc_config>(update));
-        } else if (std::holds_alternative<::check_rpc_config_eventually>(update)) {
-            co_await check_rpc_config_eventually(std::get<::check_rpc_config_eventually>(update));
-        } else if (std::holds_alternative<::check_rpc_added>(update)) {
-            check_rpc_added(std::get<::check_rpc_added>(update));
-        } else if (std::holds_alternative<::check_rpc_removed>(update)) {
-            check_rpc_removed(std::get<::check_rpc_removed>(update));
-        } else if (std::holds_alternative<::rpc_reset_counters>(update)) {
-            rpc_reset_counters(std::get<::rpc_reset_counters>(update));
-        } else if (std::holds_alternative<::tick>(update)) {
-            auto t = std::get<::tick>(update);
-            co_await tick(t);
-        }
+        co_await std::visit([this](auto&& update) -> future<> {
+            using T = std::decay_t<decltype(update)>;
+            if constexpr (std::is_same_v<T, ::entries>) {
+                co_await add_entries(update);
+            } else if constexpr (std::is_same_v<T, ::new_leader>) {
+                co_await elect_new_leader(update);
+            } else if constexpr (std::is_same_v<T, ::partition>) {
+                co_await partition(update);
+            } else if constexpr (std::is_same_v<T, ::stop>) {
+                co_await stop(update);
+            } else if constexpr (std::is_same_v<T, ::reset>) {
+                co_await reset(update);
+            } else if constexpr (std::is_same_v<T, ::wait_log>) {
+                co_await wait_log(update);
+            } else if constexpr (std::is_same_v<T, ::set_config>) {
+                co_await change_configuration(update);
+            } else if constexpr (std::is_same_v<T, ::check_rpc_config>) {
+                check_rpc_config(update);
+            } else if constexpr (std::is_same_v<T, ::check_rpc_config_eventually>) {
+                co_await check_rpc_config_eventually(update);
+            } else if constexpr (std::is_same_v<T, ::check_rpc_added>) {
+                check_rpc_added(update);
+            } else if constexpr (std::is_same_v<T, ::check_rpc_removed>) {
+                check_rpc_removed(update);
+            } else if constexpr (std::is_same_v<T, ::rpc_reset_counters>) {
+                rpc_reset_counters(update);
+            } else if constexpr (std::is_same_v<T, ::tick>) {
+                co_await tick(update);
+            }
+        }, update);
     }
 
     // Reconnect and bring all nodes back into configuration, if needed
