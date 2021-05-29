@@ -1049,8 +1049,8 @@ future<> raft_cluster::partition(::partition p) {
 
 future<> raft_cluster::tick(::tick t) {
     for (uint64_t i = 0; i < t.ticks; i++) {
-        for (size_t s = 0; s < _servers.size(); ++s) {
-            _servers[s].server->tick();
+        for (auto&& r: _servers) {
+            r.server->tick();
         }
         co_await later();
     }
