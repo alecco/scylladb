@@ -119,7 +119,9 @@ using node_id = size_t;
 struct entries {
     size_t n;
 };
-using new_leader = int;
+struct new_leader {
+    size_t id;
+};
 struct leader {
     size_t id;
 };
@@ -1108,7 +1110,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         if (std::holds_alternative<entries>(update)) {
             co_await rafts.add_entries(std::get<entries>(update).n);
         } else if (std::holds_alternative<new_leader>(update)) {
-            co_await rafts.elect_new_leader(std::get<new_leader>(update));
+            co_await rafts.elect_new_leader(std::get<new_leader>(update).id);
         } else if (std::holds_alternative<partition>(update)) {
             co_await rafts.partition(std::get<partition>(update));
         } else if (std::holds_alternative<stop>(update)) {
