@@ -299,14 +299,15 @@ class raft_cluster {
     std::vector<seastar::timer<lowres_clock>> _tickers;
     size_t _leader;
     std::vector<initial_state> get_states(test_case test, bool prevote);
+    const std::vector<::update> _updates;
 public:
     raft_cluster(test_case test,
             apply_fn apply,
-            size_t apply_entries, size_t first_val, size_t first_leader,
             bool prevote, bool packet_drops);
     // No copy
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
+    future<> run();
     future<> stop_server(size_t id);
     future<> reset_server(size_t id, initial_state state); // Reset a stopped server
     size_t size() {
@@ -641,16 +642,16 @@ raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state s
 
 raft_cluster::raft_cluster(test_case test,
         apply_fn apply,
-        size_t apply_entries, size_t first_val, size_t first_leader,
         bool prevote, bool packet_drops) :
             _connected(std::make_unique<struct connected>(test.nodes)),
             _snapshots(std::make_unique<snapshots>()),
             _persisted_snapshots(std::make_unique<persisted_snapshots>()),
-            _apply_entries(apply_entries),
-            _next_val(first_val),
+            _apply_entries(test.total_values),
+            _next_val(test.get_first_val()),
             _packet_drops(packet_drops),
             _apply(apply),
-            _leader(first_leader) {
+            _leader(test.initial_leader),
+            _updates(std::move(test.updates)) {
 
     auto states = get_states(test, prevote);
     for (size_t s = 0; s < states.size(); ++s) {
@@ -1106,76 +1107,70 @@ std::vector<initial_state> raft_cluster::get_states(test_case test, bool prevote
     return states;
 }
 
-future<> run_test(test_case test, bool prevote, bool packet_drops) {
+future<> raft_cluster::run() {
 
-    raft_cluster rafts(test, apply_changes, test.total_values,
-            test.get_first_val(), test.initial_leader, prevote, packet_drops);
-    co_await rafts.start_all();
+    co_await start_all();
 
     BOOST_TEST_MESSAGE("Processing updates");
 
     // Process all updates in order
-    for (auto update: test.updates) {
+    for (auto update: _updates) {
         if (std::holds_alternative<entries>(update)) {
-            co_await rafts.add_entries(std::get<entries>(update).n);
+            co_await add_entries(std::get<entries>(update).n);
         } else if (std::holds_alternative<new_leader>(update)) {
-            co_await rafts.elect_new_leader(std::get<new_leader>(update).id);
+            co_await elect_new_leader(std::get<new_leader>(update).id);
         } else if (std::holds_alternative<::disconnect>(update)) {
-            rafts.disconnect(std::get<::disconnect>(update));
-        } else if (std::holds_alternative<partition>(update)) {
-            co_await rafts.partition(std::get<partition>(update));
-        } else if (std::holds_alternative<stop>(update)) {
-            co_await rafts.stop(std::get<stop>(update));
-        } else if (std::holds_alternative<reset>(update)) {
-            co_await rafts.reset(std::get<reset>(update));
-        } else if (std::holds_alternative<wait_log>(update)) {
-            co_await rafts.wait_log(std::get<wait_log>(update));
+            disconnect(std::get<::disconnect>(update));
+        } else if (std::holds_alternative<::partition>(update)) {
+            co_await partition(std::get<::partition>(update));
+        } else if (std::holds_alternative<::stop>(update)) {
+            co_await stop(std::get<::stop>(update));
+        } else if (std::holds_alternative<::reset>(update)) {
+            co_await reset(std::get<::reset>(update));
+        } else if (std::holds_alternative<::wait_log>(update)) {
+            co_await wait_log(std::get<::wait_log>(update));
         } else if (std::holds_alternative<set_config>(update)) {
-            co_await rafts.change_configuration(std::get<set_config>(update));
-        } else if (std::holds_alternative<check_rpc_config>(update)) {
-            co_await rafts.check_rpc_config(std::get<check_rpc_config>(update));
-        } else if (std::holds_alternative<check_rpc_added>(update)) {
-            rafts.check_rpc_added(std::get<check_rpc_added>(update));
-        } else if (std::holds_alternative<check_rpc_removed>(update)) {
-            rafts.check_rpc_removed(std::get<check_rpc_removed>(update));
-        } else if (std::holds_alternative<rpc_reset_counters>(update)) {
-            rafts.rpc_reset_counters(std::get<rpc_reset_counters>(update));
-        } else if (std::holds_alternative<tick>(update)) {
-            auto t = std::get<tick>(update);
-            co_await rafts.tick(t);
+            co_await change_configuration(std::get<set_config>(update));
+        } else if (std::holds_alternative<::check_rpc_config>(update)) {
+            co_await check_rpc_config(std::get<::check_rpc_config>(update));
+        } else if (std::holds_alternative<::check_rpc_added>(update)) {
+            check_rpc_added(std::get<::check_rpc_added>(update));
+        } else if (std::holds_alternative<::check_rpc_removed>(update)) {
+            check_rpc_removed(std::get<::check_rpc_removed>(update));
+        } else if (std::holds_alternative<::rpc_reset_counters>(update)) {
+            rpc_reset_counters(std::get<::rpc_reset_counters>(update));
+        } else if (std::holds_alternative<::tick>(update)) {
+            auto t = std::get<::tick>(update);
+            co_await tick(t);
         }
     }
 
     // Reconnect and bring all nodes back into configuration, if needed
-    rafts.connect_all();
-    co_await rafts.reconfigure_all();
+    connect_all();
+    co_await reconfigure_all();
 
-    if (test.total_values > 0) {
+    if (_apply_entries > 0) {
         BOOST_TEST_MESSAGE("Appending remaining values");
-        co_await rafts.add_remaining_entries();
-        co_await rafts.wait_all();
+        co_await add_remaining_entries();
+        co_await wait_all();
     }
 
-    co_await rafts.stop_all();
+    co_await stop_all();
 
-    if (test.total_values > 0) {
-        rafts.verify();
+    if (_apply_entries > 0) {
+        verify();
     }
-}
-
-void replication_test(struct test_case test, bool prevote, bool packet_drops) {
-    run_test(std::move(test), prevote, packet_drops).get();
 }
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
-        replication_test(test_body, false, false); }  \
+        raft_cluster{std::move(test_body), apply_changes, false, false}.run().get(); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
-        replication_test(test_body, false, true); } \
+        raft_cluster{std::move(test_body), apply_changes, false, true}.run().get(); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
-        replication_test(test_body, true, false); }  \
+        raft_cluster{std::move(test_body), apply_changes, true, false}.run().get(); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
-        replication_test(test_body, true, true); }
+        raft_cluster{std::move(test_body), apply_changes, true, true}.run().get(); } \
 
 // 1 nodes, simple replication, empty, no updates
 RAFT_TEST_CASE(simple_replication, (test_case{
@@ -1326,12 +1321,12 @@ RAFT_TEST_CASE(drops_04, (test_case{
 
 // TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
-    replication_test(
+    raft_cluster{
         // Snapshot automatic take and load
         {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
-         .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
-    , false, false);
+         .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
+        apply_changes, false, false}.run().get();
 }
 
 // Check removing all followers, add entry, bring back one follower and make it leader
@@ -1348,7 +1343,7 @@ RAFT_TEST_CASE(conf_changes_2, (test_case{
 
 // Check removing a node from configuration, adding entries; cycle for all combinations
 SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
-    replication_test(
+    raft_cluster{
         {.nodes = 4,
          .updates = {set_config{0,1,2}, entries{2}, new_leader{1},
                      set_config{1,2,3}, entries{2}, new_leader{2},
@@ -1356,11 +1351,11 @@ SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
                      // TODO: find out why it breaks in release mode
                      // set_config{3,0,1}, entries{2}, new_leader{0}
                      }}
-    , false, false);
+        , apply_changes, false, false}.run().get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_leader_change_during_snapshot_transfere) {
-    replication_test(
+    raft_cluster{
         {.nodes = 3,
          .initial_snapshots  = {{.snap = {.idx = raft::index_t(10),
                                          .term = raft::term_t(1),
@@ -1369,7 +1364,7 @@ SEASTAR_THREAD_TEST_CASE(test_leader_change_during_snapshot_transfere) {
                                          .term = raft::term_t(1),
                                          .id = delay_apply_snapshot}}},
          .updates = {tick{10} /* ticking starts snapshot transfer */, new_leader{1}, entries{10}}}
-    , false, false);
+    , apply_changes, false, false}.run().get();
 }
 
 // verifies that each node in a cluster can campaign
