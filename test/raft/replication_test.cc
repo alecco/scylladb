@@ -259,276 +259,274 @@ raft::snapshot_id delay_apply_snapshot{utils::UUID(0, 0xdeadbeaf)};
 // sending of a snaphot with that id will be delayed until snapshot_sync is signaled
 raft::snapshot_id delay_send_snapshot{utils::UUID(0xdeadbeaf, 0)};
 
-class state_machine : public raft::state_machine {
-public:
-    using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
-private:
-    raft::server_id _id;
-    apply_fn _apply;
-    size_t _apply_entries;
-    size_t _seen = 0;
-    promise<> _done;
-    lw_shared_ptr<snapshots> _snapshots;
-public:
-    lw_shared_ptr<hasher_int> hasher;
-    state_machine(raft::server_id id, apply_fn apply, size_t apply_entries,
-            lw_shared_ptr<snapshots> snapshots):
-        _id(id), _apply(apply), _apply_entries(apply_entries), _snapshots(snapshots),
-        hasher(make_lw_shared<hasher_int>()) {}
-    future<> apply(const std::vector<raft::command_cref> commands) override {
-        auto n = _apply(_id, commands, hasher);
-        _seen += n;
-        if (n && _seen == _apply_entries) {
-            _done.set_value();
-        }
-        tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
-        return make_ready_future<>();
-    }
-
-    future<raft::snapshot_id> take_snapshot() override {
-        (*_snapshots)[_id].hasher = *hasher;
-        tlogger.debug("sm[{}] takes snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
-        (*_snapshots)[_id].idx = raft::index_t{_seen};
-        return make_ready_future<raft::snapshot_id>(raft::snapshot_id{utils::make_random_uuid()});
-    }
-    void drop_snapshot(raft::snapshot_id id) override {
-        (*_snapshots).erase(_id);
-    }
-    future<> load_snapshot(raft::snapshot_id id) override {
-        hasher = make_lw_shared<hasher_int>((*_snapshots)[_id].hasher);
-        tlogger.debug("sm[{}] loads snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
-        _seen = (*_snapshots)[_id].idx;
-        if (_seen >= _apply_entries) {
-            _done.set_value();
-        }
-        if (id == delay_apply_snapshot) {
-            snapshot_sync.signal();
-            co_await snapshot_sync.wait();
-        }
-        co_return;
-    };
-    future<> abort() override { return make_ready_future<>(); }
-
-    future<> done() {
-        return _done.get_future();
-    }
-};
-
-class persistence : public raft::persistence {
-    raft::server_id _id;
-    initial_state _conf;
-    lw_shared_ptr<snapshots> _snapshots;
-    lw_shared_ptr<persisted_snapshots> _persisted_snapshots;
-public:
-    persistence(raft::server_id id, initial_state conf, lw_shared_ptr<snapshots> snapshots,
-            lw_shared_ptr<persisted_snapshots> persisted_snapshots) : _id(id),
-            _conf(std::move(conf)), _snapshots(snapshots),
-            _persisted_snapshots(persisted_snapshots) {}
-    persistence() {}
-    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) { return seastar::sleep(1us); }
-    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() {
-        auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
-        return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
-    }
-    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
-        (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id]);
-        tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
-        return make_ready_future<>();
-    }
-    future<raft::snapshot> load_snapshot() override {
-        return make_ready_future<raft::snapshot>(_conf.snapshot);
-    }
-    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { return seastar::sleep(1us); };
-    virtual future<raft::log_entries> load_log() {
-        raft::log_entries log;
-        for (auto&& e : _conf.log) {
-            log.emplace_back(make_lw_shared(std::move(e)));
-        }
-        return make_ready_future<raft::log_entries>(std::move(log));
-    }
-    virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
-    virtual future<> abort() { return make_ready_future<>(); }
-};
-
-struct connection {
-   raft::server_id from;
-   raft::server_id to;
-   bool operator==(const connection &o) const {
-       return from == o.from && to == o.to;
-   }
-};
-
-struct hash_connection {
-    std::size_t operator() (const connection &c) const {
-        return std::hash<utils::UUID>()(c.from.id);
-    }
-};
-
-struct connected {
-    // Map of from->to disconnections
-    std::unordered_set<connection, hash_connection> disconnected;
-    size_t n;
-    connected(size_t n) : n(n) { }
-    // Cut connectivity of two servers both ways
-    void cut(raft::server_id id1, raft::server_id id2) {
-        disconnected.insert({id1, id2});
-        disconnected.insert({id2, id1});
-    }
-    // Isolate a server
-    void disconnect(raft::server_id id, std::optional<raft::server_id> except = std::nullopt) {
-        for (size_t other = 0; other < n; ++other) {
-            auto other_id = to_raft_id(other);
-            // Disconnect if not the same, and the other id is not an exception
-            // disconnect(0, except=1)
-            if (id != other_id && !(except && other_id == *except)) {
-                cut(id, other_id);
-            }
-        }
-    }
-    // Re-connect a node to all other nodes
-    void connect(raft::server_id id) {
-        for (auto it = disconnected.begin(); it != disconnected.end(); ) {
-            if (id == it->from || id == it->to) {
-                it = disconnected.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-    void connect_all() {
-        disconnected.clear();
-    }
-    bool operator()(raft::server_id id1, raft::server_id id2) {
-        // It's connected if both ways are not disconnected
-        return !disconnected.contains({id1, id2}) && !disconnected.contains({id1, id2});
-    }
-};
-
-class failure_detector : public raft::failure_detector {
-    raft::server_id _id;
-    lw_shared_ptr<connected> _connected;
-public:
-    failure_detector(raft::server_id id, lw_shared_ptr<connected> connected) : _id(id), _connected(connected) {}
-    bool is_alive(raft::server_id server) override {
-        return (*_connected)(server, _id);
-    }
-};
-
-class rpc : public raft::rpc {
-    static std::unordered_map<raft::server_id, rpc*> net;
-    raft::server_id _id;
-    lw_shared_ptr<connected> _connected;
-    lw_shared_ptr<snapshots> _snapshots;
-    bool _packet_drops;
-    raft::server_address_set _known_peers;
-    uint32_t _servers_added = 0;
-    uint32_t _servers_removed = 0;
-public:
-    rpc(raft::server_id id, lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
-            bool packet_drops) : _id(id), _connected(connected), _snapshots(snapshots),
-            _packet_drops(packet_drops) {
-        net[_id] = this;
-    }
-    virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
-        if (!net.count(id)) {
-            throw std::runtime_error("trying to send a message to an unknown node");
-        }
-        if (!(*_connected)(id, _id)) {
-            throw std::runtime_error("cannot send snapshot since nodes are disconnected");
-        }
-        (*_snapshots)[id] = (*_snapshots)[_id];
-        auto s = snap; // snap is not always held alive by a caller
-        if (s.snp.id == delay_send_snapshot) {
-            co_await snapshot_sync.wait();
-            snapshot_sync.signal();
-        }
-        co_return co_await net[id]->_client->apply_snapshot(_id, std::move(s));
-    }
-    virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
-        if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
-        }
-        if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
-        }
-        if (!_packet_drops || (rand() % 5)) {
-            net[id]->_client->append_entries(_id, append_request);
-        }
-        return make_ready_future<>();
-    }
-    virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
-        }
-        if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send append reply since nodes are disconnected"));
-        }
-        if (!_packet_drops || (rand() % 5)) {
-            net[id]->_client->append_entries_reply(_id, std::move(reply));
-        }
-        return make_ready_future<>();
-    }
-    virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-        if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
-        }
-        if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send vote request since nodes are disconnected"));
-        }
-        net[id]->_client->request_vote(_id, std::move(vote_request));
-        return make_ready_future<>();
-    }
-    virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-        if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
-        }
-        if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send vote reply since nodes are disconnected"));
-        }
-        net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
-        return make_ready_future<>();
-    }
-    virtual future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
-        if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
-        }
-        if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send timeout now since nodes are disconnected"));
-        }
-        net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
-        return make_ready_future<>();
-    }
-    virtual void add_server(raft::server_id id, bytes node_info) {
-        _known_peers.insert(raft::server_address{id});
-        ++_servers_added;
-    }
-    virtual void remove_server(raft::server_id id) {
-        _known_peers.erase(raft::server_address{id});
-        ++_servers_removed;
-    }
-    virtual future<> abort() { return make_ready_future<>(); }
-    static void reset_network() {
-        net.clear();
-    }
-
-    const raft::server_address_set& known_peers() const {
-        return _known_peers;
-    }
-    void reset_counters() {
-        _servers_added = 0;
-        _servers_removed = 0;
-    }
-    uint32_t servers_added() const {
-        return _servers_added;
-    }
-    uint32_t servers_removed() const {
-        return _servers_removed;
-    }
-};
-
-std::unordered_map<raft::server_id, rpc*> rpc::net;
-
 class raft_cluster {
+    class state_machine : public raft::state_machine {
+    public:
+        using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
+    private:
+        raft::server_id _id;
+        apply_fn _apply;
+        size_t _apply_entries;
+        size_t _seen = 0;
+        promise<> _done;
+        lw_shared_ptr<snapshots> _snapshots;
+    public:
+        lw_shared_ptr<hasher_int> hasher;
+        state_machine(raft::server_id id, apply_fn apply, size_t apply_entries,
+                lw_shared_ptr<snapshots> snapshots):
+            _id(id), _apply(apply), _apply_entries(apply_entries), _snapshots(snapshots),
+            hasher(make_lw_shared<hasher_int>()) {}
+        future<> apply(const std::vector<raft::command_cref> commands) override {
+            auto n = _apply(_id, commands, hasher);
+            _seen += n;
+            if (n && _seen == _apply_entries) {
+                _done.set_value();
+            }
+            tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
+            return make_ready_future<>();
+        }
+    
+        future<raft::snapshot_id> take_snapshot() override {
+            (*_snapshots)[_id].hasher = *hasher;
+            tlogger.debug("sm[{}] takes snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
+            (*_snapshots)[_id].idx = raft::index_t{_seen};
+            return make_ready_future<raft::snapshot_id>(raft::snapshot_id{utils::make_random_uuid()});
+        }
+        void drop_snapshot(raft::snapshot_id id) override {
+            (*_snapshots).erase(_id);
+        }
+        future<> load_snapshot(raft::snapshot_id id) override {
+            hasher = make_lw_shared<hasher_int>((*_snapshots)[_id].hasher);
+            tlogger.debug("sm[{}] loads snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
+            _seen = (*_snapshots)[_id].idx;
+            if (_seen >= _apply_entries) {
+                _done.set_value();
+            }
+            if (id == delay_apply_snapshot) {
+                snapshot_sync.signal();
+                co_await snapshot_sync.wait();
+            }
+            co_return;
+        };
+        future<> abort() override { return make_ready_future<>(); }
+    
+        future<> done() {
+            return _done.get_future();
+        }
+    };
+    
+    class persistence : public raft::persistence {
+        raft::server_id _id;
+        initial_state _conf;
+        lw_shared_ptr<snapshots> _snapshots;
+        lw_shared_ptr<persisted_snapshots> _persisted_snapshots;
+    public:
+        persistence(raft::server_id id, initial_state conf, lw_shared_ptr<snapshots> snapshots,
+                lw_shared_ptr<persisted_snapshots> persisted_snapshots) : _id(id),
+                _conf(std::move(conf)), _snapshots(snapshots),
+                _persisted_snapshots(persisted_snapshots) {}
+        persistence() {}
+        virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) { return seastar::sleep(1us); }
+        virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() {
+            auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
+            return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
+        }
+        virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
+            (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id]);
+            tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
+            return make_ready_future<>();
+        }
+        future<raft::snapshot> load_snapshot() override {
+            return make_ready_future<raft::snapshot>(_conf.snapshot);
+        }
+        virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { return seastar::sleep(1us); };
+        virtual future<raft::log_entries> load_log() {
+            raft::log_entries log;
+            for (auto&& e : _conf.log) {
+                log.emplace_back(make_lw_shared(std::move(e)));
+            }
+            return make_ready_future<raft::log_entries>(std::move(log));
+        }
+        virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
+        virtual future<> abort() { return make_ready_future<>(); }
+    };
+
+    struct connection {
+       raft::server_id from;
+       raft::server_id to;
+       bool operator==(const connection &o) const {
+           return from == o.from && to == o.to;
+       }
+    };
+
+    struct hash_connection {
+        std::size_t operator() (const connection &c) const {
+            return std::hash<utils::UUID>()(c.from.id);
+        }
+    };
+
+    struct connected {
+        // Map of from->to disconnections
+        std::unordered_set<connection, hash_connection> disconnected;
+        size_t n;
+        connected(size_t n) : n(n) { }
+        // Cut connectivity of two servers both ways
+        void cut(raft::server_id id1, raft::server_id id2) {
+            disconnected.insert({id1, id2});
+            disconnected.insert({id2, id1});
+        }
+        // Isolate a server
+        void disconnect(raft::server_id id, std::optional<raft::server_id> except = std::nullopt) {
+            for (size_t other = 0; other < n; ++other) {
+                auto other_id = to_raft_id(other);
+                // Disconnect if not the same, and the other id is not an exception
+                // disconnect(0, except=1)
+                if (id != other_id && !(except && other_id == *except)) {
+                    cut(id, other_id);
+                }
+            }
+        }
+        // Re-connect a node to all other nodes
+        void connect(raft::server_id id) {
+            for (auto it = disconnected.begin(); it != disconnected.end(); ) {
+                if (id == it->from || id == it->to) {
+                    it = disconnected.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        void connect_all() {
+            disconnected.clear();
+        }
+        bool operator()(raft::server_id id1, raft::server_id id2) {
+            // It's connected if both ways are not disconnected
+            return !disconnected.contains({id1, id2}) && !disconnected.contains({id1, id2});
+        }
+    };
+    
+    class failure_detector : public raft::failure_detector {
+        raft::server_id _id;
+        lw_shared_ptr<connected> _connected;
+    public:
+        failure_detector(raft::server_id id, lw_shared_ptr<connected> connected) : _id(id), _connected(connected) {}
+        bool is_alive(raft::server_id server) override {
+            return (*_connected)(server, _id);
+        }
+    };
+    
+    class rpc : public raft::rpc {
+        static std::unordered_map<raft::server_id, rpc*> net;
+        raft::server_id _id;
+        lw_shared_ptr<connected> _connected;
+        lw_shared_ptr<snapshots> _snapshots;
+        bool _packet_drops;
+        raft::server_address_set _known_peers;
+        uint32_t _servers_added = 0;
+        uint32_t _servers_removed = 0;
+    public:
+        rpc(raft::server_id id, lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
+                bool packet_drops) : _id(id), _connected(connected), _snapshots(snapshots),
+                _packet_drops(packet_drops) {
+            net[_id] = this;
+        }
+        virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
+            if (!net.count(id)) {
+                throw std::runtime_error("trying to send a message to an unknown node");
+            }
+            if (!(*_connected)(id, _id)) {
+                throw std::runtime_error("cannot send snapshot since nodes are disconnected");
+            }
+            (*_snapshots)[id] = (*_snapshots)[_id];
+            auto s = snap; // snap is not always held alive by a caller
+            if (s.snp.id == delay_send_snapshot) {
+                co_await snapshot_sync.wait();
+                snapshot_sync.signal();
+            }
+            co_return co_await net[id]->_client->apply_snapshot(_id, std::move(s));
+        }
+        virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
+            if (!net.count(id)) {
+                return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            }
+            if (!(*_connected)(id, _id)) {
+                return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
+            }
+            if (!_packet_drops || (rand() % 5)) {
+                net[id]->_client->append_entries(_id, append_request);
+            }
+            return make_ready_future<>();
+        }
+        virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+            if (!net.count(id)) {
+                return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            }
+            if (!(*_connected)(id, _id)) {
+                return make_exception_future<>(std::runtime_error("cannot send append reply since nodes are disconnected"));
+            }
+            if (!_packet_drops || (rand() % 5)) {
+                net[id]->_client->append_entries_reply(_id, std::move(reply));
+            }
+            return make_ready_future<>();
+        }
+        virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+            if (!net.count(id)) {
+                return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            }
+            if (!(*_connected)(id, _id)) {
+                return make_exception_future<>(std::runtime_error("cannot send vote request since nodes are disconnected"));
+            }
+            net[id]->_client->request_vote(_id, std::move(vote_request));
+            return make_ready_future<>();
+        }
+        virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+            if (!net.count(id)) {
+                return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            }
+            if (!(*_connected)(id, _id)) {
+                return make_exception_future<>(std::runtime_error("cannot send vote reply since nodes are disconnected"));
+            }
+            net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
+            return make_ready_future<>();
+        }
+        virtual future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
+            if (!net.count(id)) {
+                return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            }
+            if (!(*_connected)(id, _id)) {
+                return make_exception_future<>(std::runtime_error("cannot send timeout now since nodes are disconnected"));
+            }
+            net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
+            return make_ready_future<>();
+        }
+        virtual void add_server(raft::server_id id, bytes node_info) {
+            _known_peers.insert(raft::server_address{id});
+            ++_servers_added;
+        }
+        virtual void remove_server(raft::server_id id) {
+            _known_peers.erase(raft::server_address{id});
+            ++_servers_removed;
+        }
+        virtual future<> abort() { return make_ready_future<>(); }
+        static void reset_network() {
+            net.clear();
+        }
+    
+        const raft::server_address_set& known_peers() const {
+            return _known_peers;
+        }
+        void reset_counters() {
+            _servers_added = 0;
+            _servers_removed = 0;
+        }
+        uint32_t servers_added() const {
+            return _servers_added;
+        }
+        uint32_t servers_removed() const {
+            return _servers_removed;
+        }
+    };
+
     struct test_server {
         std::unique_ptr<raft::server> server;
         state_machine* sm;
@@ -616,6 +614,8 @@ raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state s
         &rpc_ref
     };
 }
+
+std::unordered_map<raft::server_id, raft_cluster::rpc*> raft_cluster::rpc::net;
 
 raft_cluster::raft_cluster(test_case test,
         state_machine::apply_fn apply,
