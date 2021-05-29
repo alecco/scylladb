@@ -264,8 +264,57 @@ class raft_cluster {
     class state_machine;
     class persistence;
     struct connection;
-    struct hash_connection;
-    class connected;
+    struct connection {
+       raft::server_id from;
+       raft::server_id to;
+       bool operator==(const connection &o) const {
+           return from == o.from && to == o.to;
+       }
+    };
+    struct hash_connection {
+        std::size_t operator() (const connection &c) const {
+            return std::hash<utils::UUID>()(c.from.id);
+        }
+    };
+    struct connected {
+        // Map of from->to disconnections
+        std::unordered_set<connection, hash_connection> disconnected;
+        size_t n;
+        connected(size_t n) : n(n) { }
+        // Cut connectivity of two servers both ways
+        void cut(raft::server_id id1, raft::server_id id2) {
+            disconnected.insert({id1, id2});
+            disconnected.insert({id2, id1});
+        }
+        // Isolate a server
+        void disconnect(raft::server_id id, std::optional<raft::server_id> except = std::nullopt) {
+            for (size_t other = 0; other < n; ++other) {
+                auto other_id = to_raft_id(other);
+                // Disconnect if not the same, and the other id is not an exception
+                // disconnect(0, except=1)
+                if (id != other_id && !(except && other_id == *except)) {
+                    cut(id, other_id);
+                }
+            }
+        }
+        // Re-connect a node to all other nodes
+        void connect(raft::server_id id) {
+            for (auto it = disconnected.begin(); it != disconnected.end(); ) {
+                if (id == it->from || id == it->to) {
+                    it = disconnected.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        void connect_all() {
+            disconnected.clear();
+        }
+        bool operator()(raft::server_id id1, raft::server_id id2) {
+            // It's connected if both ways are not disconnected
+            return !disconnected.contains({id1, id2}) && !disconnected.contains({id1, id2});
+        }
+    };
     class failure_detector;
     class rpc;
     struct test_server {
@@ -420,60 +469,6 @@ public:
     }
     virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
     virtual future<> abort() { return make_ready_future<>(); }
-};
-
-struct raft_cluster::connection {
-   raft::server_id from;
-   raft::server_id to;
-   bool operator==(const connection &o) const {
-       return from == o.from && to == o.to;
-   }
-};
-
-struct raft_cluster::hash_connection {
-    std::size_t operator() (const connection &c) const {
-        return std::hash<utils::UUID>()(c.from.id);
-    }
-};
-
-struct raft_cluster::connected {
-    // Map of from->to disconnections
-    std::unordered_set<connection, hash_connection> disconnected;
-    size_t n;
-    connected(size_t n) : n(n) { }
-    // Cut connectivity of two servers both ways
-    void cut(raft::server_id id1, raft::server_id id2) {
-        disconnected.insert({id1, id2});
-        disconnected.insert({id2, id1});
-    }
-    // Isolate a server
-    void disconnect(raft::server_id id, std::optional<raft::server_id> except = std::nullopt) {
-        for (size_t other = 0; other < n; ++other) {
-            auto other_id = to_raft_id(other);
-            // Disconnect if not the same, and the other id is not an exception
-            // disconnect(0, except=1)
-            if (id != other_id && !(except && other_id == *except)) {
-                cut(id, other_id);
-            }
-        }
-    }
-    // Re-connect a node to all other nodes
-    void connect(raft::server_id id) {
-        for (auto it = disconnected.begin(); it != disconnected.end(); ) {
-            if (id == it->from || id == it->to) {
-                it = disconnected.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-    void connect_all() {
-        disconnected.clear();
-    }
-    bool operator()(raft::server_id id1, raft::server_id id2) {
-        // It's connected if both ways are not disconnected
-        return !disconnected.contains({id1, id2}) && !disconnected.contains({id1, id2});
-    }
 };
 
 class raft_cluster::failure_detector : public raft::failure_detector {
