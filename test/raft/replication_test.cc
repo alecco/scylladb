@@ -805,6 +805,14 @@ future<> raft_cluster::change_configuration(set_config sc) {
     }
     BOOST_CHECK_MESSAGE(new_config.contains(_leader) || sc.size() < (_servers.size()/2 + 1),
             "New configuration without old leader and below quorum size (no election)");
+
+    if (!new_config.contains(_leader)) {
+        // Wait log on all nodes in new config before change
+        for (auto s: sc) {
+            co_await wait_log(s.node_idx);
+        }
+    }
+
     tlogger.debug("Changing configuration on leader {}", _leader);
     co_await _servers[_leader].server->set_configuration(std::move(set));
 
