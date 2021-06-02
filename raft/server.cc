@@ -768,6 +768,7 @@ void server_impl::wait_until_candidate() {
 future<> server_impl::wait_election_done() {
     while (_fsm->is_candidate()) {
         co_await later();
+if (!_fsm->is_candidate()) fmt::print("   [{}] wait_election_done state: {}\n", _id, _fsm->is_leader() ? "LEADER" : (_fsm->is_follower()? "FOLLOWER" : "OTHER")); // XXX
     };
 }
 
