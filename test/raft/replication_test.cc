@@ -848,10 +848,12 @@ void raft_cluster::elapse_elections() {
 
 future<> raft_cluster::elect_new_leader(size_t new_leader) {
     BOOST_CHECK_MESSAGE(new_leader < _servers.size(),
-            format("Wrong next leader value {}", new_leader));
+            format("Wrong next leader value {}", to_raft_id(new_leader)));
+fmt::print("  elect_new_leader {} -> {}\n", to_raft_id(_leader), to_raft_id(new_leader));
 
     if (new_leader != _leader) {
         do {
+fmt::print("  --------loop begin -----------\n\n");
             if ((*_connected)(to_raft_id(_leader), to_raft_id(new_leader))) {
                 co_await wait_log(new_leader);
             }
@@ -860,25 +862,32 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
             struct connected prev_disconnected = *_connected;
             // Disconnect current leader from everyone
             _connected->disconnect(to_raft_id(_leader));
+fmt::print("    pause\n");
+            pause_tickers();
             // Make move all nodes past election threshold, also making old leader follower
+fmt::print("    elapse_election\n");
             elapse_elections();
             // Consume leader output messages since a stray append might make new leader step down
             co_await later();                 // yield
 
-            pause_tickers();
+fmt::print("    wait_until_candidate\n");
             _servers[new_leader].server->wait_until_candidate();
             // Re-connect old leader
             _connected->connect(to_raft_id(_leader));
             // Disconnect old leader from all nodes except new leader
             _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
+fmt::print("    restart_tickers\n");
             restart_tickers();
+fmt::print("    wait_election_done\n");
             co_await _servers[new_leader].server->wait_election_done();
 
             // Restore connections to the original setting
             *_connected = prev_disconnected;
+fmt::print("     is new leader? {}\n", _servers[new_leader].server->is_leader());
         } while (!_servers[new_leader].server->is_leader());
         tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
     }
+fmt::print("     DONE\n", _servers[new_leader].server->is_leader());
     _leader = new_leader;
 }
 
@@ -1191,12 +1200,16 @@ future<> raft_cluster::run() {
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+fmt::print("test " # test_name "==============\n\n\n"); \
         raft_cluster{std::move(test_body), apply_changes, false, false}.run().get(); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+fmt::print("test " # test_name "_drops ==============\n\n\n"); \
         raft_cluster{std::move(test_body), apply_changes, false, true}.run().get(); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+fmt::print("test " # test_name "_prevote ==============\n\n\n"); \
         raft_cluster{std::move(test_body), apply_changes, true, false}.run().get(); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+fmt::print("test " # test_name "_prevote_drops ==============\n\n\n"); \
         raft_cluster{std::move(test_body), apply_changes, true, true}.run().get(); } \
 
 // 1 nodes, simple replication, empty, no updates
