@@ -768,12 +768,15 @@ void server_impl::wait_until_candidate() {
 future<> server_impl::wait_election_done() {
     while (_fsm->is_candidate()) {
         co_await later();
+if (!_fsm->is_candidate()) fmt::print("   [{}] wait_election_done state: {} (current_term {})\n", _id, _fsm->is_leader() ? "LEADER" : (_fsm->is_follower()? "FOLLOWER" : "OTHER"), get_current_term()); // XXX
     };
 }
 
 future<> server_impl::wait_log_idx_term(std::pair<index_t, term_t> idx_log) {
+fmt::print("  {}  wait_log_idx_term 1: idx {} < {} ? {},  term {} < {} ? {} (current_term {})\n", _id, _fsm->log_last_idx(), idx_log.first, _fsm->log_last_idx() < idx_log.first, _fsm->log_last_term(), idx_log.second, _fsm->log_last_term() < idx_log.second, get_current_term());
     while (_fsm->log_last_idx() < idx_log.first || _fsm->log_last_term() < idx_log.second) {
-        co_await seastar::sleep(5us);
+fmt::print("  {}  wait_log_idx_term 2: idx {} < {} ? {},  term {} < {} ? {} (current_term {})\n", _id, _fsm->log_last_idx(), idx_log.first, _fsm->log_last_idx() < idx_log.first, _fsm->log_last_term(), idx_log.second, _fsm->log_last_term() < idx_log.second, get_current_term());
+        co_await seastar::sleep(500ms);  // XXX 5us
     }
 }
 
@@ -788,6 +791,7 @@ bool server_impl::is_leader() {
 
 void server_impl::elapse_election() {
     while (_fsm->election_elapsed() < ELECTION_TIMEOUT) {
+fmt::print("  {} server_impl::elapse_election tick ({} < {} (current_term {})\n", _id, _fsm->election_elapsed(), ELECTION_TIMEOUT, get_current_term());
         _fsm->tick();
     }
 }

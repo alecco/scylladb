@@ -572,6 +572,7 @@ void fsm::step(server_id from, Message&& msg) {
                 follower_state().current_leader = from;
             }
             if (current_leader() != from) {
+fmt::print("\n\n  XXX  [{}] append from non-leader {}, leader {} (current_term {})\n\n", _my_id, from, current_leader(), get_current_term());
                 on_internal_error_noexcept(logger, "Got append request or install snpaphot from unexpected leader");
             }
         }

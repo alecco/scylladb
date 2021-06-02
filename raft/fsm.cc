@@ -143,6 +143,7 @@ void fsm::reset_election_timeout() {
 }
 
 void fsm::become_leader() {
+fmt::print("\n  {} become_leader (current_term {})<<<<<<<<<<<<<<<<<<<<<<<<<<<\n", _my_id, get_current_term());
     assert(!std::holds_alternative<leader>(_state));
     _state.emplace<leader>(_config.max_log_size, *this);
     leader_state().log_limiter_semaphore.consume(_log.in_memory_size());
@@ -171,6 +172,7 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
+fmt::print("\n  {} become_candidate({}) (current_term {})<<<<\n", _my_id, is_prevote? "prevote" : "no prevote", get_current_term()); 
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
@@ -202,6 +204,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     term_t term{_current_term + 1};
     if (!is_prevote) {
         update_current_term(term);
+fmt::print("  {} become_candidate({}) updating term to {} (current_term {})\n", _my_id, is_prevote? "prevote" : "no prevote", _current_term, get_current_term()); 
     }
     // Replicate RequestVote
     for (const auto& server : voters) {
@@ -226,6 +229,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
         if (is_prevote) {
             become_candidate(false);
         } else {
+fmt::print("  {} become_candidate(not prevote) WON (curren_term {})\n", _my_id, get_current_term());
             become_leader();
         }
     }
@@ -651,6 +655,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
+fmt::print("    {} [term: {}, index: {}, last log term: {}, voted_for: {}] voted for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, last log term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -677,6 +682,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
+fmt::print(" {} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.current_term, request.last_log_term, request.last_log_idx, request.is_prevote);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -689,19 +695,23 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
+fmt::print("{} received a {} vote from {} [term {} prevote {}] (current_term {})\n", _my_id, reply.vote_granted ? "yes" : "no", from, reply.current_term, reply.is_prevote, get_current_term());
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
+    // XXX vvv patch
     // Should not register a reply to prevote as a real vote
     if (state.is_prevote != reply.is_prevote) {
         return;
     }
+    // XXX ^^^ patch
     state.votes.register_vote(from, reply.vote_granted);
 
     switch (state.votes.tally_votes()) {
     case vote_result::UNKNOWN:
         break;
     case vote_result::WON:
+fmt::print("  {} WON (prevote? {}) (current_term {})\n", _my_id, state.is_prevote, get_current_term());
         if (state.is_prevote) {
             become_candidate(false);
         } else {
