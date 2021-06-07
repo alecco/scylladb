@@ -848,8 +848,9 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
             format("Wrong next leader value {}", new_leader));
 
     if (new_leader != _leader) {
+        bool both_connected = (*_connected)(to_raft_id(_leader), to_raft_id(new_leader));
         do {
-            if ((*_connected)(to_raft_id(_leader), to_raft_id(new_leader))) {
+            if (both_connected) {
                 co_await wait_log(new_leader);
             }
 
@@ -863,10 +864,13 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
             // Consume leader output messages since a stray append might make new leader step down
             co_await later();                 // yield
             _servers[new_leader].server->wait_until_candidate();
-            // Re-connect old leader
-            _connected->connect(to_raft_id(_leader));
-            // Disconnect old leader from all nodes except new leader
-            _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
+            if (both_connected) {
+                // Allow old leader to vote for new candidate while not looking alive to others
+                // Re-connect old leader
+                _connected->connect(to_raft_id(_leader));
+                // Disconnect old leader from all nodes except new leader
+                _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
+            }
             restart_tickers();
             co_await _servers[new_leader].server->wait_election_done();
 
