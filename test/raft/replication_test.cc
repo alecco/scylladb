@@ -878,8 +878,8 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
             *_connected = prev_disconnected;
         } while (!_servers[new_leader].server->is_leader());
         tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
+        _leader = new_leader;
     }
-    _leader = new_leader;
 }
 
 // Run a free election of nodes in configuration
