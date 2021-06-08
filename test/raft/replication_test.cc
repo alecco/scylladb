@@ -843,7 +843,7 @@ future<> raft_cluster::wait_log_all() {
 
 void raft_cluster::elapse_elections() {
     for (auto s: _in_configuration) {
-fmt::print("  elapse_elections({})\n", to_raft_id(s));
+fmt::print("  elapse_election({})\n", to_raft_id(s));
         _servers[s].server->elapse_election();
     }
 }
@@ -866,26 +866,63 @@ fmt::print("  elect_new_leader pause_tickers\n");
             // Leader could be already partially disconnected, save current connectivity state
             struct connected prev_disconnected = *_connected;
             // Disconnect current leader from everyone
+fmt::print("  elect_new_leader disconnect old leader {}\n", to_raft_id(_leader));
             _connected->disconnect(to_raft_id(_leader));
             // Make move all nodes past election threshold, also making old leader follower
-fmt::print("  elect_new_leader elapse_elections\n");
+#if 0
+fmt::print("  elect_new_leader elapsing old leader (extra) {}\n", to_raft_id(_leader));
+_servers[_leader].server->elapse_election(); // XXX extra for old leader to become follower
+#endif
             elapse_elections();
+#if 0
+fmt::print("  elect_new_leader tick old leader\n");
+_servers[_leader].server->tick(); // XXX tick to 
+fmt::print("  elect_new_leader sleep 5us\n");
+co_await seastar::sleep(1us);   // Wait for election rpc exchanges
+#endif
             // Consume leader output messages since a stray append might make new leader step down
+fmt::print("  elect_new_leader later()\n");
+// XXX is this a problem in debug mode?? maybe try sleep(1us) or something?
+#if 1
             co_await later();                 // yield
-fmt::print("  elect_new_leader wait_until_candidate... {}\n", new_leader + 1);
+#else
+co_await seastar::sleep(1us);   // Wait for election rpc exchanges
+#endif
+fmt::print("  elect_new_leader wait_until_candidate... {}\n", to_raft_id(new_leader));
             _servers[new_leader].server->wait_until_candidate();
-fmt::print("  elect_new_leader reconnecting old leader {}\n", _leader + 1);
+            // XXX yield/sleep here?
+            // XXX or better, run prevote, then run vote
+            // XXX kostja: ^^ prevote candidate doesn't increment term!
+            // if another runs through prevote faster wins...
+            // XXX XXX XXX fix wait_until_candidate -> not possible
+            // so whole procedure became broken with prevote
+
+//
+// kostja: XXX XXX XXX need fix wait_until_candidate (get term) and wait election done
+//         wait_election_done check that we have...
+//
+//         so proper candidate before restart tickers
+//         (see kostja's fix for server.cc wait_until_candidate)
+//
+// another option is wait_election_done to be a cluster condition, not single node
+//
+
+fmt::print("  elect_new_leader reconnecting old leader {}\n", to_raft_id(_leader));
             // Re-connect old leader
             _connected->connect(to_raft_id(_leader));
             // Disconnect old leader from all nodes except new leader
             _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
 fmt::print("  elect_new_leader restart_tickers\n");
+#if 0
             restart_tickers();
+#endif
             co_await _servers[new_leader].server->wait_election_done();
 fmt::print("  elect_new_leader election done\n", _leader + 1);
 
             // Restore connections to the original setting
             *_connected = prev_disconnected;
+// XXX why was this before wait election?? also this might break later on with packet drops
+restart_tickers();
         } while (!_servers[new_leader].server->is_leader());
 fmt::print("  elect_new_leader DONE ^^^^^^^\n");
         tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
@@ -1215,16 +1252,12 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
-fmt::print("\n\n\n ====== test " # test_name "\n"); \
         replication_test(test_body, false, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
-fmt::print("\n\n\n ====== test " # test_name "_drops\n"); \
         replication_test(test_body, false, true); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
-fmt::print("\n\n\n ====== test " # test_name "_prevote\n"); \
         replication_test(test_body, true, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
-fmt::print("\n\n\n ====== test " # test_name "_prevote_drops\n"); \
         replication_test(test_body, true, true); }
 
 // 1 nodes, simple replication, empty, no updates

@@ -767,7 +767,11 @@ void server_impl::wait_until_candidate() {
 // Wait until candidate is either leader or reverts to follower
 future<> server_impl::wait_election_done() {
     while (_fsm->is_candidate()) {
+#if 1
         co_await later();
+#else
+        co_await seastar::sleep(5us);
+#endif
     };
 }
 

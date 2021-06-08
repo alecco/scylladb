@@ -464,6 +464,7 @@ void fsm::tick_leader() {
 }
 
 void fsm::tick() {
+// fmt::print("{} tick()\n", _my_id);
     _clock.advance();
 
     auto has_stable_leader = [this]() {
@@ -714,6 +715,7 @@ fmt::print("{} request_vote_reply term {} WON prevote become_candidate...\n", _m
         }
         break;
     case vote_result::LOST:
+fmt::print("{} request_vote_reply term {} LOST\n", _my_id, _current_term);
         become_follower(server_id{});
         break;
     }

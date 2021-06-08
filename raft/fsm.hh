@@ -523,6 +523,7 @@ void fsm::step(server_id from, Message&& msg) {
         }
 
         if (!ignore_term) {
+fmt::print("{} step [term: {}] message from {} [term: {}] BECOME FOLLOWER\n", _my_id, _current_term, from, msg.current_term);
             become_follower(leader);
             update_current_term(msg.current_term);
         }
@@ -540,6 +541,7 @@ void fsm::step(server_id from, Message&& msg) {
             }
         } else {
             // Ignore other cases
+fmt::print("{} [term: {}] ignored a message with lower term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
                 _my_id, _current_term, from, msg.current_term);
         }
@@ -555,6 +557,7 @@ void fsm::step(server_id from, Message&& msg) {
                 // leader’s term (included in its RPC) is at least as large as the
                 // candidate’s current term, then the candidate recognizes the
                 // leader as legitimate and returns to follower state.
+fmt::print("{} [term: {}] append request from {} [term: {}] BECOME FOLLOWER\n", _my_id, _current_term, from, msg.current_term);
                 become_follower(from);
             } else if (current_leader() == server_id{}) {
                 // Earlier we changed our term to match a candidate's
