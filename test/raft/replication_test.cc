@@ -855,6 +855,15 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
     if (new_leader != _leader) {
 // fmt::print("  elect_new_leader {} -> {}, both_connected {}\n", to_raft_id(_leader), to_raft_id(new_leader), (*_connected)(to_raft_id(_leader), to_raft_id(new_leader)));
         do {
+            BOOST_CHECK_MESSAGE(_servers[_leader].server->is_leader(),
+                    format("Wrong expected current leader is not leader {}", _leader));
+#if 1
+// XXX tick leader again to reset election timeout counters
+_servers[_leader].server->tick(); // XXX extra for old leader to become follower
+fmt::print("  elect_new_leader elapsing old leader (extra) {}\n", to_raft_id(_leader));
+_servers[_leader].server->tick(); // XXX extra for old leader to become follower
+co_await later();                 // yield
+#endif
 fmt::print("  elect_new_leader loop start ------------\n");
             if ((*_connected)(to_raft_id(_leader), to_raft_id(new_leader))) {
 // fmt::print("  elect_new_leader wait log {}\n", new_leader + 1 );
@@ -863,6 +872,7 @@ fmt::print("  elect_new_leader loop start ------------\n");
 
 fmt::print("  elect_new_leader pause_tickers\n");
             pause_tickers();
+// co_await seastar::sleep(1ms);   // Wait for election rpc exchanges
             // Leader could be already partially disconnected, save current connectivity state
             struct connected prev_disconnected = *_connected;
             // Disconnect current leader from everyone
@@ -883,10 +893,10 @@ co_await seastar::sleep(1us);   // Wait for election rpc exchanges
             // Consume leader output messages since a stray append might make new leader step down
 fmt::print("  elect_new_leader later()\n");
 // XXX is this a problem in debug mode?? maybe try sleep(1us) or something?
-#if 1
+#if 0
             co_await later();                 // yield
 #else
-co_await seastar::sleep(1us);   // Wait for election rpc exchanges
+co_await seastar::sleep(1ms);   // Wait for election rpc exchanges
 #endif
 fmt::print("  elect_new_leader wait_until_candidate... {}\n", to_raft_id(new_leader));
             _servers[new_leader].server->wait_until_candidate();
@@ -915,6 +925,8 @@ fmt::print("  elect_new_leader reconnecting old leader {}\n", to_raft_id(_leader
 fmt::print("  elect_new_leader restart_tickers\n");
 #if 0
             restart_tickers();
+#else
+_servers[new_leader].server->tick(); // XXX tick new leader to process stuff?
 #endif
             co_await _servers[new_leader].server->wait_election_done();
 fmt::print("  elect_new_leader election done\n", _leader + 1);
