@@ -689,7 +689,7 @@ future<> raft_cluster::start_all() {
     });
     init_raft_tickers();
     BOOST_TEST_MESSAGE("Electing first leader " << _leader);
-    _servers[_leader].server->wait_until_candidate();
+    co_await _servers[_leader].server->wait_until_candidate();
     co_await _servers[_leader].server->wait_election_done();
 }
 
@@ -862,7 +862,7 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
             elapse_elections();
             // Consume leader output messages since a stray append might make new leader step down
             co_await later();                 // yield
-            _servers[new_leader].server->wait_until_candidate();
+            co_await _servers[new_leader].server->wait_until_candidate();
             // Re-connect old leader
             _connected->connect(to_raft_id(_leader));
             // Disconnect old leader from all nodes except new leader

@@ -121,7 +121,7 @@ public:
     virtual future<> read_barrier() = 0;
 
     // Ad hoc functions for testing
-    virtual void wait_until_candidate() = 0;
+    virtual future<> wait_until_candidate() = 0;
     virtual future<> wait_election_done() = 0;
     virtual future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) = 0;
     virtual std::pair<index_t, term_t> log_last_idx_term() = 0;

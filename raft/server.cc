@@ -67,7 +67,7 @@ public:
     future<> abort() override;
     term_t get_current_term() const override;
     future<> read_barrier() override;
-    void wait_until_candidate() override;
+    future<> wait_until_candidate() override;
     future<> wait_election_done() override;
     future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
     std::pair<index_t, term_t> log_last_idx_term();
@@ -758,9 +758,17 @@ void server_impl::register_metrics() {
     });
 }
 
-void server_impl::wait_until_candidate() {
+future<> server_impl::wait_until_candidate() {
+    auto term = _fsm->get_current_term();
     while (_fsm->is_follower()) {
         _fsm->tick();
+    }
+    // If tick() only got us as far as to
+    // become a prevote candidate, wait until
+    // prevote is over or we submit to a new leader
+    // with a higher term
+    while (_fsm->get_current_term() == term) {
+        co_await later();
     }
 }
 
