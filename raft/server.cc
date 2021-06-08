@@ -786,7 +786,7 @@ bool server_impl::is_leader() {
 }
 
 void server_impl::elapse_election() {
-    while (_fsm->election_elapsed() < ELECTION_TIMEOUT) {
+    for (int i = 0; i < raft::ELECTION_TIMEOUT.count(); i++) {
         _fsm->tick();
     }
 }

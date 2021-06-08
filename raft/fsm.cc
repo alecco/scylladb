@@ -487,6 +487,7 @@ void fsm::tick() {
         // simply because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
+fmt::print("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}\n", _my_id, _current_term, _last_election_time, _clock.now());
         logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _my_id,
             _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
@@ -651,6 +652,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
+fmt::print("{} [term: {}, index: {}, last log term: {}, voted_for: {}] voted for {} [log_term: {}, log_index: {}] {}\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx, request.is_prevote? "PREVOTE" : "");
         logger.trace("{} [term: {}, index: {}, last log term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -677,6 +679,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
+fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.current_term, request.last_log_term, request.last_log_idx, request.is_prevote);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -689,6 +692,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
+fmt::print("{} received a {} vote from {} {}\n", _my_id, reply.vote_granted ? "yes" : "no", from, reply.is_prevote? "PREVOTE" : "");
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
@@ -703,6 +707,7 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
         break;
     case vote_result::WON:
         if (state.is_prevote) {
+fmt::print("{} request_vote_reply term {} WON prevote become_candidate...\n", _my_id, _current_term);
             become_candidate(false);
         } else {
             become_leader();
