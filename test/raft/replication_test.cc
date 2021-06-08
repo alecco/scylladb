@@ -849,8 +849,11 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
 
     if (new_leader != _leader) {
         bool both_connected = (*_connected)(to_raft_id(_leader), to_raft_id(new_leader));
+fmt::print("  elect_new_leader {} -> {}, both_connected {}\n", _leader + 1, new_leader, both_connected + 1);
         do {
+fmt::print("  elect_new_leader loop start ------------\n");
             if (both_connected) {
+fmt::print("  elect_new_leader wait log {}\n", new_leader + 1 );
                 co_await wait_log(new_leader);
             }
 
@@ -864,19 +867,23 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
             // Consume leader output messages since a stray append might make new leader step down
             co_await later();                 // yield
             _servers[new_leader].server->wait_until_candidate();
+fmt::print("  elect_new_leader candidate {}\n", new_leader + 1);
             if (both_connected) {
                 // Allow old leader to vote for new candidate while not looking alive to others
                 // Re-connect old leader
                 _connected->connect(to_raft_id(_leader));
                 // Disconnect old leader from all nodes except new leader
                 _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
+fmt::print("  elect_new_leader connected old leader {}\n", _leader + 1);
             }
             restart_tickers();
             co_await _servers[new_leader].server->wait_election_done();
+fmt::print("  elect_new_leader election done\n", _leader + 1);
 
             // Restore connections to the original setting
             *_connected = prev_disconnected;
         } while (!_servers[new_leader].server->is_leader());
+fmt::print("  elect_new_leader DONE ^^^^^^^\n");
         tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
         _leader = new_leader;
     }
@@ -1129,9 +1136,11 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     for (auto update: test.updates) {
         co_await std::visit(make_visitor(
         [&rafts] (entries update) -> future<> {
+fmt::print("  ADD ENTRIES {} \n\n", update.n);
             co_await rafts.add_entries(update.n);
         },
         [&rafts] (new_leader update) -> future<> {
+fmt::print("  NEW LEADER {} \n\n", update.id + 1);
             co_await rafts.elect_new_leader(update.id);
         },
         [&rafts] (disconnect update) -> future<> {
@@ -1175,15 +1184,20 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     }
 
     // Reconnect and bring all nodes back into configuration, if needed
+fmt::print("RECONNECT ALL\n");
     rafts.connect_all();
+fmt::print("RECONFIGURE ALL\n");
     co_await rafts.reconfigure_all();
 
     if (test.total_values > 0) {
         BOOST_TEST_MESSAGE("Appending remaining values");
+fmt::print("ADD REMAINING ENTRIES\n");
         co_await rafts.add_remaining_entries();
+fmt::print("WAIT ALL\n");
         co_await rafts.wait_all();
     }
 
+fmt::print("STOP ALL\n");
     co_await rafts.stop_all();
 
     if (test.total_values > 0) {
@@ -1197,12 +1211,16 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+fmt::print("\n\n\n ====== test " # test_name "\n"); \
         replication_test(test_body, false, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+fmt::print("\n\n\n ====== test " # test_name "_drops\n"); \
         replication_test(test_body, false, true); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+fmt::print("\n\n\n ====== test " # test_name "_prevote\n"); \
         replication_test(test_body, true, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+fmt::print("\n\n\n ====== test " # test_name "_prevote_drops\n"); \
         replication_test(test_body, true, true); }
 
 // 1 nodes, simple replication, empty, no updates
