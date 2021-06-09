@@ -760,16 +760,25 @@ void server_impl::register_metrics() {
 
 future<> server_impl::wait_until_candidate() {
     auto term = _fsm->get_current_term();
+fmt::print("  [{}] server_impl::wait_until_candidate() term {}\n", _id, term);
     while (_fsm->is_follower()) {
         _fsm->tick();
     }
+    assert(_fsm->is_candidate());
     // If tick() only got us as far as to
     // become a prevote candidate, wait until
     // prevote is over or we submit to a new leader
     // with a higher term
+fmt::print("  [{}] server_impl::wait_until_candidate() wait term change\n", _id);
     while (_fsm->get_current_term() == term) {
+        assert(_fsm->is_candidate());
+#if 0
         co_await later();
+#else
+        co_await seastar::sleep(5us);
+#endif
     }
+fmt::print("  [{}] server_impl::wait_until_candidate() DONE term\n", _id, _fsm->get_current_term());
 }
 
 // Wait until candidate is either leader or reverts to follower
