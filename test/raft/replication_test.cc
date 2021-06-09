@@ -319,7 +319,7 @@ public:
     void tick_all();
     void disconnect(size_t id, std::optional<raft::server_id> except = std::nullopt);
     void connect_all();
-    void elapse_elections();
+    future<> elapse_elections();
     future<> elect_new_leader(size_t new_leader);
     future<> free_election();
     void init_raft_tickers();
@@ -558,6 +558,7 @@ public:
             return;
         }
         if (!(*_connected)(id, _id)) {
+fmt::print("  rpc::send_vote_request {} -> {}  NOT CONNECTED\n", _id, id);
             return;
         }
         net[id]->_client->request_vote(_id, std::move(vote_request));
@@ -567,6 +568,7 @@ public:
             return;
         }
         if (!(*_connected)(id, _id)) {
+fmt::print("  rpc::send_vote_reply {} -> {}  NOT CONNECTED\n", _id, id);
             return;
         }
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
@@ -815,6 +817,8 @@ future<> raft_cluster::wait_log(size_t follower) {
     if ((*_connected)(to_raft_id(_leader), to_raft_id(follower)) &&
            _in_configuration.contains(_leader) && _in_configuration.contains(follower)) {
         auto leader_log_idx_term = _servers[_leader].server->log_last_idx_term();
+auto follower_log_idx_term = _servers[follower].server->log_last_idx_term();
+fmt::print("  {} wait_log() leader idx {} term {} -> follower idx {} term {} \n", follower, leader_log_idx_term.first, leader_log_idx_term.second, follower_log_idx_term.first, follower_log_idx_term.second);
         co_await _servers[follower].server->wait_log_idx_term(leader_log_idx_term);
     }
 }
@@ -838,9 +842,10 @@ future<> raft_cluster::wait_log_all() {
     }
 }
 
-void raft_cluster::elapse_elections() {
+future<> raft_cluster::elapse_elections() {
     for (auto s: _in_configuration) {
         _servers[s].server->elapse_election();
+co_await later();                 // yield
     }
 }
 
@@ -848,35 +853,64 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
     BOOST_CHECK_MESSAGE(new_leader < _servers.size(),
             format("Wrong next leader value {}", new_leader));
 
-    if (new_leader != _leader) {
-        do {
-            if ((*_connected)(to_raft_id(_leader), to_raft_id(new_leader))) {
-                co_await wait_log(new_leader);
-            }
-
-            pause_tickers();
-            // Leader could be already partially disconnected, save current connectivity state
-            struct connected prev_disconnected = *_connected;
-            // Disconnect current leader from everyone
-            _connected->disconnect(to_raft_id(_leader));
-            // Make move all nodes past election threshold, also making old leader follower
-            elapse_elections();
-            // Consume leader output messages since a stray append might make new leader step down
-            co_await later();                 // yield
-            auto term = _servers[new_leader].server->wait_until_candidate();
-            // Re-connect old leader
-            _connected->connect(to_raft_id(_leader));
-            // Disconnect old leader from all nodes except new leader
-            _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
-            co_await _servers[new_leader].server->wait_until_candidate2(term);
-            restart_tickers();
-            co_await _servers[new_leader].server->wait_election_done();
-
-            // Restore connections to the original setting
-            *_connected = prev_disconnected;
-        } while (!_servers[new_leader].server->is_leader());
-        tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
+    if (new_leader == _leader) {
+        co_return;
     }
+fmt::print("  elect_new_leader {} -> {}\n", to_raft_id(_leader), to_raft_id(new_leader));
+
+    BOOST_CHECK_MESSAGE(_servers[_leader].server->is_leader(),
+            format("Wrong expected current leader is not leader {}", _leader));
+
+fmt::print("  elect_new_leader wait log\n");
+    if ((*_connected)(to_raft_id(_leader), to_raft_id(new_leader))) {
+        co_await wait_log(new_leader);
+    }
+
+fmt::print("  elect_new_leader pause_tickers\n");
+    pause_tickers();
+    // Leader could be already partially disconnected, save current connectivity state
+    struct connected prev_disconnected = *_connected;
+    // Disconnect current leader from everyone
+fmt::print("  elect_new_leader disconnected old leader {}\n", to_raft_id(_leader));
+    _connected->disconnect(to_raft_id(_leader));
+    // Make move all nodes past election threshold, also making old leader follower
+fmt::print("  elect_new_leader elapse_elections\n");
+    co_await elapse_elections();
+
+    // Consume leader output messages since a stray append might make new leader step down
+fmt::print("  elect_new_leader later()\n");
+    co_await later();                 // yield
+
+    // XXX we need leader disconnected to have new_leader become candidate
+fmt::print("  elect_new_leader {} wait_until_candidate()\n", to_raft_id(new_leader));
+    auto term = _servers[new_leader].server->wait_until_candidate();
+fmt::print("  elect_new_leader restore old connections\n", to_raft_id(_leader));
+
+co_await later();                 // XXX yield
+
+    // Re-connect old leader
+    _connected->connect(to_raft_id(_leader));
+    // Disconnect old leader from all nodes except new leader
+fmt::print("  elect_new_leader re-connecting old leader {} to candidate\n", to_raft_id(_leader));
+    _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
+
+    // Note: it can be the case it's only old leader and new candidate
+fmt::print("\n  elect_new_leader wait_until_candidate2 old term {}\n", term);
+    co_await _servers[new_leader].server->wait_until_candidate2(term);
+
+fmt::print("\n  elect_new_leader restart_tickers\n");
+    restart_tickers();
+fmt::print("  elect_new_leader {} wait_election_done()\n", to_raft_id(new_leader));
+    co_await _servers[new_leader].server->wait_election_done();
+fmt::print("  elect_new_leader {} wait_election_done() ^^^\n", to_raft_id(new_leader));
+
+    // Restore connections to the original setting (possibly including old leader)
+    *_connected = prev_disconnected;
+
+    BOOST_CHECK_MESSAGE(_servers[new_leader].server->is_leader(),
+            "DID NOT BECOME LEADER");
+fmt::print("  elect_new_leader DONE ^^^^^^^^^^^\n\n");
+    tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
     _leader = new_leader;
 }
 
@@ -884,7 +918,7 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
 // NOTE: there should be enough nodes capable of participating
 future<> raft_cluster::free_election() {
     tlogger.debug("Running free election");
-    elapse_elections();
+    co_await elapse_elections();
     size_t node = 0;
     for (;;) {
         tick_all();
@@ -1123,13 +1157,16 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
     BOOST_TEST_MESSAGE("Processing updates");
 
+fmt::print("\nvvvvvvv Processing updates vvvvvvv\n");
     // Process all updates in order
     for (auto update: test.updates) {
         co_await std::visit(make_visitor(
         [&rafts] (entries update) -> future<> {
+fmt::print("\n----- Add entries {} -----\n", update.n);
             co_await rafts.add_entries(update.n);
         },
         [&rafts] (new_leader update) -> future<> {
+fmt::print("\n----- NEW LEADER {} -----\n\n", to_raft_id(update.id));
             co_await rafts.elect_new_leader(update.id);
         },
         [&rafts] (disconnect update) -> future<> {
@@ -1171,6 +1208,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         }
         ), std::move(update));
     }
+fmt::print("\n^^^^^^^^ Done with updates ^^^^^^^^\n");
 
     // Reconnect and bring all nodes back into configuration, if needed
     rafts.connect_all();
@@ -1195,12 +1233,16 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+fmt::print("\n\n========== test " # test_name " ===========\n"); \
         replication_test(test_body, false, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+fmt::print("\n\n========== test " # test_name "_drops ===========\n"); \
         replication_test(test_body, false, true); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+fmt::print("\n\n========== test " # test_name "_prevote ===========\n"); \
         replication_test(test_body, true, false); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+fmt::print("\n\n========== test " # test_name "_prevote_drops ===========\n"); \
         replication_test(test_body, true, true); }
 
 // 1 nodes, simple replication, empty, no updates
