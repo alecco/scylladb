@@ -171,6 +171,7 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
+fmt::print("  {} BECOME CANDIDATE {}\n", _my_id, is_prevote ? "PREVOTE" : "");
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
@@ -195,6 +196,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
         // If the server is not part of the current configuration,
         // revert to the follower state without increasing
         // the current term.
+fmt::print("  {} become_candidate out of config BECOME FOLLOWER\n", _my_id);
         become_follower(server_id{});
         return;
     }
@@ -202,8 +204,10 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     term_t term{_current_term + 1};
     if (!is_prevote) {
         update_current_term(term);
+fmt::print("  {} become_candidate update current term to {}\n", _my_id, term);
     }
     // Replicate RequestVote
+fmt::print("  {} become_candidate voteres len {}\n", _my_id, voters.size());
     for (const auto& server : voters) {
         if (server.id == _my_id) {
             // Vote for self.
@@ -215,6 +219,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
             // Already signaled _sm_events in update_current_term()
             continue;
         }
+fmt::print("{} [term: {}, index: {}, last log term: {}{}{}] sent vote request to {}\n", _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "", is_leadership_transfer ? ", force" : "", server.id);
         logger.trace("{} [term: {}, index: {}, last log term: {}{}{}] sent vote request to {}",
             _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "",
             is_leadership_transfer ? ", force" : "", server.id);
@@ -224,6 +229,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     if (votes.tally_votes() == vote_result::WON) {
         // A single node cluster.
         if (is_prevote) {
+fmt::print("  {} WON PREVOTE\n", _my_id);
             become_candidate(false);
         } else {
             become_leader();
@@ -423,6 +429,7 @@ void fsm::tick_leader() {
         // elapses without a successful round of heartbeats to a majority
         // of its cluster; this allows clients to retry their requests
         // with another server.
+fmt::print("  {} tick_leader election timeout BECOME FOLLOWER\n", _my_id);
         return become_follower(server_id{});
     }
 
@@ -487,6 +494,7 @@ void fsm::tick() {
         // simply because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
+fmt::print("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}\n", _my_id, _current_term, _last_election_time, _clock.now());
         logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _my_id,
             _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
@@ -632,6 +640,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 }
 
 void fsm::request_vote(server_id from, vote_request&& request) {
+fmt::print("  {} request_vote from {} {} {}\n", _my_id, from, request.is_prevote? "PREVOTE" : "", request.current_term);
 
     // We can cast a vote in any state. If the candidate's term is
     // lower than ours, we ignore the request. Otherwise we first
@@ -651,6 +660,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
+fmt::print("{} [term: {}, index: {}, last log term: {}, voted_for: {}] voted for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, last log term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -677,6 +687,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
+fmt::print("{} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.current_term, request.last_log_term, request.last_log_idx, request.is_prevote);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -689,6 +700,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
+fmt::print("{} received a {} vote from {}\n", _my_id, reply.vote_granted ? "yes" : "no", from);
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
@@ -709,6 +721,7 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
         }
         break;
     case vote_result::LOST:
+fmt::print("  {} request_vote_reply LOST  BECOME FOLLOWER\n", _my_id);
         become_follower(server_id{});
         break;
     }
@@ -736,6 +749,7 @@ static size_t entry_size(const log_entry& e) {
 
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
+// fmt::print("replicate_to[{}->{}]: called next={} match={}\n", _my_id, progress.id, progress.next_idx, progress.match_idx);
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, progress.id, progress.next_idx, progress.match_idx);
 
@@ -909,6 +923,7 @@ void fsm::send_timeout_now(server_id id) {
     send_to(id, timeout_now{_current_term});
     leader_state().timeout_now_sent = true;
     if (leader_state().tracker.find(_my_id) == nullptr) {
+fmt::print("  send_timeout_now[{}] become follower\n", _my_id);
         logger.trace("send_timeout_now[{}] become follower", _my_id);
         become_follower({});
     }
