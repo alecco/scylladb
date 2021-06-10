@@ -614,6 +614,7 @@ std::unordered_map<raft::server_id, raft_cluster::rpc*> raft_cluster::rpc::net;
 raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state state) {
 
     auto uuid = to_raft_id(id);
+    BOOST_TEST_MESSAGE(format("raft_cluster::create_server(id = {})", uuid));
     auto sm = std::make_unique<state_machine>(uuid, _apply, _apply_entries, _snapshots.get());
     auto& rsm = *sm;
 
@@ -649,6 +650,7 @@ raft_cluster::raft_cluster(test_case test,
             _apply(apply),
             _leader(first_leader) {
 
+    BOOST_TEST_MESSAGE(format("raft_cluster::raft_cluster"));
     rpc::reset_network();
 
     auto states = get_states(test, prevote);
@@ -672,6 +674,7 @@ raft_cluster::raft_cluster(test_case test,
 }
 
 future<> raft_cluster::stop_server(size_t id) {
+    BOOST_TEST_MESSAGE(format("raft_cluster::stop_server({})", to_raft_id(id)));
     cancel_ticker(id);
     co_await _servers[id].server->abort();
     _snapshots->erase(to_raft_id(id));
@@ -680,12 +683,14 @@ future<> raft_cluster::stop_server(size_t id) {
 
 // Reset previously stopped server
 future<> raft_cluster::reset_server(size_t id, initial_state state) {
+    BOOST_TEST_MESSAGE(format("raft_cluster::reset_server({})", id));
     _servers[id] = create_server(id, state);
     co_await _servers[id].server->start();
     set_ticker_callback(id);
 }
 
 future<> raft_cluster::start_all() {
+    BOOST_TEST_MESSAGE("raft_cluster::start_all()");
     co_await parallel_for_each(_servers, [] (auto& r) {
         return r.server->start();
     });
@@ -696,33 +701,39 @@ future<> raft_cluster::start_all() {
 }
 
 future<> raft_cluster::stop_all() {
+    BOOST_TEST_MESSAGE("raft_cluster::stop_all()");
     for (auto s: _in_configuration) {
         co_await stop_server(s);
     };
 }
 
 future<> raft_cluster::wait_all() {
+    BOOST_TEST_MESSAGE("raft_cluster::wait_all()");
     for (auto s: _in_configuration) {
         co_await _servers[s].sm->done();
     }
 }
 
 void raft_cluster::tick_all() {
+    BOOST_TEST_MESSAGE("raft_cluster::tick_all()");
     for (auto s: _in_configuration) {
         _servers[s].server->tick();
     }
 }
 
 void raft_cluster::disconnect(size_t id, std::optional<raft::server_id> except) {
+    BOOST_TEST_MESSAGE(format("raft_cluster::disconnect({})", id));
     _connected->disconnect(to_raft_id(id), except);
 }
 
 void raft_cluster::connect_all() {
+    BOOST_TEST_MESSAGE("raft_cluster::connect_all()");
     _connected->connect_all();
 }
 
 // Add consecutive integer entries to a leader
 future<> raft_cluster::add_entries(size_t n) {
+    BOOST_TEST_MESSAGE(format("raft_cluster::add_entries({})", n));
     size_t end = _next_val + n;
     while (_next_val != end) {
         try {
@@ -741,6 +752,7 @@ future<> raft_cluster::add_entries(size_t n) {
 }
 
 future<> raft_cluster::add_remaining_entries() {
+    BOOST_TEST_MESSAGE("raft_cluster::add_remaining_entries()");
     co_await add_entries(_apply_entries - _next_val);
 }
 
@@ -756,18 +768,21 @@ void raft_cluster::init_raft_tickers() {
 }
 
 void raft_cluster::pause_tickers() {
+    BOOST_TEST_MESSAGE("raft_cluster::pause_tickers()");
     for (auto s: _in_configuration) {
         _tickers[s].cancel();
     }
 }
 
 void raft_cluster::restart_tickers() {
+    BOOST_TEST_MESSAGE("raft_cluster::restart_tickers()");
     for (auto s: _in_configuration) {
         _tickers[s].rearm_periodic(tick_delta);
     }
 }
 
 void raft_cluster::cancel_ticker(size_t id) {
+    BOOST_TEST_MESSAGE("raft_cluster::cancel_ticker()");
     _tickers[id].cancel();
 }
 
@@ -813,6 +828,7 @@ size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& 
 
 // Wait for leader log to propagate to follower
 future<> raft_cluster::wait_log(size_t follower) {
+    BOOST_TEST_MESSAGE("raft_cluster::wait_log()");
     if ((*_connected)(to_raft_id(_leader), to_raft_id(follower)) &&
            _in_configuration.contains(_leader) && _in_configuration.contains(follower)) {
         auto leader_log_idx_term = _servers[_leader].server->log_last_idx_term();
@@ -830,6 +846,7 @@ future<> raft_cluster::wait_log(::wait_log followers) {
 
 // Wait for all connected followers to catch up
 future<> raft_cluster::wait_log_all() {
+    BOOST_TEST_MESSAGE("raft_cluster::wait_log_all()");
     auto leader_log_idx_term = _servers[_leader].server->log_last_idx_term();
     for (size_t s = 0; s < _servers.size(); ++s) {
         if (s != _leader && (*_connected)(to_raft_id(s), to_raft_id(_leader)) &&
@@ -840,12 +857,15 @@ future<> raft_cluster::wait_log_all() {
 }
 
 void raft_cluster::elapse_elections() {
+    BOOST_TEST_MESSAGE("raft_cluster::elapse_elections()");
     for (auto s: _in_configuration) {
         _servers[s].server->elapse_election();
     }
 }
 
 future<> raft_cluster::elect_new_leader(size_t new_leader) {
+    BOOST_TEST_MESSAGE(format("raft_cluster::elect_new_leader({} -> {})",
+                to_raft_id(_leader), to_raft_id(new_leader)));
     BOOST_CHECK_MESSAGE(new_leader < _servers.size(),
             format("Wrong next leader value {}", new_leader));
 
@@ -932,6 +952,7 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
 // Run a free election of nodes in configuration
 // NOTE: there should be enough nodes capable of participating
 future<> raft_cluster::free_election() {
+    BOOST_TEST_MESSAGE("raft_cluster::free_election()");
     tlogger.debug("Running free election");
     elapse_elections();
     size_t node = 0;
@@ -950,6 +971,7 @@ future<> raft_cluster::free_election() {
 }
 
 future<> raft_cluster::change_configuration(set_config sc) {
+    BOOST_TEST_MESSAGE("raft_cluster::change_configuration()");
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
     raft::server_address_set set;
     std::unordered_set<size_t> new_config;
@@ -1040,6 +1062,7 @@ void raft_cluster::rpc_reset_counters(::rpc_reset_counters nodes) {
 }
 
 future<> raft_cluster::reconfigure_all() {
+    BOOST_TEST_MESSAGE("raft_cluster::reconfigure_all()");
     if (_in_configuration.size() < _servers.size()) {
         set_config sc;
         for (size_t s = 0; s < _servers.size(); ++s) {
@@ -1050,6 +1073,7 @@ future<> raft_cluster::reconfigure_all() {
 }
 
 future<> raft_cluster::partition(::partition p) {
+    BOOST_TEST_MESSAGE("raft_cluster::partition()");
     std::unordered_set<size_t> partition_servers;
     std::optional<size_t> next_leader;
     for (auto s: p) {
@@ -1093,6 +1117,7 @@ future<> raft_cluster::partition(::partition p) {
 }
 
 future<> raft_cluster::tick(::tick t) {
+    BOOST_TEST_MESSAGE("raft_cluster::tick()");
     for (uint64_t i = 0; i < t.ticks; i++) {
         for (auto&& s: _servers) {
             s.server->tick();
@@ -1110,11 +1135,12 @@ future<> raft_cluster::reset(::reset server) {
 }
 
 void raft_cluster::disconnect(::disconnect nodes) {
+    BOOST_TEST_MESSAGE("raft_cluster::disconnect()");
     _connected->cut(to_raft_id(nodes.first), to_raft_id(nodes.second));
 }
 
 void raft_cluster::verify() {
-    BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
+    BOOST_TEST_MESSAGE("raft_cluster::verify(): hashes match expected (snapshot and apply calls)");
     auto expected = hasher_int::hash_range(_apply_entries).finalize_uint64();
     for (auto i: _in_configuration) {
         auto digest = _servers[i].sm->hasher->finalize_uint64();
