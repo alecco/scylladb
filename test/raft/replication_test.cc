@@ -1182,11 +1182,18 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
         ), std::move(update));
     }
 
-    // Reconnect and bring all nodes back into configuration, if needed
-    rafts.connect_all();
-    co_await rafts.reconfigure_all();
-
     if (test.total_values > 0) {
+        // Pause tickers so re-joined nodes can't become suddenly candidates
+        rafts.pause_tickers();
+
+        // make re-joined candidates followers XXX is this true?
+        // XXX XXX XXX but not leader!
+        rafts.elapse_elections();
+
+        // Reconnect and bring all nodes back into configuration, if needed
+        rafts.connect_all();
+        co_await rafts.reconfigure_all();
+
         BOOST_TEST_MESSAGE("Appending remaining values");
         co_await rafts.add_remaining_entries();
         co_await rafts.wait_all();
