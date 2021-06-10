@@ -540,6 +540,7 @@ void fsm::step(server_id from, Message&& msg) {
             }
         } else {
             // Ignore other cases
+fmt::print("{} [term: {}] ignored a message with lower term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
                 _my_id, _current_term, from, msg.current_term);
         }
