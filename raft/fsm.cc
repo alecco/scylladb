@@ -21,6 +21,7 @@
 #include "fsm.hh"
 #include <random>
 #include <seastar/core/coroutine.hh>
+#include <cstdio> // XXX XXX XXX
 
 namespace raft {
 
@@ -155,6 +156,7 @@ void fsm::become_leader() {
     // set_configuration() begins replicating from the last entry
     // in the log.
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
+fmt::print("\n {} fsm::become_leader() stable index: {} last index: {} <<<<<<\n\n", _my_id, _log.stable_idx(), _log.last_idx());
     logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
     replicate();
@@ -171,6 +173,7 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
+fmt::print(stderr, "\n{} become_candidate() {} msg term {}\n\n", _my_id, is_prevote ? "PREVOTE" : "no prevote so updating current term to", _current_term);
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
@@ -594,11 +597,15 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
 
+if (_my_id == server_id(utils::UUID(0,1)) || _my_id == server_id(utils::UUID(0,3)))
+fmt::print(stderr, "append_entries_reply[{}->{}]: rejected match={} index={}\n", _my_id, from, progress.match_idx, rejected.non_matching_idx);
         logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}",
             _my_id, from, progress.match_idx, rejected.non_matching_idx);
 
         // check reply validity
         if (progress.is_stray_reject(rejected)) {
+if (_my_id == server_id(utils::UUID(0,1)) || _my_id == server_id(utils::UUID(0,3)))
+fmt::print(stderr, "append_entries_reply[{}->{}]: drop stray append reject\n", _my_id, from);
             logger.trace("append_entries_reply[{}->{}]: drop stray append reject", _my_id, from);
             return;
         }
@@ -651,6 +658,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
+fmt::print(stderr, "{} [term: {}, index: {}, last log term: {}, voted_for: {}] voted for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, last log term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -677,6 +685,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
+fmt::print(stderr, "{} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.current_term, request.last_log_term, request.last_log_idx, request.is_prevote);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -689,6 +698,8 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
+if (_my_id == server_id(utils::UUID(0,1)) || _my_id == server_id(utils::UUID(0,3)))
+fmt::print(stderr, "\n{} received a {} vote from {}\n", _my_id, reply.vote_granted ? "yes" : "no", from);
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
