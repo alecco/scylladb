@@ -25,6 +25,7 @@
 #include "raft.hh"
 #include "tracker.hh"
 #include "log.hh"
+#include <cstdio> // XXX XXX XXX
 
 namespace raft {
 
@@ -487,6 +488,8 @@ void fsm::step(server_id from, Message&& msg) {
     if (msg.current_term > _current_term) {
         server_id leader{};
 
+if (_my_id == server_id(utils::UUID(0,1)) || _my_id == server_id(utils::UUID(0,3)))
+fmt::print(stderr, "\n{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
@@ -503,6 +506,7 @@ void fsm::step(server_id from, Message&& msg) {
                     // update its term or grant its vote.
                     // Unless `force` flag is set which indicates that the current leader
                     // wants to stepdown.
+fmt::print(stderr, "{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})\n", _my_id, _current_term, election_elapsed(), current_leader());
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
                         _my_id, _current_term, election_elapsed(), current_leader());
                     return;
@@ -512,6 +516,8 @@ void fsm::step(server_id from, Message&& msg) {
         bool ignore_term = false;
         if constexpr (std::is_same_v<Message, vote_request>) {
             // Do not update term on prevote request
+// if (_my_id == server_id(utils::UUID(0,1)) || _my_id == server_id(utils::UUID(0,3)))
+fmt::print(stderr, "{} [term: {}] vote_request with higher term from {} [term: {}] {}\n", _my_id, _current_term, from, msg.current_term, msg.is_prevote? "IGNORING TERM" : "NOT IGNORING TERM");
             ignore_term = msg.is_prevote;
         } else if constexpr (std::is_same_v<Message, vote_reply>) {
             // We send pre-vote requests with a term in our future. If the
@@ -523,9 +529,11 @@ void fsm::step(server_id from, Message&& msg) {
         }
 
         if (!ignore_term) {
+fmt::print(stderr, "{} [term: {}] become follower and updating current term to {} <<<<\n", _my_id, _current_term, msg.current_term);
             become_follower(leader);
             update_current_term(msg.current_term);
         }
+else if (is_leader()) fmt::print(stderr, "{} [term: {}] XXXX NOT becoming follower and ignoring {}'s term {}\n", _my_id, _current_term, from, msg.current_term);
     } else if (msg.current_term < _current_term) {
         if constexpr (std::is_same_v<Message, append_request>) {
             // Instructs the leader to step down.
