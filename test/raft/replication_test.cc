@@ -839,6 +839,7 @@ future<> raft_cluster::wait_log_all() {
 
 void raft_cluster::elapse_elections() {
     for (auto s: _in_configuration) {
+fmt::print(stderr, "  elapse_election {}\n", to_raft_id(s));
         _servers[s].server->elapse_election();
     }
 }
@@ -848,11 +849,14 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
             format("Wrong next leader value {}", new_leader));
 
     if (new_leader != _leader) {
+fmt::print(stderr, "  elect_new_leader {} -> {}\n", to_raft_id(_leader), to_raft_id(new_leader));
         bool both_connected = (*_connected)(to_raft_id(_leader), to_raft_id(new_leader));
         if (both_connected) {
+fmt::print(stderr, "  elect_new_leader both connected, wait log\n");
             co_await wait_log(new_leader);
         }
 
+fmt::print(stderr, "  elect_new_leader pause_tickers\n");
         pause_tickers();
         // Leader could be already partially disconnected, save current connectivity state
         struct connected prev_disconnected = *_connected;
@@ -862,8 +866,10 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
         elapse_elections();
 
         do {
+fmt::print(stderr, "  elect_new_leader loop start --------------------------\n");
             // Consume leader output messages since a stray append might make new leader step down
             co_await later();                 // yield
+fmt::print(stderr, "  elect_new_leader wait_until_candidate\n");
             _servers[new_leader].server->wait_until_candidate();
 
             if (both_connected) {
@@ -873,6 +879,7 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
                 // Disconnect old leader from all nodes except new leader
                 _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
             }
+fmt::print(stderr, "  elect_new_leader wait_election_done\n");
             co_await _servers[new_leader].server->wait_election_done();
 
             if (both_connected) {
@@ -1024,16 +1031,19 @@ future<> raft_cluster::partition(::partition p) {
         partition_servers.insert(id);
     }
     if (next_leader) {
+fmt::print(stderr, "  wait_log next leader {}\n", to_raft_id(*next_leader));
         // Wait for log to propagate to next leader, before disconnections
         co_await wait_log(*next_leader);
     } else {
         // No leader specified, wait log for all connected servers, before disconnections
         for (auto s: partition_servers) {
             if (_in_configuration.contains(s)) {
+fmt::print(stderr, "  wait_log follower {}\n", to_raft_id(s));
                 co_await wait_log(s);
             }
         }
     }
+fmt::print(stderr, "  pause_tickers\n");
     pause_tickers();
     _connected->connect_all();
     // NOTE: connectivity is independent of configuration so it's for all servers
@@ -1045,11 +1055,14 @@ future<> raft_cluster::partition(::partition p) {
     }
     if (next_leader) {
         // New leader specified, elect it
+fmt::print(stderr, "  elect_new_leader next leader {}\n", to_raft_id(*next_leader));
         co_await elect_new_leader(*next_leader);
     } else if (partition_servers.find(_leader) == partition_servers.end() && p.size() > 0) {
         // Old leader disconnected and not specified new, free election
+fmt::print(stderr, "  free_election\n");
         co_await free_election();
     }
+fmt::print(stderr, "  restart_tickers\n");
     restart_tickers();
 }
 
@@ -1137,46 +1150,58 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     for (auto update: test.updates) {
         co_await std::visit(make_visitor(
         [&rafts] (entries update) -> future<> {
+BOOST_TEST_MESSAGE(format("entries"));
             co_await rafts.add_entries(update.n);
         },
         [&rafts] (new_leader update) -> future<> {
+BOOST_TEST_MESSAGE(format("new_leader"));
             co_await rafts.elect_new_leader(update.id);
         },
         [&rafts] (disconnect update) -> future<> {
+BOOST_TEST_MESSAGE(format("disconnect"));
             rafts.disconnect(update);
             co_return;
         },
         [&rafts] (partition update) -> future<> {
+BOOST_TEST_MESSAGE("partition");
             co_await rafts.partition(update);
         },
         [&rafts] (stop update) -> future<> {
             co_await rafts.stop(update);
         },
         [&rafts] (reset update) -> future<> {
+BOOST_TEST_MESSAGE("reset");
             co_await rafts.reset(update);
         },
         [&rafts] (wait_log update) -> future<> {
+BOOST_TEST_MESSAGE("wait_log");
             co_await rafts.wait_log(update);
         },
         [&rafts] (set_config update) -> future<> {
+BOOST_TEST_MESSAGE("set_config");
             co_await rafts.change_configuration(update);
         },
         [&rafts] (check_rpc_config update) -> future<> {
+BOOST_TEST_MESSAGE("check_rpc_config");
             co_await rafts.check_rpc_config(update);
         },
         [&rafts] (check_rpc_added update) -> future<> {
+BOOST_TEST_MESSAGE("check_rpc_added");
             rafts.check_rpc_added(update);
             co_return;
         },
         [&rafts] (check_rpc_removed update) -> future<> {
+BOOST_TEST_MESSAGE("check_rpc_removed");
             rafts.check_rpc_removed(update);
             co_return;
         },
         [&rafts] (rpc_reset_counters update) -> future<> {
+BOOS_TEST_MESSAGE("rpc_reset_counters");
             rafts.rpc_reset_counters(update);
             co_return;
         },
         [&rafts] (tick update) -> future<> {
+BOOS_TEST_MESSAGE("tick");
             co_await rafts.tick(update);
         }
         ), std::move(update));

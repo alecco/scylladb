@@ -21,6 +21,7 @@
 #include "fsm.hh"
 #include <random>
 #include <seastar/core/coroutine.hh>
+#include <cstdio> // XXX
 
 namespace raft {
 
@@ -155,6 +156,7 @@ void fsm::become_leader() {
     // set_configuration() begins replicating from the last entry
     // in the log.
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
+fmt::print(stderr, "fsm::become_leader() {} stable index: {} last index: {}\n", _my_id, _log.stable_idx(), _log.last_idx());
     logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
     replicate();
@@ -215,6 +217,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
             // Already signaled _sm_events in update_current_term()
             continue;
         }
+fmt::print(stderr, "{} [term: {}, index: {}, last log term: {}{}{}] sent vote request to {}\n", _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "", is_leadership_transfer ? ", force" : "", server.id);
         logger.trace("{} [term: {}, index: {}, last log term: {}{}{}] sent vote request to {}",
             _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "",
             is_leadership_transfer ? ", force" : "", server.id);
@@ -487,6 +490,7 @@ void fsm::tick() {
         // simply because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
+fmt::print(stderr, "tick[{}]: becoming a candidate at term {}, last election: {}, now: {}\n", _my_id, _current_term, _last_election_time, _clock.now());
         logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _my_id,
             _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
@@ -651,6 +655,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
+fmt::print(stderr, "{} [term: {}, index: {}, last log term: {}, voted_for: {}] voted for {} [log_term: {}, log_index: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.last_log_term, request.last_log_idx);
         logger.trace("{} [term: {}, index: {}, last log term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -677,6 +682,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
+fmt::print(stderr, "{} [term: {}, index: {}, log_term: {}, voted_for: {}] rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]\n", _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for, from, request.current_term, request.last_log_term, request.last_log_idx, request.is_prevote);
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
@@ -689,11 +695,13 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
+fmt::print(stderr, "{} received a {} vote from {}\n", _my_id, reply.vote_granted ? "yes" : "no", from);
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
     // Should not register a reply to prevote as a real vote
     if (state.is_prevote != reply.is_prevote) {
+fmt::print(stderr, "{} ignoring prevote from {} as state is vote\n", _my_id, from);
         logger.trace("{} ignoring prevote from {} as state is vote", _my_id, from);
         return;
     }
@@ -737,6 +745,7 @@ static size_t entry_size(const log_entry& e) {
 
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
+fmt::print(stderr, "replicate_to[{}->{}]: called next={} match={}\n", _my_id, progress.id, progress.next_idx, progress.match_idx);
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, progress.id, progress.next_idx, progress.match_idx);
 

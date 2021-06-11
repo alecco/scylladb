@@ -487,6 +487,7 @@ void fsm::step(server_id from, Message&& msg) {
     if (msg.current_term > _current_term) {
         server_id leader{};
 
+fmt::print("{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
@@ -499,6 +500,7 @@ void fsm::step(server_id from, Message&& msg) {
                     // Leader request is considered to avoid hung elections
                     // in presence of a disrupting candidate without prevote
                     // while failure detector reports leader is still up
+fmt::print("{} [term: {}] vote request from leader {} within a minimum election timeout, elapsed {}\n", _my_id, _current_term, current_leader(), election_elapsed());
                     logger.trace("{} [term: {}] vote request from leader {}"
                             "within a minimum election timeout, elapsed {}",
                             _my_id, _current_term, current_leader(),
@@ -512,6 +514,7 @@ void fsm::step(server_id from, Message&& msg) {
                     // update its term or grant its vote.
                     // Unless `force` flag is set which indicates that the current leader
                     // wants to stepdown.
+fmt::print("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})\n", _my_id, _current_term, election_elapsed(), current_leader());
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
                         _my_id, _current_term, election_elapsed(), current_leader());
                     return;
@@ -549,6 +552,7 @@ void fsm::step(server_id from, Message&& msg) {
             }
         } else {
             // Ignore other cases
+fmt::print("{} [term: {}] ignored a message with lower term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
                 _my_id, _current_term, from, msg.current_term);
         }
