@@ -36,6 +36,7 @@
 #include "xx_hasher.hh"
 #include "test/raft/helpers.hh"
 #include "test/lib/eventually.hh"
+#include <cstdio> // XXX XXX XXX
 
 // Test Raft library with declarative test definitions
 //
@@ -864,6 +865,7 @@ void raft_cluster::elapse_elections() {
 }
 
 future<> raft_cluster::elect_new_leader(size_t new_leader) {
+fmt::print(stderr, "\n\n -- raft_cluster::elect_new_leader({} -> {})\n", to_raft_id(_leader), to_raft_id(new_leader));
     BOOST_TEST_MESSAGE(format("raft_cluster::elect_new_leader({} -> {})",
                 to_raft_id(_leader), to_raft_id(new_leader)));
     BOOST_CHECK_MESSAGE(new_leader < _servers.size(),
@@ -1073,6 +1075,7 @@ future<> raft_cluster::reconfigure_all() {
 }
 
 future<> raft_cluster::partition(::partition p) {
+fmt::print(stderr, "\n\n------------ PARTITION -----------\n");
     BOOST_TEST_MESSAGE("raft_cluster::partition()");
     std::unordered_set<size_t> partition_servers;
     std::optional<size_t> next_leader;
@@ -1087,6 +1090,7 @@ future<> raft_cluster::partition(::partition p) {
         partition_servers.insert(id);
     }
     if (next_leader) {
+fmt::print(stderr, "  next leader {}\n", to_raft_id(*next_leader));
         // Wait for log to propagate to next leader, before disconnections
         co_await wait_log(*next_leader);
     } else {
@@ -1098,6 +1102,7 @@ future<> raft_cluster::partition(::partition p) {
         }
     }
     pause_tickers();
+    // XXX here beware of re-joining nodes, make them followers with elapse election?
     _connected->connect_all();
     // NOTE: connectivity is independent of configuration so it's for all servers
     for (size_t s = 0; s < _servers.size(); ++s) {
@@ -1113,6 +1118,7 @@ future<> raft_cluster::partition(::partition p) {
         // Old leader disconnected and not specified new, free election
         co_await free_election();
     }
+else fmt::print(stderr, "  current leader {} stays in partition\n", to_raft_id(_leader));
     restart_tickers();
 }
 
@@ -1424,6 +1430,14 @@ RAFT_TEST_CASE(drops_03, (test_case{
 RAFT_TEST_CASE(drops_04, (test_case{
          .nodes = 4,
          .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}}));
+
+// XXX XXX XXX
+RAFT_TEST_CASE(drop_leader_dueling_repro, (test_case{
+         .nodes = 4,
+         .updates = {entries{1},partition{0,2,3},entries{1},       // 0 (aka 0001) leader
+                    partition{1,leader{2},3},entries{1},tick{40},  // drops leader 0 (aka 0001)
+                    partition{0,1,2,3},entries{1}                  // 0 (aka 0001) disrupts
+                    }}));
 
 // TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
