@@ -60,6 +60,7 @@
 namespace service {
 class migration_manager;
 class query_state;
+class raft_group_registry;
 }
 
 namespace cql3 {
@@ -123,6 +124,7 @@ private:
     service::migration_notifier& _mnotifier;
     service::migration_manager& _mm;
     const cql_config& _cql_config;
+    sharded<service::raft_group_registry>& _raft;
 
     struct stats {
         uint64_t prepare_invocations = 0;
@@ -156,7 +158,7 @@ public:
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
+    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, sharded<service::raft_group_registry>& raft);
 
     ~query_processor();
 
@@ -170,6 +172,10 @@ public:
 
     service::storage_proxy& proxy() {
         return _proxy;
+    }
+
+    sharded<service::raft_group_registry>& raft() {
+        return _raft;
     }
 
     const service::migration_manager& get_migration_manager() const noexcept { return _mm; }
