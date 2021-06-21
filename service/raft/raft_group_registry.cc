@@ -143,6 +143,8 @@ void raft_group_registry::init_rpc_verbs() {
                 raft_group_registry& self) -> future<raft::success_or_bounce> {
 
             return cas_or_bounce(gid, [addr] (const raft::server& server) -> future<raft::server_address_set> {
+                rslog.info("Adding node to Raft Group 0 {}",
+                    ser::deserialize_from_buffer(addr.info, boost::type<gms::inet_address>{}));
                 auto configuration = server.get_configuration().current;
                 configuration.emplace(std::move(addr));
                 co_return configuration;
@@ -160,6 +162,7 @@ void raft_group_registry::init_rpc_verbs() {
 
             return cas_or_bounce(gid, [sid] (const raft::server& server) -> future<raft::server_address_set> {
                 auto configuration = server.get_configuration().current;
+                rslog.info("Removing node to Raft Group 0 {}", sid);
                 configuration.erase(raft::server_address{.id = sid});
                 co_return configuration;
             });
@@ -408,6 +411,7 @@ raft_group_registry::discover_leader() {
             co_await with_gate(_shutdown_gate,
                 [this, tracker, &discovery, peer, timeout, from = std::move(req.first), msg = std::move(req.second)] () -> future<> {
 
+                rslog.info("Sending discovery message to {}", peer);
                 auto reply = co_await _ms.send_raft_peer_exchange(peer, timeout, std::move(msg));
                 // Check if this loop iteration has completed already
                 // before accessing discovery, which may be gone.
@@ -503,6 +507,7 @@ future<> raft_group_registry::join_raft_group0() {
     if (leader.id != _my_addr.id) {
         co_await rpc_until_success(leader, [this, group0_id] (auto peer, auto timeout)
                 -> future<raft::success_or_bounce> {
+            rslog.info("Sending add node RPC to {}", peer);
             co_return co_await _ms.send_raft_add_server(peer, timeout, group0_id, _my_addr);
         });
     }
