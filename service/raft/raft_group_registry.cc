@@ -198,15 +198,17 @@ seastar::future<> raft_group_registry::init() {
     // different shards by always querying shard 0.
     _my_addr = co_await container().invoke_on(0, [] (raft_group_registry& self) -> future<raft::server_address> {
         return with_semaphore(self._my_addr_sem, 1, [&self] () -> future<raft::server_address> {
-            if (self._my_addr.id == raft::server_id{}) {
-                self._my_addr.id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
-                if (self._my_addr.id == raft::server_id{}) {
-                    self._my_addr.id = raft::server_id::create_random_id();
-                    co_await db::system_keyspace::set_raft_server_id(self._my_addr.id.id);
+            // Workaround for https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95111
+            auto self_ptr = &self;
+            if (self_ptr->_my_addr.id == raft::server_id{}) {
+                self_ptr->_my_addr.id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
+                if (self_ptr->_my_addr.id == raft::server_id{}) {
+                    self_ptr->_my_addr.id = raft::server_id::create_random_id();
+                    co_await db::system_keyspace::set_raft_server_id(self_ptr->_my_addr.id.id);
                 }
-                self._my_addr.info = ser::serialize_to_buffer<bytes>(self._gossiper.get_broadcast_address());
+                self_ptr->_my_addr.info = ser::serialize_to_buffer<bytes>(self_ptr->_gossiper.get_broadcast_address());
             }
-            co_return self._my_addr;
+            co_return self_ptr->_my_addr;
         });
     });
     // Once a Raft server starts, it soon times out
