@@ -44,7 +44,9 @@ using namespace std::placeholders;
 
 static seastar::logger tlogger("test");
 
-lowres_clock::duration tick_delta = 1ms;
+// Using slower but precise clock
+size_t tick_delta_n = 1000;
+seastar::steady_clock_type::duration tick_delta = tick_delta_n * 1us;   // 1ms
 
 auto dummy_command = std::numeric_limits<int>::min();
 
@@ -267,7 +269,7 @@ class raft_cluster {
     bool _prevote;
     apply_fn _apply;
     std::unordered_set<size_t> _in_configuration;   // Servers in current configuration
-    std::vector<seastar::timer<lowres_clock>> _tickers;
+    std::vector<seastar::timer<seastar::steady_clock_type>> _tickers;
     size_t _leader;
     std::vector<initial_state> get_states(test_case test, bool prevote);
 public:
@@ -286,15 +288,16 @@ public:
     future<> start_all();
     future<> stop_all();
     future<> wait_all();
-    void tick_all();
+    future<> tick_all();
     void disconnect(size_t id, std::optional<raft::server_id> except = std::nullopt);
     void connect_all();
     void elapse_elections();
     future<> elect_new_leader(size_t new_leader);
     future<> free_election();
-    void init_raft_tickers();
+    std::vector<seastar::steady_clock_type::duration> _tick_delay;
+    future<> init_raft_tickers();
     void pause_tickers();
-    void restart_tickers();
+    future<> restart_tickers();
     void cancel_ticker(size_t id);
     void set_ticker_callback(size_t id) noexcept;
     future<> add_entries(size_t n);
@@ -638,6 +641,11 @@ raft_cluster::raft_cluster(test_case test,
         (*_snapshots)[s.id] = states[i].snp_value;
         _servers.emplace_back(create_server(i, states[i]));
     }
+    for (size_t s = 0; s < states.size(); s++) {
+        auto delay = rand() * 4 % tick_delta_n;
+fmt::print("  server[{}] delay {:3}us\n", s, delay); // XXX
+        _tick_delay.push_back(delay * 1us); // XXX
+    }
 }
 
 future<> raft_cluster::stop_server(size_t id) {
@@ -658,7 +666,7 @@ future<> raft_cluster::start_all() {
     co_await parallel_for_each(_servers, [] (auto& r) {
         return r.server->start();
     });
-    init_raft_tickers();
+    co_await init_raft_tickers();
     BOOST_TEST_MESSAGE("Electing first leader " << _leader);
     _servers[_leader].server->wait_until_candidate();
     co_await _servers[_leader].server->wait_election_done();
@@ -676,10 +684,13 @@ future<> raft_cluster::wait_all() {
     }
 }
 
-void raft_cluster::tick_all() {
+future<> raft_cluster::tick_all() {
+    pause_tickers();
     for (auto s: _in_configuration) {
+        co_await seastar::sleep(std::chrono::microseconds(rand()));
         _servers[s].server->tick();
     }
+    co_await restart_tickers();
 }
 
 void raft_cluster::disconnect(size_t id, std::optional<raft::server_id> except) {
@@ -713,15 +724,16 @@ future<> raft_cluster::add_remaining_entries() {
     co_await add_entries(_apply_entries - _next_val);
 }
 
-void raft_cluster::init_raft_tickers() {
+future<> raft_cluster::init_raft_tickers() {
     _tickers.resize(_servers.size());
     // Only start tickers for servers in configuration
-    for (auto s: _in_configuration) {
+    co_await parallel_for_each(_in_configuration, [&] (size_t s) -> future<> {
+        co_await seastar::sleep(_tick_delay[s]);
         _tickers[s].arm_periodic(tick_delta);
         _tickers[s].set_callback([&, s] {
             _servers[s].server->tick();
         });
-    }
+    });
 }
 
 void raft_cluster::pause_tickers() {
@@ -730,10 +742,11 @@ void raft_cluster::pause_tickers() {
     }
 }
 
-void raft_cluster::restart_tickers() {
-    for (auto s: _in_configuration) {
+future<> raft_cluster::restart_tickers() {
+    co_await parallel_for_each(_in_configuration, [&] (size_t s) -> future<> {
+        co_await seastar::sleep(_tick_delay[s]);
         _tickers[s].rearm_periodic(tick_delta);
-    }
+    });
 }
 
 void raft_cluster::cancel_ticker(size_t id) {
@@ -862,7 +875,7 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
 
         // Restore connections to the original setting
         *_connected = prev_disconnected;
-        restart_tickers();
+        co_await restart_tickers();
         co_await wait_log_all();
 
     } else {  // not prevote
@@ -886,7 +899,7 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
             _connected->connect(to_raft_id(_leader));
             // Disconnect old leader from all nodes except new leader
             _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
-            restart_tickers();
+            co_await restart_tickers();
             co_await _servers[new_leader].server->wait_election_done();
 
             // Restore connections to the original setting
@@ -905,7 +918,7 @@ future<> raft_cluster::free_election() {
     elapse_elections();
     size_t node = 0;
     for (;;) {
-        tick_all();
+        co_await tick_all();
         co_await seastar::sleep(10us);   // Wait for election rpc exchanges
         // find if we have a leader
         for (auto s: _in_configuration) {
@@ -945,6 +958,7 @@ future<> raft_cluster::change_configuration(set_config sc) {
         if (!_in_configuration.contains(s)) {
             tlogger.debug("Starting node being re-added to configuration {}", s);
             co_await reset_server(s, initial_state{.log = {}});
+            co_await seastar::sleep(_tick_delay[s]);
             _tickers[s].rearm_periodic(tick_delta);
         }
     }
@@ -1058,7 +1072,7 @@ future<> raft_cluster::partition(::partition p) {
         // Old leader disconnected and not specified new, free election
         co_await free_election();
     }
-    restart_tickers();
+    co_await restart_tickers();
 }
 
 future<> raft_cluster::tick(::tick t) {
