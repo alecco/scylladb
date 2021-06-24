@@ -553,6 +553,7 @@ perf_tests = set([
 raft_tests = set([
     'test/raft/replication_test',
     'test/raft/randomized_nemesis_test',
+    'test/raft/dueling_test',
     'test/raft/fsm_test',
     'test/raft/etcd_test',
 ])
@@ -1254,6 +1255,7 @@ deps['test/boost/alternator_unit_test'] += ['alternator/base64.cc']
 
 deps['test/raft/replication_test'] = ['test/raft/replication_test.cc'] + scylla_raft_dependencies
 deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc'] + scylla_raft_dependencies
+deps['test/raft/dueling_test'] = ['test/raft/dueling_test.cc'] + scylla_raft_dependencies
 deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 
