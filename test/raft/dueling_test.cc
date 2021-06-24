@@ -47,6 +47,7 @@ static seastar::logger tlogger("test");
 // Using slower but precise clock
 size_t tick_delta_n = 1000;
 seastar::steady_clock_type::duration tick_delta = tick_delta_n * 1us;   // 1ms
+seastar::steady_clock_type::duration network_delay = 100us;             // 1/10th of tick
 
 auto dummy_command = std::numeric_limits<int>::min();
 
@@ -501,28 +502,31 @@ public:
             co_await snapshot_sync.wait();
             snapshot_sync.signal();
         }
+        co_await seastar::sleep(network_delay);   // Wait for election rpc exchanges
         co_return co_await net[id]->_client->apply_snapshot(_id, std::move(s));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
         if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            throw std::runtime_error("trying to send a message to an unknown node");
         }
         if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
+            throw std::runtime_error("cannot send append since nodes are disconnected");
         }
         if (!_packet_drops || (rand() % 5)) {
+            co_await seastar::sleep(network_delay);   // Wait for election rpc exchanges
             net[id]->_client->append_entries(_id, append_request);
         }
-        return make_ready_future<>();
+        co_return;
     }
-    virtual void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+    virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
         if (!net.count(id)) {
-            return;
+            co_return;
         }
         if (!(*_connected)(id, _id)) {
-            return;
+            co_return;
         }
         if (!_packet_drops || (rand() % 5)) {
+            co_await seastar::sleep(network_delay);   // Wait for election rpc exchanges
             net[id]->_client->append_entries_reply(_id, std::move(reply));
         }
     }
