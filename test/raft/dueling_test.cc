@@ -568,10 +568,17 @@ public:
             auto network_delay_ = network_delay;
             auto& self = *this;
             raft::vote_request vote_request_ = vote_request;
+// raft::vote_request vote_request2_ = vote_request;
 // fmt::print("[{}] -> {} send_vote_request with_gate sleep\n", _id, id_);
             co_await seastar::sleep(network_delay_);
-fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log_term {}]\n", _id, id_, vote_request_.current_term, vote_request_.last_log_term);
+fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log_term {}]\n", self._id, id_, vote_request_.current_term, vote_request_.last_log_term);
+#if 1
             self.net[id_]->_client->request_vote(self._id, std::move(vote_request_));
+#else
+self.net[id_]->_client->request_vote(self._id, vote_request_); // XXX no move
+#endif
+// fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log_term {}] SECOND\n", self._id, id_, vote_request2_.current_term, vote_request2_.last_log_term);
+// (void)vote_request_;
             co_return;
         });
     }
@@ -589,8 +596,8 @@ fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log
             raft::vote_reply vote_reply_ = vote_reply;
 // fmt::print("[{}] send_vote_reply with_gate sleep\n", _id);
             co_await seastar::sleep(network_delay_);
-fmt::print("   {} -> {}  send_vote_reply - vote req [current term {}]\n", _id, id_, vote_reply_.current_term);
-            net[id_]->_client->request_vote_reply(self._id, std::move(vote_reply_));
+fmt::print("   {} -> {}  send_vote_reply - vote req [current term {}]\n", self._id, id_, vote_reply_.current_term);
+            self.net[id_]->_client->request_vote_reply(self._id, std::move(vote_reply_));
             co_return;
         });
     }
@@ -967,12 +974,15 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
 // Run a free election of nodes in configuration
 // NOTE: there should be enough nodes capable of participating
 future<> raft_cluster::free_election() {
+fmt::print("\nRunning free election ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
     tlogger.debug("Running free election");
     elapse_elections();
     size_t node = 0;
     for (;;) {
+fmt::print("\n\nfree election tick_all() (loop) ++++++++++++++++++++++++++++\n\n");
         co_await tick_all();
-        co_await seastar::sleep(10us);   // Wait for election rpc exchanges
+// XXX how much delay?
+        co_await seastar::sleep(tick_delta);   // Wait for election rpc exchanges
         // find if we have a leader
         for (auto s: _in_configuration) {
             if (_servers[s].server->is_leader()) {
@@ -1215,7 +1225,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     for (auto update: test.updates) {
         co_await std::visit(make_visitor(
         [&rafts] (entries update) -> future<> {
-fmt::print("entries {} -------------\n", update.n);
+fmt::print("\nentries {} ---------------------------------------\n", update.n);
             co_await rafts.add_entries(update.n);
         },
         [&rafts] (new_leader update) -> future<> {
@@ -1226,7 +1236,7 @@ fmt::print("entries {} -------------\n", update.n);
             co_return;
         },
         [&rafts] (partition update) -> future<> {
-fmt::print("partition size {} -------------\n", update.size());
+fmt::print("\npartition size {} --------------------------------\n", update.size());
             co_await rafts.partition(update);
         },
         [&rafts] (stop update) -> future<> {
@@ -1297,11 +1307,19 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
     replication_test(
         // Snapshot automatic take and load
-        {.nodes = 3,
+# if 0
+        {.nodes = 150,
          .updates = {entries{1},
-                     partition{1,2}, entries{1},  // drop leader, free election
-                     partition{0, 2}, entries{20}
+                     partition{range{1,149}}, entries{1},  // drop leader, free election
+                     partition{range{0,149}}, entries{1}   // All back
                      }}
+#else
+        {.nodes = 10,
+         .updates = {entries{1},
+                     partition{range{1,9}}, entries{1},  // drop leader, free election
+                     partition{range{0,9}}, entries{1}   // All back
+                     }}
+#endif
     , false, false);
 }
 
