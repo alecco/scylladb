@@ -301,6 +301,7 @@ future<> server_impl::add_entry_internal(T command, wait_type type) {
     // This will track the commit/apply status of the entry
     auto [it, inserted] = container.emplace(e.idx, op_status{e.term, promise<>()});
     assert(inserted);
+// fmt::print("{} add_entry wait for done\n", _id);
     co_return co_await it->second.done.get_future();
 }
 
@@ -414,8 +415,10 @@ void server_impl::send_message(server_id id, Message m) {
                 auto m = std::move(cm);
                 auto id = cid;
                 try {
+// fmt::print("[{}] io_fiber sending a message to {}\n", server->_id, id);
                     co_await server->_rpc->send_append_entries(id, m);
                 } catch(...) {
+// fmt::print("[{}] io_fiber failed to send a message to {}:[{}]\n", server->_id, id, std::current_exception());
                     logger.debug("[{}] io_fiber failed to send a message to {}: {}", server->_id, id, std::current_exception());
                 }
                 server->_append_request_status[id].count--;
@@ -537,6 +540,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     send_message(m.first, std::move(m.second));
                 } catch(...) {
                     // Not being able to send a message is not a critical error
+fmt::print("[{}] io_fiber failed to send a message to {}: {}\n", _id, m.first, std::current_exception());
                     logger.debug("[{}] io_fiber failed to send a message to {}: {}", _id, m.first, std::current_exception());
                 }
             }
