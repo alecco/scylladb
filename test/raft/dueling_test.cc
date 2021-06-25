@@ -23,6 +23,7 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/later.hh>
@@ -47,6 +48,7 @@ static seastar::logger tlogger("test");
 // Using slower but precise clock
 size_t tick_delta_n = 1000;
 seastar::steady_clock_type::duration tick_delta = tick_delta_n * 1us;   // 1ms
+auto network_delay = 100us;             // 1/10th of tick
 
 auto dummy_command = std::numeric_limits<int>::min();
 
@@ -487,6 +489,10 @@ class raft_cluster::rpc : public raft::rpc {
     raft::server_address_set _known_peers;
     uint32_t _servers_added = 0;
     uint32_t _servers_removed = 0;
+    // Used to ensure that when `abort()` returns there are
+    // no more in-progress methods running on this object.
+    seastar::gate _gate;
+
 public:
     rpc(raft::server_id id, connected* connected, snapshots* snapshots,
             bool packet_drops) : _id(id), _connected(connected), _snapshots(snapshots),
@@ -516,7 +522,17 @@ public:
             return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
         }
         if (!_packet_drops || (rand() % 5)) {
-            net[id]->_client->append_entries(_id, append_request);
+            return with_gate(_gate, [&] () mutable -> future<> {
+                auto id_ = id;
+                auto network_delay_ = network_delay;
+                auto& self = *this;
+                auto append_request_ = append_request;
+// fmt::print("[{}] send_append_entries with_gate sleep\n", _id);
+                co_await seastar::sleep(network_delay_);
+// fmt::print("[{}] send_append_entries with_gate sleep\n", _id);
+                self.net[id_]->_client->append_entries(self._id, append_request_);
+                co_return;
+            });
         }
         return make_ready_future<>();
     }
@@ -528,7 +544,16 @@ public:
             return;
         }
         if (!_packet_drops || (rand() % 5)) {
-            net[id]->_client->append_entries_reply(_id, std::move(reply));
+            (void)with_gate(_gate, [this, id, reply] () mutable -> future<> {
+                auto id_ = id;
+                auto network_delay_ = network_delay;
+                auto& self = *this;
+                auto reply_ = reply;
+// fmt::print("[{}] send_append_entries_reply with_gate sleep\n", _id);
+                co_await seastar::sleep(network_delay_);
+                self.net[id_]->_client->append_entries_reply(self._id, std::move(reply_));
+                co_return;
+            });
         }
     }
     virtual void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
@@ -538,7 +563,17 @@ public:
         if (!(*_connected)(id, _id)) {
             return;
         }
-        net[id]->_client->request_vote(_id, std::move(vote_request));
+        (void)with_gate(_gate, [&] () mutable -> future<> {
+            auto id_ = id;
+            auto network_delay_ = network_delay;
+            auto& self = *this;
+            raft::vote_request vote_request_ = vote_request;
+// fmt::print("[{}] -> {} send_vote_request with_gate sleep\n", _id, id_);
+            co_await seastar::sleep(network_delay_);
+fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log_term {}]\n", _id, id_, vote_request_.current_term, vote_request_.last_log_term);
+            self.net[id_]->_client->request_vote(self._id, std::move(vote_request_));
+            co_return;
+        });
     }
     virtual void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
         if (!net.count(id)) {
@@ -547,7 +582,17 @@ public:
         if (!(*_connected)(id, _id)) {
             return;
         }
-        net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
+        (void)with_gate(_gate, [&] () mutable -> future<> {
+            auto id_ = id;
+            auto network_delay_ = network_delay;
+            auto& self = *this;
+            raft::vote_reply vote_reply_ = vote_reply;
+// fmt::print("[{}] send_vote_reply with_gate sleep\n", _id);
+            co_await seastar::sleep(network_delay_);
+fmt::print("   {} -> {}  send_vote_reply - vote req [current term {}]\n", _id, id_, vote_reply_.current_term);
+            net[id_]->_client->request_vote_reply(self._id, std::move(vote_reply_));
+            co_return;
+        });
     }
     virtual void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
         if (!net.count(id)) {
@@ -566,7 +611,10 @@ public:
         _known_peers.erase(raft::server_address{id});
         ++_servers_removed;
     }
-    virtual future<> abort() { return make_ready_future<>(); }
+    virtual future<> abort() {
+        return _gate.close();
+    }
+
     static void reset_network() {
         net.clear();
     }
@@ -1167,6 +1215,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     for (auto update: test.updates) {
         co_await std::visit(make_visitor(
         [&rafts] (entries update) -> future<> {
+fmt::print("entries {} -------------\n", update.n);
             co_await rafts.add_entries(update.n);
         },
         [&rafts] (new_leader update) -> future<> {
@@ -1177,6 +1226,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_return;
         },
         [&rafts] (partition update) -> future<> {
+fmt::print("partition size {} -------------\n", update.size());
             co_await rafts.partition(update);
         },
         [&rafts] (stop update) -> future<> {
@@ -1248,8 +1298,10 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
     replication_test(
         // Snapshot automatic take and load
         {.nodes = 3,
-         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
-         .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
+         .updates = {entries{1},
+                     partition{1,2}, entries{1},  // drop leader, free election
+                     partition{0, 2}, entries{20}
+                     }}
     , false, false);
 }
 
