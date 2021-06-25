@@ -515,6 +515,7 @@ public:
         co_return co_await net[id]->_client->apply_snapshot(_id, std::move(s));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
+// fmt::print("[{}] rpc::send_append_entries {}\n", _id, id);
         if (!net.count(id)) {
             return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
         }
@@ -522,6 +523,12 @@ public:
             return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
         }
         if (!_packet_drops || (rand() % 5)) {
+            _gate.enter();
+#if 0
+            co_await seastar::sleep(network_delay).finally([=, this] {
+                net[id]->_client->append_entries(_id, append_request);
+            });
+#endif
             return with_gate(_gate, [&] () mutable -> future<> {
                 auto id_ = id;
                 auto network_delay_ = network_delay;
@@ -529,7 +536,7 @@ public:
                 auto append_request_ = append_request;
 // fmt::print("[{}] send_append_entries with_gate sleep\n", _id);
                 co_await seastar::sleep(network_delay_);
-// fmt::print("[{}] send_append_entries with_gate sleep\n", _id);
+// fmt::print("[{}] send_append_entries with_gate sleep {}\n", _id, id_);
                 self.net[id_]->_client->append_entries(self._id, append_request_);
                 co_return;
             });
@@ -568,10 +575,18 @@ public:
             auto network_delay_ = network_delay;
             auto& self = *this;
             raft::vote_request vote_request_ = vote_request;
+// raft::vote_request vote_request2_ = vote_request;
 // fmt::print("[{}] -> {} send_vote_request with_gate sleep\n", _id, id_);
             co_await seastar::sleep(network_delay_);
-fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log_term {}]\n", _id, id_, vote_request_.current_term, vote_request_.last_log_term);
+fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log_term {}]\n", self._id, id_, vote_request_.current_term, vote_request_.last_log_term);
+// fmt::print("{}{}{}", id_? "" : "", vote_request_.current_term ? "" : "", vote_request_.last_log_term ? "" : "");
+#if 1
             self.net[id_]->_client->request_vote(self._id, std::move(vote_request_));
+#else
+self.net[id_]->_client->request_vote(self._id, vote_request_); // XXX no move
+#endif
+// fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log_term {}] SECOND\n", self._id, id_, vote_request2_.current_term, vote_request2_.last_log_term);
+// (void)vote_request_;
             co_return;
         });
     }
@@ -587,10 +602,10 @@ fmt::print("   {} -> {}  send_vote_request - vote req [current term {}, last_log
             auto network_delay_ = network_delay;
             auto& self = *this;
             raft::vote_reply vote_reply_ = vote_reply;
-// fmt::print("[{}] send_vote_reply with_gate sleep\n", _id);
             co_await seastar::sleep(network_delay_);
-fmt::print("   {} -> {}  send_vote_reply - vote req [current term {}]\n", _id, id_, vote_reply_.current_term);
-            net[id_]->_client->request_vote_reply(self._id, std::move(vote_reply_));
+fmt::print("[{}] send_vote_reply to {} [{} {}]\n", _id, id_, vote_reply_.current_term, vote_reply_.vote_granted);
+// fmt::print("{}{}{}", id_? "" : "", vote_reply_.current_term ? "" : "", vote_reply_.current_term ? "" : "");
+            self.net[id_]->_client->request_vote_reply(self._id, std::move(vote_reply_));
             co_return;
         });
     }
@@ -719,10 +734,14 @@ future<> raft_cluster::start_all() {
     co_await parallel_for_each(_servers, [] (auto& r) {
         return r.server->start();
     });
-    co_await init_raft_tickers();
-    BOOST_TEST_MESSAGE("Electing first leader " << _leader);
     _servers[_leader].server->wait_until_candidate();
+fmt::print("  electing first leader {} --------------------------------\n", to_raft_id(_leader));
+    co_await init_raft_tickers();
+fmt::print("  init tickers\n");
+    BOOST_TEST_MESSAGE("Electing first leader " << _leader);
     co_await _servers[_leader].server->wait_election_done();
+fmt::print("  first leader {} DONE\n\n", to_raft_id(_leader));
+    // XXX wait for dummy to be propagated
 }
 
 future<> raft_cluster::stop_all() {
@@ -733,6 +752,7 @@ future<> raft_cluster::stop_all() {
 
 future<> raft_cluster::wait_all() {
     for (auto s: _in_configuration) {
+// fmt::print("  wait {} --------------------------------\n", to_raft_id(s));
         co_await _servers[s].sm->done();
     }
 }
@@ -759,7 +779,9 @@ future<> raft_cluster::add_entries(size_t n) {
     size_t end = _next_val + n;
     while (_next_val != end) {
         try {
+fmt::print("  add entry {} on {}\n", _next_val, _leader);
             co_await _servers[_leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
+// fmt::print("  add entry done\n");
             _next_val++;
         } catch (raft::not_a_leader& e) {
             // leader stepped down, update with new leader if present
@@ -967,12 +989,18 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
 // Run a free election of nodes in configuration
 // NOTE: there should be enough nodes capable of participating
 future<> raft_cluster::free_election() {
+fmt::print("\n\n\nRunning free election ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n\n");
     tlogger.debug("Running free election");
     elapse_elections();
     size_t node = 0;
     for (;;) {
-        co_await tick_all();
-        co_await seastar::sleep(10us);   // Wait for election rpc exchanges
+fmt::print("\n\nfree election loop ++++++++++++++++++++++++++++\n\n");
+
+
+// XXX from partition tickers are paused, from config change not... sigh
+        // XXX co_await tick_all();   // XXX XXX XXX no, use normal ticks!
+// XXX how much delay?
+        co_await seastar::sleep(tick_delta);   // Wait for election rpc exchanges
         // find if we have a leader
         for (auto s: _in_configuration) {
             if (_servers[s].server->is_leader()) {
@@ -1095,6 +1123,7 @@ future<> raft_cluster::partition(::partition p) {
         } else if (std::holds_alternative<struct range>(s)) {
             auto range = std::get<struct range>(s);
             for (size_t id = range.start; id <= range.end; id++) {
+                assert(id < _servers.size());
                 partition_servers.insert(id);
             }
         } else {
@@ -1123,12 +1152,12 @@ future<> raft_cluster::partition(::partition p) {
     }
     if (next_leader) {
         // New leader specified, elect it
-        co_await elect_new_leader(*next_leader);
+        co_await elect_new_leader(*next_leader); // restarts tickers
     } else if (partition_servers.find(_leader) == partition_servers.end() && p.size() > 0) {
         // Old leader disconnected and not specified new, free election
+        co_await restart_tickers();
         co_await free_election();
     }
-    co_await restart_tickers();
 }
 
 future<> raft_cluster::tick(::tick t) {
@@ -1215,7 +1244,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     for (auto update: test.updates) {
         co_await std::visit(make_visitor(
         [&rafts] (entries update) -> future<> {
-fmt::print("entries {} -------------\n", update.n);
+fmt::print("\nentries {} ---------------------------------------\n", update.n);
             co_await rafts.add_entries(update.n);
         },
         [&rafts] (new_leader update) -> future<> {
@@ -1226,7 +1255,7 @@ fmt::print("entries {} -------------\n", update.n);
             co_return;
         },
         [&rafts] (partition update) -> future<> {
-fmt::print("partition size {} -------------\n", update.size());
+fmt::print("\npartition size {} --------------------------------\n", update.size());
             co_await rafts.partition(update);
         },
         [&rafts] (stop update) -> future<> {
@@ -1269,9 +1298,11 @@ fmt::print("partition size {} -------------\n", update.size());
     if (test.total_values > 0) {
         BOOST_TEST_MESSAGE("Appending remaining values");
         co_await rafts.add_remaining_entries();
+fmt::print("final wait all --------------------------------\n");
         co_await rafts.wait_all();
     }
 
+fmt::print("stop all --------------------------------\n");
     co_await rafts.stop_all();
 
     if (test.total_values > 0) {
@@ -1297,11 +1328,19 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
     replication_test(
         // Snapshot automatic take and load
-        {.nodes = 3,
+# if 0
+        {.nodes = 150,
          .updates = {entries{1},
-                     partition{1,2}, entries{1},  // drop leader, free election
-                     partition{0, 2}, entries{20}
+                     partition{range{1,149}}, entries{1},  // drop leader, free election
+                     partition{range{0,149}}, entries{1}   // All back
                      }}
+#else
+        {.nodes = 68, .total_values = 10,
+         .updates = {entries{1},
+                     partition{range{1,67}}, // XXX remember to match .nodes
+                     entries{1},             // drop leader, free election
+                     }}
+#endif
     , false, false);
 }
 
