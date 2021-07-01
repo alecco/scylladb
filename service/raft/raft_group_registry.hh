@@ -63,9 +63,6 @@ struct raft_group_not_found: public raft::error {
 // to the owning shard for a given raft group_id.
 class raft_group_registry : public seastar::peering_sharded_service<raft_group_registry> {
 public:
-    using ticker_type = seastar::timer<lowres_clock>;
-    // TODO: should be configurable.
-    static constexpr ticker_type::duration tick_interval = std::chrono::milliseconds(100);
 private:
     seastar::gate _shutdown_gate;
     seastar::abort_source _abort_source;
@@ -88,7 +85,7 @@ private:
     struct server_for_group {
         raft::group_id gid;
         std::unique_ptr<raft::server> server;
-        std::unique_ptr<ticker_type> ticker;
+        std::unique_ptr<raft_ticker_type> ticker;
         raft_rpc& rpc;
     };
     // Raft servers along with the corresponding timers to tick each instance.
@@ -157,15 +154,6 @@ public:
     // arm the associated timer to tick the server.
     future<> start_server_for_group(server_for_group grp);
     unsigned shard_for_group(const raft::group_id& gid) const;
-
-    // Map raft server_id to inet_address to be consumed by `messaging_service`
-    gms::inet_address get_inet_address(raft::server_id id) const;
-    // Update inet_address mapping for a raft server with a given id.
-    // In case a mapping exists for a given id, it should be equal to the supplied `addr`
-    // otherwise the function will throw.
-    void update_address_mapping(raft::server_id id, gms::inet_address addr, bool expiring);
-    // Remove inet_address mapping for a raft server
-    void remove_address_mapping(raft::server_id);
 
     // Join this node to the cluster-wide Raft group
     // Called during bootstrap. Is idempotent - it

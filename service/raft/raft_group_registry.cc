@@ -42,7 +42,7 @@ namespace service {
 logging::logger rslog("raft_group_registry");
 
 raft_group_registry::raft_group_registry(netw::messaging_service& ms, gms::gossiper& gs, sharded<cql3::query_processor>& qp)
-    : _ms(ms), _gossiper(gs), _qp(qp), _fd(make_shared<raft_gossip_failure_detector>(gs, *this))
+    : _ms(ms), _gossiper(gs), _qp(qp), _fd(make_shared<raft_gossip_failure_detector>(gs, _srv_address_mappings))
 {
 }
 
@@ -57,7 +57,7 @@ void raft_group_registry::init_rpc_verbs() {
             auto& rpc = self.get_rpc(gid);
             // The address learnt from a probably unknown server should
             // eventually expire
-            self.update_address_mapping(from, std::move(addr), true);
+            self._srv_address_mappings.set(from, std::move(addr), true);
             // Execute the actual message handling code
             return handler(rpc);
         });
@@ -246,7 +246,7 @@ raft::server& raft_group_registry::get_server(raft::group_id gid) {
 
 raft_group_registry::server_for_group raft_group_registry::create_server_for_group(raft::group_id gid) {
 
-    auto rpc = std::make_unique<raft_rpc>(_ms, *this, gid, _my_addr.id);
+    auto rpc = std::make_unique<raft_rpc>(_ms, _srv_address_mappings, gid, _my_addr.id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(_qp.local(), gid);
@@ -255,7 +255,7 @@ raft_group_registry::server_for_group raft_group_registry::create_server_for_gro
             std::move(storage), _fd, raft::server::configuration());
 
     // initialize the corresponding timer to tick the raft server instance
-    auto ticker = std::make_unique<ticker_type>([srv = server.get()] { srv->tick(); });
+    auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
 
     return server_for_group{
         .gid = std::move(gid),
@@ -284,27 +284,11 @@ future<> raft_group_registry::start_server_for_group(server_for_group new_grp) {
         on_internal_error(rslog, std::current_exception());
     }
 
-    grp.ticker->arm_periodic(tick_interval);
+    grp.ticker->arm_periodic(raft_tick_interval);
 }
 
 unsigned raft_group_registry::shard_for_group(const raft::group_id& gid) const {
     return 0; // schema raft server is always owned by shard 0
-}
-
-gms::inet_address raft_group_registry::get_inet_address(raft::server_id id) const {
-    auto it = _srv_address_mappings.find(id);
-    if (!it) {
-        on_internal_error(rslog, format("Destination raft server not found with id {}", id));
-    }
-    return *it;
-}
-
-void raft_group_registry::update_address_mapping(raft::server_id id, gms::inet_address addr, bool expiring) {
-    _srv_address_mappings.set(id, std::move(addr), expiring);
-}
-
-void raft_group_registry::remove_address_mapping(raft::server_id id) {
-    _srv_address_mappings.erase(id);
 }
 
 future<raft::server_address>
