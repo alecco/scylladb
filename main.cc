@@ -869,11 +869,16 @@ int main(int ac, char** av) {
             gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
             // #293 - do not stop anything
             //engine().at_exit([]{ return gms::get_gossiper().stop(); });
-            supervisor::notify("starting Raft service");
-            raft_gr.start(std::ref(messaging), std::ref(gossiper), std::ref(qp)).get();
+            supervisor::notify("starting Raft Group Registry service");
+            raft_gr.start(std::ref(messaging), std::ref(gossiper)).get();
+            // XXX: stop_raft has to happen before query_processor
+            // is stopped, since some groups keep using the query
+            // processor until are stopped inside stop_raft.
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
+            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
+
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
@@ -1103,11 +1108,6 @@ int main(int ac, char** av) {
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
             });
-            supervisor::notify("starting Raft RPC");
-            raft_gr.invoke_on_all(&service::raft_group_registry::init).get();
-            auto stop_raft_rpc = defer_verbose_shutdown("Raft RPC", [&raft_gr] {
-                raft_gr.invoke_on_all(&service::raft_group_registry::uninit).get();
-            });
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging, mm).get();
             auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {
@@ -1217,7 +1217,7 @@ int main(int ac, char** av) {
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.init_server();
+                return ss.init_server(qp.local());
             }).get();
 
             sst_format_selector.sync();

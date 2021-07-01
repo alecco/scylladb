@@ -48,7 +48,7 @@
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "service/raft/raft_group_registry.hh"
+#include "service/raft/raft_group0.hh"
 #include "to_string.hh"
 #include "gms/gossiper.hh"
 #include "gms/failure_detector.hh"
@@ -144,7 +144,6 @@ storage_service::storage_service(abort_source& abort_source,
     if (snitch.local_is_initialized()) {
         _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
-    (void) _raft_gr;
 }
 
 void storage_service::enable_all_features() {
@@ -646,7 +645,7 @@ void storage_service::join_token_ring(int delay) {
     // initialization fails, the node is visible to removenode
     // which can be used to clean this node's state from the
     // cluster.
-    _raft_gr.join_raft_group0().get();
+    _group0->join_raft_group0().get();
 
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
@@ -747,7 +746,7 @@ void storage_service::bootstrap() {
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             db::system_keyspace::remove_endpoint(*replace_addr).get();
         }
-        _raft_gr.leave_raft_group0().get();
+        _group0->leave_raft_group0().get();
     }
 
     _db.invoke_on_all([this] (database& db) {
@@ -1405,11 +1404,14 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::init_server(bind_messaging_port do_bind) {
+future<> storage_service::init_server(cql3::query_processor& qp, bind_messaging_port do_bind) {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, do_bind] {
+    return seastar::async([this, &qp, do_bind] {
         _initialized = true;
+
+        _group0 = std::make_unique<raft_group0>(_raft_gr, _messaging.local(), _gossiper, qp,
+            _migration_manager.local());
 
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state()) {
@@ -1517,9 +1519,13 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_singal_abort(std::nullopt);
     _listeners.clear();
-    return _schema_version_publisher.join().finally([this] {
-        return std::move(_node_ops_abort_thread);
-    });
+    future<> group0_f =_group0 ?  _group0->abort() : make_ready_future<>();
+    return when_all_succeed(
+        _schema_version_publisher.join().finally([this] {
+            return std::move(_node_ops_abort_thread);
+        }),
+        std::move(group0_f)
+    ).discard_result();
 }
 
 future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
@@ -2382,7 +2388,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
 
 
                 // Step 5: Announce the node has left
-                ss._raft_gr.leave_raft_group0().get();
+                ss._group0->leave_raft_group0().get();
                 ss._gossiper.advertise_token_removed(endpoint, host_id).get();
                 std::unordered_set<token> tmp(tokens.begin(), tokens.end());
                 ss.excise(std::move(tmp), endpoint);
@@ -3617,10 +3623,29 @@ void storage_service::init_messaging_service() {
     _messaging.local().register_replication_finished([] (gms::inet_address from) {
         return get_local_storage_service().confirm_replication(from);
     });
+
+    auto peer_exchange_impl = [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::peer_list peers) -> future<raft::peer_exchange> {
+
+        return container().invoke_on(0 /* group 0 is on shard 0 */, [peers = std::move(peers)] (
+                storage_service& self) -> future<raft::peer_exchange> {
+
+            if (self._group0) {
+                return self._group0->peer_exchange(std::move(peers));
+            } else {
+                return make_ready_future<raft::peer_exchange>(raft::peer_exchange{raft::no_discovery{}});
+            }
+        });
+    };
+
+    _messaging.local().register_raft_peer_exchange(peer_exchange_impl);
 }
 
 future<> storage_service::uninit_messaging_service() {
-    return _messaging.local().unregister_replication_finished();
+    return when_all_succeed(
+        _messaging.local().unregister_replication_finished(),
+        _messaging.local().unregister_raft_peer_exchange()
+    ).discard_result();
 }
 
 void storage_service::do_isolate_on_error(disk_error type)
@@ -3685,7 +3710,7 @@ future<> storage_service::force_remove_completion() {
                             slogger.warn("No host_id is found for endpoint {}", endpoint);
                             continue;
                         }
-                        ss._raft_gr.leave_raft_group0().get();
+                        ss._group0->leave_raft_group0().get();
                         ss._gossiper.advertise_token_removed(endpoint, host_id).get();
                         std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
                         ss.excise(tokens_set, endpoint);

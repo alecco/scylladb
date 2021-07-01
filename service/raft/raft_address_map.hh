@@ -21,6 +21,7 @@
 #pragma once
 
 #include "gms/inet_address.hh"
+#include "gms/inet_address_serializer.hh"
 #include "raft/raft.hh"
 
 #include <seastar/core/lowres_clock.hh>
@@ -346,6 +347,11 @@ public:
             on_internal_error(rslog, format("Destination raft server not found with id {}", id));
         }
         return *it;
+    }
+    raft::server_address get_server_address(raft::server_id id) const {
+        return raft::server_address{.id = id,
+                .info = ser::serialize_to_buffer<bytes>(get_inet_address(id))
+        };
     }
 };
 

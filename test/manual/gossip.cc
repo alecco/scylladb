@@ -96,7 +96,7 @@ int main(int ac, char ** av) {
             messaging.start(listen).get();
             gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg)).get();
 
-            raft_gr.start(std::ref(messaging), std::ref(gms::get_gossiper()), std::ref(qp)).get();
+            raft_gr.start(std::ref(messaging), std::ref(gms::get_gossiper())).get();
             auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
             service::init_storage_service(std::ref(abort_sources),

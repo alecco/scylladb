@@ -535,8 +535,8 @@ public:
             sharded<repair_service> repair;
             sharded<cql3::query_processor> qp;
             sharded<service::raft_group_registry> raft_gr;
-            raft_gr.start(std::ref(ms), std::ref(gms::get_gossiper()), std::ref(qp)).get();
-            auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
+            raft_gr.start(std::ref(ms), std::ref(gms::get_gossiper())).get();
+            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
@@ -655,18 +655,16 @@ public:
             auto stop_database_d = defer([&db] {
                 stop_database(db).get();
             });
+            // XXX: stop_raft before stopping the database and
+            // query processor. Group registry stop raft groups
+            // when stopped, and until then the groups may use
+            // the database and the query processor.
+            auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
-
-            // We need to have a system keyspace started and
-            // initialized to initialize Raft service.
-            raft_gr.invoke_on_all(&service::raft_group_registry::init).get();
-            auto stop_raft_rpc = defer([&raft_gr] {
-                raft_gr.invoke_on_all(&service::raft_group_registry::uninit).get();
-            });
 
             cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service)).get();
             auto stop_cdc_generation_service = defer([&cdc_generation_service] {
@@ -680,7 +678,7 @@ public:
                 cdc.stop().get();
             });
 
-            service::get_local_storage_service().init_server(service::bind_messaging_port(false)).get();
+            service::get_local_storage_service().init_server(qp.local(), service::bind_messaging_port(false)).get();
             service::get_local_storage_service().join_cluster().get();
 
             auth::permissions_cache_config perm_cache_config;
