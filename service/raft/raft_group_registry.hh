@@ -56,6 +56,14 @@ struct raft_group_not_found: public raft::error {
     {}
 };
 
+// An entry in the group registry
+struct raft_server_for_group {
+    raft::group_id gid;
+    std::unique_ptr<raft::server> server;
+    std::unique_ptr<raft_ticker_type> ticker;
+    raft_rpc& rpc;
+};
+
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
 //
@@ -82,15 +90,9 @@ private:
     // created.
     std::variant<raft::no_discovery, raft::discovery, raft::group_id> _group0;
 
-    struct server_for_group {
-        raft::group_id gid;
-        std::unique_ptr<raft::server> server;
-        std::unique_ptr<raft_ticker_type> ticker;
-        raft_rpc& rpc;
-    };
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
-    std::unordered_map<raft::group_id, server_for_group> _servers;
+    std::unordered_map<raft::group_id, raft_server_for_group> _servers;
     // inet_address:es for remote raft servers known to us
     raft_address_map<> _srv_address_mappings;
 
@@ -98,9 +100,9 @@ private:
     seastar::future<> uninit_rpc_verbs();
     seastar::future<> stop_servers();
 
-    server_for_group create_server_for_group(raft::group_id id);
+    raft_server_for_group create_server_for_group(raft::group_id id);
 
-    server_for_group& get_server_for_group(raft::group_id id);
+    raft_server_for_group& server_for_group(raft::group_id id);
     // A helper function to get the current Raft group leader.
     // Checks if this server is a leader, and if it's the
     // case, returns its address.
@@ -152,7 +154,7 @@ public:
 
     // Start raft server instance, store in the map of raft servers and
     // arm the associated timer to tick the server.
-    future<> start_server_for_group(server_for_group grp);
+    future<> start_server_for_group(raft_server_for_group grp);
     unsigned shard_for_group(const raft::group_id& gid) const;
 
     // Join this node to the cluster-wide Raft group

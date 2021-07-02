@@ -228,7 +228,7 @@ seastar::future<> raft_group_registry::uninit() {
     ).discard_result();
 }
 
-raft_group_registry::server_for_group& raft_group_registry::get_server_for_group(raft::group_id gid) {
+raft_server_for_group& raft_group_registry::server_for_group(raft::group_id gid) {
     auto it = _servers.find(gid);
     if (it == _servers.end()) {
         throw raft_group_not_found(gid);
@@ -237,14 +237,14 @@ raft_group_registry::server_for_group& raft_group_registry::get_server_for_group
 }
 
 raft_rpc& raft_group_registry::get_rpc(raft::group_id gid) {
-    return get_server_for_group(gid).rpc;
+    return server_for_group(gid).rpc;
 }
 
 raft::server& raft_group_registry::get_server(raft::group_id gid) {
-    return *(get_server_for_group(gid).server);
+    return *(server_for_group(gid).server);
 }
 
-raft_group_registry::server_for_group raft_group_registry::create_server_for_group(raft::group_id gid) {
+raft_server_for_group raft_group_registry::create_server_for_group(raft::group_id gid) {
 
     auto rpc = std::make_unique<raft_rpc>(_ms, _srv_address_mappings, gid, _my_addr.id);
     // Keep a reference to a specific RPC class.
@@ -257,7 +257,7 @@ raft_group_registry::server_for_group raft_group_registry::create_server_for_gro
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
 
-    return server_for_group{
+    return raft_server_for_group{
         .gid = std::move(gid),
         .server = std::move(server),
         .ticker = std::move(ticker),
@@ -265,7 +265,7 @@ raft_group_registry::server_for_group raft_group_registry::create_server_for_gro
     };
 }
 
-future<> raft_group_registry::start_server_for_group(server_for_group new_grp) {
+future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
     auto gid = new_grp.gid;
     auto [it, inserted] = _servers.emplace(std::move(gid), std::move(new_grp));
 
