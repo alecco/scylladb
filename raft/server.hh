@@ -170,6 +170,8 @@ public:
     virtual void elapse_election() = 0;
     virtual bool is_leader() = 0;
     virtual void tick() = 0;
+    // Server id of this server
+    virtual raft::server_id id() const = 0;
 private:
     // Serialize concurrent CAS operations in a single Raft group
     // XXX: the semaphore should be parameterized with clock type?
