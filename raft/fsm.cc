@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "fsm.hh"
+#include <chrono>  // XXX debugging
 #include <random>
 #include <seastar/core/coroutine.hh>
 
@@ -142,8 +143,22 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
+#if 1
     static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
+    auto candidate_timeout = dist(re);
+#else
+    std::exponential_distribution<> dist(0.3);
+    size_t candidate_timeout;
+size_t retries = 0;
+    do {
+        candidate_timeout = dist(re);
+retries++;
+    } while (candidate_timeout == 0 || candidate_timeout > ELECTION_TIMEOUT.count());
+    candidate_timeout = ELECTION_TIMEOUT.count() - candidate_timeout;
+#endif
+    logger.trace("{} candidate timeout {}", _my_id, candidate_timeout);
+// fmt::print("{} CANDIDATE TIMEOUT {} (retries {})\n", _my_id, candidate_timeout, retries); // XXX
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{candidate_timeout};
 }
 
 void fsm::become_leader() {
@@ -520,8 +535,8 @@ void fsm::tick() {
         // simply because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
-fmt::print("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}, log (idx {} term {}), {}, current_leader {} alive {}<<<<<\n\n", _my_id, _current_term, _last_election_time, _clock.now(), _log.last_idx(), _log.last_term(), _config.enable_prevoting? "PREVOTE" : "NORMAL", current_leader(),
-            _failure_detector.is_alive(current_leader()));
+fmt::print("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}, log (idx {} term {}), {}, current_leader {} alive {} now {} <<<<<\n\n", _my_id, _current_term, _last_election_time, _clock.now(), _log.last_idx(), _log.last_term(), _config.enable_prevoting? "PREVOTE" : "NORMAL", current_leader(),
+            _failure_detector.is_alive(current_leader()), std::chrono::high_resolution_clock::now().time_since_epoch().count());
         logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _my_id,
             _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
