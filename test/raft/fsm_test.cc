@@ -2051,3 +2051,24 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_force_vote_request) {
     auto final_leader = select_leader(B, C);
     BOOST_CHECK(final_leader->id() == timeout_now_target_id);
 }
+
+BOOST_AUTO_TEST_CASE(test_many_backoff) {
+    /// Check follower backs off when it sees a valid precandidate
+
+    raft::server_id A_id = id(), B_id = id();
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({A_id, B_id})});
+    discrete_failure_detector fd;
+    auto fsm = create_follower(A_id, log, fd);
+
+    // candidate timeout 10+1
+    fsm.set_randomized_election_timeout(ELECTION_TIMEOUT + raft::logical_clock::duration{1});
+    election_threshold(fsm);
+    auto vreq = raft::vote_request{term_t{1}, index_t{1}, term_t{1}};
+    vreq.is_prevote = true;
+    fsm.step(B_id, std::move(vreq));
+    auto candidate_threshold = fsm.get_randomized_election_timeout();
+    // candidate timeout > 10+2
+    BOOST_CHECK_MESSAGE(candidate_threshold > (ELECTION_TIMEOUT + raft::logical_clock::duration{2}),
+            "expected candidate threshold to be higher");
+}
