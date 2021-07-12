@@ -143,21 +143,21 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-#if 1
-    static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
+size_t retries = 0;
+#if 0
+    static thread_local std::uniform_int_distribution<> dist(min, ELECTION_TIMEOUT.count());
     auto candidate_timeout = dist(re);
 #else
-    std::exponential_distribution<> dist(0.3);
-    size_t candidate_timeout;
-size_t retries = 0;
+    std::exponential_distribution<> dist(0.3); // XXX 0.3 is curve, 0.005 is almost flat
+    int candidate_timeout;   // need signed type as exponential dist is unbound
     do {
         candidate_timeout = dist(re);
 retries++;
-    } while (candidate_timeout == 0 || candidate_timeout > ELECTION_TIMEOUT.count());
+    } while (candidate_timeout == 0 || candidate_timeout >= ELECTION_TIMEOUT.count());
+
     candidate_timeout = ELECTION_TIMEOUT.count() - candidate_timeout;
 #endif
     logger.trace("{} candidate timeout {}", _my_id, candidate_timeout);
-// fmt::print("{} CANDIDATE TIMEOUT {} (retries {})\n", _my_id, candidate_timeout, retries); // XXX
     _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{candidate_timeout};
 }
 
@@ -535,8 +535,7 @@ void fsm::tick() {
         // simply because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
-fmt::print("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}, log (idx {} term {}), {}, current_leader {} alive {} now {} <<<<<\n\n", _my_id, _current_term, _last_election_time, _clock.now(), _log.last_idx(), _log.last_term(), _config.enable_prevoting? "PREVOTE" : "NORMAL", current_leader(),
-            _failure_detector.is_alive(current_leader()), std::chrono::high_resolution_clock::now().time_since_epoch().count());
+// fmt::print("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}, log (idx {} term {}), {}, current_leader {} alive {} now {} <<<<<\n\n", _my_id, _current_term, _last_election_time, _clock.now(), _log.last_idx(), _log.last_term(), _config.enable_prevoting? "PREVOTE" : "NORMAL", current_leader(), _failure_detector.is_alive(current_leader()), std::chrono::high_resolution_clock::now().time_since_epoch().count());
         logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _my_id,
             _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
@@ -682,7 +681,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 }
 
 void fsm::request_vote(server_id from, vote_request&& request) {
-if (is_candidate()) fmt::print("{} CANDIDATE request_vote from {} term {}\n", _my_id, from, request.current_term);
+// if (is_candidate()) fmt::print("{} CANDIDATE term {} request_vote from {} term {}\n", _my_id, _current_term, from, request.current_term);
 // fmt::print("{} request_vote from {} term {} last_log_term {}\n", _my_id, from, request.current_term, request.last_log_term);
 
     // We can cast a vote in any state. If the candidate's term is
@@ -713,6 +712,15 @@ if (is_candidate()) fmt::print("{} CANDIDATE request_vote from {} term {}\n", _m
             // timer. See Raft Summary.
             _last_election_time = _clock.now();
             _voted_for = from;
+        }
+// if (is_follower() && request.is_prevote) fmt::print("{} prevote for {} timeout {} elapsed {}\n", _my_id, from, _randomized_election_timeout, election_elapsed());
+        if (is_follower() && request.is_prevote &&
+                (election_elapsed() + prevote_election_backoff) >= _randomized_election_timeout) {
+            // Give pre-candidate at least two ticks minimum to run it's election
+fmt::print("\n{} prevote for {} timeout {} elapsed {} ", _my_id, from, _randomized_election_timeout, election_elapsed());
+            _randomized_election_timeout += prevote_election_backoff;
+fmt::print("new timeout {} <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n\n", _randomized_election_timeout);
+// XXX here if prevote and msg vote_granted, give the candidate some spare time
         }
         // The term in the original message and current local term are the
         // same in the case of regular votes, but different for pre-votes.
@@ -759,16 +767,16 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
 // fmt::print("{} vote_result UNKNOWN\n", _my_id);
         break;
     case vote_result::WON:
-fmt::print("{} vote_result WON now {}\n", _my_id, _clock.now());
+// fmt::print("{} vote_result WON now {}\n", _my_id, _clock.now());
         if (state.is_prevote) {
-fmt::print("{} vote_result WON -> actual vote (is_prevote {})\n\n", _my_id, state.is_prevote);
+// fmt::print("{} vote_result WON -> actual vote (is_prevote {})\n\n", _my_id, state.is_prevote);
             become_candidate(false);
         } else {
             become_leader();
         }
         break;
     case vote_result::LOST:
-fmt::print("{} vote_result LOST now {}\n", _my_id, _clock.now());
+// fmt::print("{} vote_result LOST now {}\n", _my_id, _clock.now());
         become_follower(server_id{});
         break;
     }
