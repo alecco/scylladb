@@ -287,7 +287,7 @@ private:
     // Tick implementation on a leader
     void tick_leader();
 
-    void reset_election_timeout();
+    void reset_election_timeout(size_t min = 1);
 
     candidate& candidate_state() {
         return std::get<candidate>(_state);
@@ -497,6 +497,7 @@ void fsm::step(server_id from, Message&& msg) {
     if (msg.current_term > _current_term) {
         server_id leader{};
 
+// fmt::print("{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
@@ -542,7 +543,7 @@ void fsm::step(server_id from, Message&& msg) {
         }
 
         if (!ignore_term) {
-if (is_candidate()) fmt::print("{} [term {}] CANDIDATE -> FOLLOWER received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
+// if (is_candidate()) fmt::print("{} [term {}] CANDIDATE -> FOLLOWER received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
 // else fmt::print("{} [term: {}] received a message with higher term from {} [term: {}]\n", _my_id, _current_term, from, msg.current_term);
             become_follower(leader);
             update_current_term(msg.current_term);
