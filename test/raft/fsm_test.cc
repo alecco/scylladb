@@ -2051,3 +2051,43 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_force_vote_request) {
     auto final_leader = select_leader(B, C);
     BOOST_CHECK(final_leader->id() == timeout_now_target_id);
 }
+
+BOOST_AUTO_TEST_CASE(test_many_backoff) {
+    /// Check follower backs off when it sees a valid precandidate
+
+    //
+    // Test for 101 servers
+    //
+    raft::server_id A_id = id(), B_id = id();
+    raft::log log_101(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration(address_set(prevote_election_backoff_limit + 1))});
+    discrete_failure_detector fd;
+    auto fsm_101 = create_follower(A_id, log_101, fd);
+
+    // candidate timeout 10+1
+    fsm_101.set_randomized_election_timeout(ELECTION_TIMEOUT + raft::logical_clock::duration{1});
+    election_threshold(fsm_101);
+    auto vreq = raft::vote_request{term_t{1}, index_t{1}, term_t{1}};
+    vreq.is_prevote = true;
+    fsm_101.step(B_id, std::move(vreq));
+    auto candidate_threshold = fsm_101.get_randomized_election_timeout();
+    // candidate timeout > 10+2
+    BOOST_CHECK_MESSAGE(candidate_threshold > (ELECTION_TIMEOUT + raft::logical_clock::duration{2}),
+            "expected candidate threshold to be higher");
+
+    //
+    // Test for 2 servers
+    //
+    raft::log log_2(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({A_id, B_id})});
+    auto fsm_2 = create_follower(A_id, log_2, fd);
+
+    // candidate timeout 10+1
+    fsm_2.set_randomized_election_timeout(ELECTION_TIMEOUT + raft::logical_clock::duration{1});
+    election_threshold(fsm_2);
+    fsm_2.step(B_id, std::move(vreq));
+    candidate_threshold = fsm_2.get_randomized_election_timeout();
+    // candidate timeout > 10+2
+    BOOST_CHECK_MESSAGE(candidate_threshold.count() == 11,
+            "expected candidate threshold to stay the same");
+}

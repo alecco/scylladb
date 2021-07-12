@@ -350,6 +350,10 @@ using log_entries = boost::container::deque<log_entry_ptr>;
 // leader.
 static constexpr logical_clock::duration ELECTION_TIMEOUT = logical_clock::duration{10};
 
+// Follower give a valid candidate at least 1 whole tick to run an election
+static constexpr size_t prevote_election_backoff_limit{100};
+static constexpr logical_clock::duration prevote_election_backoff{2};
+
 // rpc, persistence and state_machine classes will have to be implemented by the
 // raft user to provide network, persistency and busyness logic support
 // repectively.
