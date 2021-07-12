@@ -46,12 +46,12 @@ using namespace std::placeholders;
 static seastar::logger tlogger("test");
 
 // Using slower but precise clock
-size_t tick_delta_n = 10000;
-seastar::steady_clock_type::duration tick_delta = tick_delta_n * 1us;   // 1ms
-auto network_delay = 1000us;             //  1/10th  of tick
-auto local_delay =   100us;              // same host latency
-uint64_t local_mask = ~((1l<<32) - 1);   // prefix mask for nodes (shards) per server
-auto extra_delay_max_n = 100;            // randomized per rpc delay
+size_t tick_delta_n =    100;
+seastar::steady_clock_type::duration tick_delta = tick_delta_n * 1ms; // 100ms
+auto network_delay =      30ms;           //  1/3rd  of tick
+auto local_delay =         1ms;           // same host latency
+auto extra_delay_max_n =    500;          // extra randomized per rpc delay (us)
+uint64_t local_mask = ~((1l<<32) - 1);    // prefix mask for nodes (shards) per server
 
 auto dummy_command = std::numeric_limits<int>::min();
 
@@ -123,12 +123,17 @@ struct range {
 };
 using partition = std::vector<std::variant<leader,range,int>>;
 
+// Disconnect a node from the rest
+struct disconnect1 {
+    size_t id;
+};
+
 // Disconnect 2 servers both ways
 struct two_nodes {
     size_t first;
     size_t second;
 };
-struct disconnect : public two_nodes {};
+struct disconnect2 : public two_nodes {};
 
 struct stop {
     size_t id;
@@ -194,9 +199,9 @@ struct tick {
     uint64_t ticks;
 };
 
-using update = std::variant<entries, new_leader, partition, disconnect, stop, reset, wait_log,
-      set_config, check_rpc_config, check_rpc_added, check_rpc_removed, rpc_reset_counters,
-      tick>;
+using update = std::variant<entries, new_leader, partition, disconnect1, disconnect2,
+      stop, reset, wait_log, set_config, check_rpc_config, check_rpc_added,
+      check_rpc_removed, rpc_reset_counters, tick>;
 
 struct log_entry {
     unsigned term;
@@ -339,7 +344,8 @@ public:
     future<> tick(::tick t);
     future<> stop(::stop server);
     future<> reset(::reset server);
-    void disconnect(::disconnect nodes);
+    void disconnect(::disconnect2 nodes);
+    future<> disconnect(::disconnect1 nodes);
     void verify();
 private:
     test_server create_server(size_t id, initial_state state);
@@ -578,9 +584,10 @@ public:
         }
         (void)with_gate(_gate, [&, this] () mutable -> future<> {
             auto delay = (to_local_id(_id.id) & local_mask) == (to_local_id(id.id) & local_mask)? local_delay : network_delay;
+            auto extra_delay = rand_extra_delay();
             return seastar::sleep(delay + rand_extra_delay()).then(
                     [this, id = std::move(id), vote_request = std::move(vote_request)] {
-fmt::print("{} -> {} vote request term {} {}\n", _id, id, vote_request.current_term, vote_request.is_prevote? "PREVOTE" : "NORMAL");
+// fmt::print("{} -> {} vote request term {} {}\n", _id, id, vote_request.current_term, vote_request.is_prevote? "PREVOTE" : "NORMAL");
                 net[id]->_client->request_vote(_id, std::move(vote_request));
             });
         });
@@ -594,8 +601,9 @@ fmt::print("{} -> {} vote request term {} {}\n", _id, id, vote_request.current_t
         }
         (void)with_gate(_gate, [&, this] () mutable -> future<> {
             auto delay = (to_local_id(_id.id) & local_mask) == (to_local_id(id.id) & local_mask)? local_delay : network_delay;
-            return seastar::sleep(delay + rand_extra_delay()).then([=, this] {
-fmt::print("{} -> {} vote reply {} {}\n", _id, id, vote_reply.vote_granted, vote_reply.is_prevote? "PREVOTE" : "NORMAL");
+            auto extra_delay = rand_extra_delay();
+            return seastar::sleep(delay + extra_delay).then([=, this] {
+// fmt::print("{} -> {} vote reply {} {}\n", _id, id, vote_reply.vote_granted, vote_reply.is_prevote? "PREVOTE" : "NORMAL");
                 net[id]->_client->request_vote_reply(_id, vote_reply);
             });
 // .then([id = std::move(id), vote_reply = std::move(vote_reply)] {});
@@ -737,7 +745,7 @@ future<> raft_cluster::start_all() {
 }
 
 future<> raft_cluster::stop_all() {
-fmt::print("  stop all --------------------------------\n");
+// fmt::print("  stop all --------------------------------\n");
     for (auto s: _in_configuration) {
 // fmt::print("  stop {} --------------------------------\n", to_raft_id(s));
         co_await stop_server(s);
@@ -773,7 +781,7 @@ future<> raft_cluster::add_entries(size_t n) {
     size_t end = _next_val + n;
     while (_next_val != end) {
         try {
-fmt::print("  add entry {} on {}\n", _next_val, to_raft_id(_leader));
+// fmt::print("  add entry {} on {}\n", _next_val, to_raft_id(_leader));
             co_await _servers[_leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
 // fmt::print("  add entry done\n");
             _next_val++;
@@ -892,7 +900,7 @@ future<> raft_cluster::wait_log_all() {
 
 void raft_cluster::elapse_elections() {
     for (auto s: _in_configuration) {
-fmt::print("elapse_election {}\n", to_raft_id(s));
+// fmt::print("elapse_election {}\n", to_raft_id(s));
         _servers[s].server->elapse_election();
     }
 }
@@ -985,21 +993,22 @@ future<> raft_cluster::elect_new_leader(size_t new_leader) {
 // NOTE: there should be enough nodes capable of participating
 //       and there shouldn't already be a node thinking it's a leader
 future<> raft_cluster::free_election() {
-fmt::print("\n\n\nRunning free election ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n\n");
+// fmt::print("\n\n\nRunning free election ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n\n");
     tlogger.debug("Running free election");
     size_t node = 0;
-size_t loops = 0;
+    size_t loops = 0;
     for (;;) {
-fmt::print("\n\nfree election loop ++++++++++++++++++++++++++++\n\n");
+// fmt::print("\n\nfree election loop ++++++++++++++++++++++++++++\n\n");
 
         co_await seastar::sleep(tick_delta);   // Wait for election rpc exchanges
         // find if we have a leader
         for (auto s: _in_configuration) {
             if (_servers[s].server->is_leader()) {
-// fmt::print("  new leader {}\n", to_raft_id(s));
                 tlogger.debug("New leader {}", s);
                 _leader = s;
-fmt::print("\n\nFree election DONE {} (loops {})^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n", to_raft_id(s), loops);
+BOOST_TEST_MESSAGE(format("Free election DONE {} (loops {})", to_raft_id(s), loops));
+// fmt::print("\n\nFree election DONE {} (loops {})^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n", to_raft_id(s), loops);
+                tlogger.debug("free_election: elected {} in {} ticks", s, loops);
                 co_return;
             }
         }
@@ -1141,10 +1150,10 @@ future<> raft_cluster::partition(::partition p) {
         }
     }
 #endif
-fmt::print("pause tickers\n");
+// fmt::print("pause tickers\n");
     pause_tickers();
     co_await seastar::sleep(tick_delta * 2); // XXX leftover ticks?? (before disconnections)
-fmt::print("connect all\n");
+// fmt::print("connect all\n");
     _connected->connect_all();
     // NOTE: connectivity is independent of configuration so it's for all servers
     for (size_t s = 0; s < _servers.size(); ++s) {
@@ -1160,17 +1169,17 @@ fmt::print("connect all\n");
     } else if (partition_servers.find(_leader) == partition_servers.end() && p.size() > 0) {
         // Old leader disconnected and not specified new, free election
 #if 0
-fmt::print("elapse elections\n");
+// fmt::print("elapse elections\n");
         elapse_elections();         // make time pass so nodes are receptive
 #else
         _servers[_leader].server->elapse_election();   // make old leader step down
 #endif
-fmt::print("restart tickers\n");
+// fmt::print("restart tickers\n");
         co_await restart_tickers();
-fmt::print("free election\n");
+// fmt::print("free election\n");
         co_await free_election();
     }
-fmt::print("partition done XXXXXXXXXXXXXXXXXX\n");
+// fmt::print("partition done XXXXXXXXXXXXXXXXXX\n");
 }
 
 future<> raft_cluster::tick(::tick t) {
@@ -1190,8 +1199,17 @@ future<> raft_cluster::reset(::reset server) {
     co_await reset_server(server.id, server.state);
 }
 
-void raft_cluster::disconnect(::disconnect nodes) {
+void raft_cluster::disconnect(::disconnect2 nodes) {
     _connected->cut(to_raft_id(nodes.first), to_raft_id(nodes.second));
+}
+
+future<> raft_cluster::disconnect(::disconnect1 node) {
+    _connected->disconnect(to_raft_id(node.id));
+    if (node.id == _leader) {
+        _servers[_leader].server->elapse_election();   // make old leader step down
+        co_await free_election();
+    }
+    co_return;
 }
 
 void raft_cluster::verify() {
@@ -1257,18 +1275,21 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     for (auto update: test.updates) {
         co_await std::visit(make_visitor(
         [&rafts] (entries update) -> future<> {
-fmt::print("\nentries {} ---------------------------------------\n", update.n);
+// fmt::print("\nentries {} ---------------------------------------\n", update.n);
             co_await rafts.add_entries(update.n);
         },
         [&rafts] (new_leader update) -> future<> {
             co_await rafts.elect_new_leader(update.id);
         },
-        [&rafts] (disconnect update) -> future<> {
+        [&rafts] (::disconnect2 update) -> future<> {
             rafts.disconnect(update);
             co_return;
         },
+        [&rafts] (::disconnect1 update) -> future<> {
+            co_await rafts.disconnect(update);
+        },
         [&rafts] (partition update) -> future<> {
-fmt::print("\npartition size {} --------------------------------\n", update.size());
+// fmt::print("\npartition size {} {} --------------------------------\n", update.size(), update[0].index() == 1? "RANGE" : "");
             co_await rafts.partition(update);
         },
         [&rafts] (stop update) -> future<> {
@@ -1341,20 +1362,11 @@ void replication_test(struct test_case test, bool prevote, bool packet_drops) {
 // XXX
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream_prevote) {
     replication_test(
-        // Snapshot automatic take and load
-# if 0
-        {.nodes = 150,
+        {                      .nodes = 650, .total_values = 10,
          .updates = {entries{1},
-                     partition{range{1,149}}, entries{1},  // drop leader, free election
-                     partition{range{0,149}}, entries{1}   // All back
+                     disconnect1{0},             // drop leader, free election
+                     entries{2},
                      }}
-#else
-        {                      .nodes = 300, .total_values = 10,
-         .updates = {entries{1},
-                     partition{range{1, 299}}, // XXX remember to match .nodes
-                     entries{2},             // drop leader, free election
-                     }}
-#endif
     , true, false);
 }
 
