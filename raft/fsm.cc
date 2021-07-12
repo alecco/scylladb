@@ -692,6 +692,14 @@ void fsm::request_vote(server_id from, vote_request&& request) {
             _last_election_time = _clock.now();
             _voted_for = from;
         }
+
+// XXX check size of configuration  > 100?
+        if (is_follower() && request.is_prevote &&
+                (election_elapsed() + prevote_election_backoff) >= _randomized_election_timeout) {
+            // Give pre-candidate at least two ticks minimum to run its election
+            _randomized_election_timeout += prevote_election_backoff;
+        }
+
         // The term in the original message and current local term are the
         // same in the case of regular votes, but different for pre-votes.
         //

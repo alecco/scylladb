@@ -2051,3 +2051,36 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_force_vote_request) {
     auto final_leader = select_leader(B, C);
     BOOST_CHECK(final_leader->id() == timeout_now_target_id);
 }
+
+BOOST_AUTO_TEST_CASE(test_many_backoff) {
+    /// Check follower backs off when it sees a valid precandidate
+
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({A_id, B_id, C_id})});
+    discrete_failure_detector fd;
+    auto A = create_follower(A_id, log);       // first leader
+    auto B = create_follower(B_id, log, fd);   // first precandidate
+    auto C = create_follower(C_id, log);       // disruptor
+
+    fd.mark_dead(A_id);
+
+    raft_routing_map map;
+    map.emplace(A_id, &A);
+    map.emplace(B_id, &B);
+    map.emplace(C_id, &C);
+
+    A.set_randomized_election_timeout(ELECTION_TIMEOUT + raft::logical_clock::duration{1});
+    B.set_randomized_election_timeout(ELECTION_TIMEOUT + raft::logical_clock::duration{9});
+    C.set_randomized_election_timeout(ELECTION_TIMEOUT + raft::logical_clock::duration{9});
+
+    // A becomes leader
+    election_threshold(A, B, C);
+    tick(A, B, C);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+fmt::print(" XXX timeout {} term {} now {}\n", A.get_randomized_election_timeout().count(), A.get_current_term(), A.now());
+fmt::print(" XXX timeout {} term {} now {}\n", B.get_randomized_election_timeout().count(), B.get_current_term(), B.now());
+
+}
