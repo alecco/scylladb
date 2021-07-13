@@ -195,10 +195,12 @@ class fsm {
         }
     } _observed;
 
+protected:
     logical_clock _clock;
     // Start of the current election epoch - a time point relative
     // to which we expire election timeout.
     logical_clock::time_point _last_election_time = logical_clock::min();
+
     // A random value in range [election_timeout + 1, 2 * election_timeout),
     // reset on each term change. For testing, it's necessary to have the value
     // at election_timeout without becoming a candidate.
