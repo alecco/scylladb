@@ -231,8 +231,10 @@ raft::server_address_set address_set(std::vector<raft::server_id> ids) {
     return set;
 }
 
-fsm_debug create_follower(raft::server_id id, raft::log log, raft::failure_detector& fd = trivial_failure_detector) {
-    return fsm_debug(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fsm_cfg);
+fsm_debug create_follower(raft::server_id id, raft::log log,
+        raft::failure_detector& fd = trivial_failure_detector,
+        raft::fsm_config cfg = fsm_cfg) {
+    return fsm_debug(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, cfg);
 }
 
 
