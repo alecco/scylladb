@@ -53,6 +53,11 @@ void election_timeout(raft::fsm& fsm) {
     }
 }
 
+template <typename... T>
+void tick(T&... fsm) {
+    (fsm.tick(), ...);
+}
+
 void make_candidate(raft::fsm& fsm) {
     assert(fsm.is_follower());
     // NOTE: single node skips candidate state
