@@ -118,6 +118,18 @@ public:
         return raft::fsm::get_log();
     }
 
+    raft::logical_clock::time_point now() const {
+        return _clock.now();
+    }
+
+    raft::logical_clock::duration& get_randomized_election_timeout() {
+        return raft::fsm::_randomized_election_timeout;
+    }
+
+    void set_randomized_election_timeout(raft::logical_clock::duration&& timeout) {
+        raft::fsm::_randomized_election_timeout = timeout;
+    }
+
     bool leadership_transfer_active() const {
         assert(is_leader());
         return bool(leader_state().stepdown);
