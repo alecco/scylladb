@@ -142,8 +142,13 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
+    std::exponential_distribution<> dist(0.3);
+    double val;
+    do {
+        val = dist(re);
+    } while (val < 0 || val >= ELECTION_TIMEOUT.count() - 1);           // [0;ET-1]
+    auto timeout = static_cast<size_t>(ELECTION_TIMEOUT.count() - val); // [1;ET]
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{timeout};
 }
 
 void fsm::become_leader() {
