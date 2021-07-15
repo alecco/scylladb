@@ -75,8 +75,6 @@ using namespace std::placeholders;
 
 extern seastar::logger tlogger;
 
-extern lowres_clock::duration tick_delta;
-
 class hasher_int : public xx_hasher {
 public:
     using xx_hasher::xx_hasher;
@@ -242,6 +240,7 @@ extern raft::snapshot_id delay_apply_snapshot;
 // sending of a snaphot with that id will be delayed until snapshot_sync is signaled
 extern raft::snapshot_id delay_send_snapshot;
 
+template <typename ClockType>
 class raft_cluster {
     using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
     class state_machine;
@@ -289,7 +288,7 @@ public:
     void elapse_elections();
     future<> elect_new_leader(size_t new_leader);
     future<> free_election();
-    void init_raft_tickers();
+    template <typename Clock> void init_raft_tickers();
     void pause_tickers();
     void restart_tickers();
     void cancel_ticker(size_t id);
@@ -314,6 +313,18 @@ public:
 private:
     test_server create_server(size_t id, initial_state state);
 };
+
+template <typename Clock>
+void raft_cluster::init_raft_tickers() {
+    _tickers.resize(_servers.size());
+    // Only start tickers for servers in configuration
+    for (auto s: _in_configuration) {
+        _tickers[s].arm_periodic(tick_delta);
+        _tickers[s].set_callback([&, s] {
+            _servers[s].server->tick();
+        });
+    }
+}
 
 class raft_cluster::state_machine : public raft::state_machine {
     raft::server_id _id;
