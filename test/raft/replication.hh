@@ -142,12 +142,18 @@ struct leader {
 };
 using partition = std::vector<std::variant<leader,int>>;
 
+
+// Disconnect a node from the rest
+struct disconnect1 {
+    size_t id;
+};
+
 // Disconnect 2 servers both ways
 struct two_nodes {
     size_t first;
     size_t second;
 };
-struct disconnect : public two_nodes {};
+struct disconnect2 : public two_nodes {};
 
 struct stop {
     size_t id;
@@ -213,9 +219,9 @@ struct tick {
     uint64_t ticks;
 };
 
-using update = std::variant<entries, new_leader, partition, disconnect, stop, reset, wait_log,
-      set_config, check_rpc_config, check_rpc_added, check_rpc_removed, rpc_reset_counters,
-      tick>;
+using update = std::variant<entries, new_leader, partition, disconnect1, disconnect2,
+      stop, reset, wait_log, set_config, check_rpc_config, check_rpc_added,
+      check_rpc_removed, rpc_reset_counters, tick>;
 
 struct log_entry {
     unsigned term;
@@ -346,7 +352,8 @@ public:
     future<> tick(::tick t);
     future<> stop(::stop server);
     future<> reset(::reset server);
-    void disconnect(::disconnect nodes);
+    void disconnect(::disconnect2 nodes);
+    future<> disconnect(::disconnect1 nodes);
     void verify();
 private:
     test_server create_server(size_t id, initial_state state);
@@ -1154,8 +1161,18 @@ future<> raft_cluster<Clock>::reset(::reset server) {
 }
 
 template <typename Clock>
-void raft_cluster<Clock>::disconnect(::disconnect nodes) {
+void raft_cluster<Clock>::disconnect(::disconnect2 nodes) {
     _connected->cut(to_raft_id(nodes.first), to_raft_id(nodes.second));
+}
+
+template <typename Clock>
+future<> raft_cluster<Clock>::disconnect(::disconnect1 node) {
+    _connected->disconnect(to_raft_id(node.id));
+    if (node.id == _leader) {
+        _servers[_leader].server->elapse_election();   // make old leader step down
+        co_await free_election();
+    }
+    co_return;
 }
 
 template <typename Clock>
@@ -1232,9 +1249,12 @@ struct run_test {
             [&rafts] (new_leader update) -> future<> {
                 co_await rafts.elect_new_leader(update.id);
             },
-            [&rafts] (disconnect update) -> future<> {
+            [&rafts] (disconnect2 update) -> future<> {
                 rafts.disconnect(update);
                 co_return;
+            },
+            [&rafts] (::disconnect1 update) -> future<> {
+                co_await rafts.disconnect(update);
             },
             [&rafts] (partition update) -> future<> {
                 co_await rafts.partition(update);
