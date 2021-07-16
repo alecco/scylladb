@@ -28,9 +28,10 @@ lowres_clock::duration tick_delta = 1ms;
 
 // XXX
 SEASTAR_THREAD_TEST_CASE(CUEC) {
-    replication_test({}, false, false, tick_delta);
+    replication_test<lowres_clock>({}, false, false, tick_delta);
 }
 
+#if 0
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
         replication_test(test_body, false, false, tick_delta); }  \
@@ -553,3 +554,4 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
                               rpc_address_set{node_id{0},node_id{1},node_id{2}}},
          }}));
 
+#endif
