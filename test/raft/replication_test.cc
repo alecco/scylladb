@@ -26,6 +26,11 @@
 
 lowres_clock::duration tick_delta = 1ms;
 
+// XXX
+SEASTAR_THREAD_TEST_CASE(CUEC) {
+    replication_test({}, false, false, tick_delta);
+}
+
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
         replication_test(test_body, false, false, tick_delta); }  \
