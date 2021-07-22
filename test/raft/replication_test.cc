@@ -28,12 +28,16 @@ lowres_clock::duration tick_delta = 10ms; // minimum granularity of lowres_clock
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+fmt::print("test " # test_name "\n"); \
         replication_test<lowres_clock>(test_body, false, false, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+fmt::print("test " # test_name "_drops\n"); \
         replication_test<lowres_clock>(test_body, false, true, tick_delta); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+fmt::print("test " # test_name "_prevote\n"); \
         replication_test<lowres_clock>(test_body, true, false, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+fmt::print("test " # test_name "_prevote_drops\n"); \
         replication_test<lowres_clock>(test_body, true, true, tick_delta); }
 
 // 1 nodes, simple replication, empty, no updates

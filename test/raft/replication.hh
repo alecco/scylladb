@@ -579,6 +579,7 @@ public:
         if (!_packet_drops || (rand() % 5)) {
             net[id]->_client->append_entries(_id, append_request);
         }
+else fmt::print("  send_append_entries {} -> {} dropping packet\n", _id, id);
         return make_ready_future<>();
     }
     virtual void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
@@ -591,6 +592,7 @@ public:
         if (!_packet_drops || (rand() % 5)) {
             net[id]->_client->append_entries_reply(_id, std::move(reply));
         }
+else fmt::print("  send_append_entries_reply {} -> {} dropping packet\n", _id, id);
     }
     virtual void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
         if (!net.count(id)) {
@@ -907,18 +909,24 @@ void raft_cluster<Clock>::connect_all() {
 // Add consecutive integer entries to a leader
 template <typename Clock>
 future<> raft_cluster<Clock>::add_entries(size_t n) {
+fmt::print("add_entries {} on leader {}\n", n, _leader);
     size_t end = _next_val + n;
     while (_next_val != end) {
         try {
+fmt::print("   adding {}\n", _next_val);
             co_await _servers[_leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
             _next_val++;
         } catch (raft::not_a_leader& e) {
+fmt::print("   not a leader\n");
             // leader stepped down, update with new leader if present
             if (e.leader != raft::server_id{}) {
+fmt::print("   new leader {}\n", e.leader.id);
                 _leader = to_local_id(e.leader.id);
             }
         } catch (raft::commit_status_unknown& e) {
+fmt::print("   error unknown\n");
         } catch (raft::dropped_entry& e) {
+fmt::print("   dropped\n");
             // retry if an entry is dropped because the leader have changed after it was submitetd
         }
     }
@@ -950,6 +958,7 @@ future<> raft_cluster<Clock>::init_raft_tickers() {
 
 template <typename Clock>
 void raft_cluster<Clock>::pause_tickers() {
+fmt::print("pause_tickers\n");
     for (auto s: _in_configuration) {
         _tickers[s].cancel();
     }
@@ -1072,6 +1081,7 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
             co_await wait_log(new_leader);
         }
 
+fmt::print("elect_new_leader: pause_tickers\n");
         pause_tickers();
         // Leader could be already partially disconnected, save current connectivity state
         struct connected prev_disconnected = *_connected;
@@ -1102,6 +1112,7 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
 
         // Restore connections to the original setting
         *_connected = prev_disconnected;
+fmt::print("elect_new_leader: restart_tickers\n");
         co_await restart_tickers();
         co_await wait_log_all();
 
@@ -1112,6 +1123,7 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
                 co_await wait_log(new_leader);
             }
 
+fmt::print("elect_new_leader: pause_tickers 2\n");
             pause_tickers();
             // Leader could be already partially disconnected, save current connectivity state
             struct connected prev_disconnected = *_connected;
@@ -1126,6 +1138,7 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
             _connected->connect(to_raft_id(_leader));
             // Disconnect old leader from all nodes except new leader
             _connected->disconnect(to_raft_id(_leader), to_raft_id(new_leader));
+fmt::print("elect_new_leader: restart_tickers 2\n");
             co_await restart_tickers();
             co_await _servers[new_leader].server->wait_election_done();
 
@@ -1270,6 +1283,7 @@ future<> raft_cluster<Clock>::reconfigure_all() {
 
 template <typename Clock>
 future<> raft_cluster<Clock>::partition(::partition p) {
+fmt::print("partitioning\n");
     tlogger.debug("partitioning");
     std::unordered_set<size_t> partition_servers;
     std::optional<size_t> next_leader;
@@ -1295,10 +1309,12 @@ future<> raft_cluster<Clock>::partition(::partition p) {
         // No leader specified, wait log for all connected servers, before disconnections
         for (auto s: partition_servers) {
             if (_in_configuration.contains(s)) {
+fmt::print("  partition waiting log on {}\n", to_raft_id(s));
                 co_await wait_log(s);
             }
         }
     }
+fmt::print("partitioning: pause_tickers\n");
     pause_tickers();
     _connected->connect_all();
     // NOTE: connectivity is independent of configuration so it's for all servers
@@ -1310,11 +1326,15 @@ future<> raft_cluster<Clock>::partition(::partition p) {
     }
     if (next_leader) {
         // New leader specified, elect it
+fmt::print("  partition elect new leader\n");
         co_await elect_new_leader(*next_leader); // restarts tickers
     } else if (partition_servers.find(_leader) == partition_servers.end() && p.size() > 0) {
         // Old leader disconnected and not specified new, free election
         co_await restart_tickers();
         _servers[_leader].server->elapse_election();   // make old leader step down
+fmt::print("  partition restart tickers\n");
+        co_await restart_tickers();
+fmt::print("  partition free election\n");
         co_await free_election();
     } else {
         co_await restart_tickers();

@@ -504,6 +504,7 @@ void fsm::tick_leader() {
 }
 
 void fsm::tick() {
+fmt::print("{} tick\n", _my_id);
     _clock.advance();
 
     auto has_stable_leader = [this]() {
