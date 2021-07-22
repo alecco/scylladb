@@ -242,9 +242,12 @@ future<> raft_sys_table_storage::truncate_log_tail(raft::index_t idx) {
 future<> raft_sys_table_storage::execute_with_linearization_point(std::function<future<>()> f) {
     promise<> task_promise;
     auto pending_fut = std::exchange(_pending_op_fut, task_promise.get_future());
+    // Capture lambda state on local coroutine frame, see
+    // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95111
+    auto cmd = std::move(f);
     co_await std::move(pending_fut);
     try {
-        co_await f();
+        co_await cmd();
         task_promise.set_value();
     } catch (...) {
         task_promise.set_exception(std::current_exception());
