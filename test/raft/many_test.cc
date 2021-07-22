@@ -20,17 +20,12 @@
  */
 
 // Test Raft library with many candidates
+//
+// Using slower but precise clock
 
 #include "replication.hh"
 
-// Using slower but precise clock
-size_t tick_delta_n =    100;
-seastar::steady_clock_type::duration tick_delta = tick_delta_n * 1ms; // 100ms
-auto network_delay =      30ms;           //  1/3rd  of tick
-auto local_delay =         1ms;           // same host latency
-auto extra_delay_max_n =    500;          // extra randomized per rpc delay (us)
-uint64_t local_mask = ~((1l<<32) - 1);    // prefix mask for nodes (shards) per server
-
+seastar::steady_clock_type::duration tick_delta = 100ms;
 
 using update = std::variant<entries, new_leader, partition, disconnect1, disconnect2,
       stop, reset, wait_log, set_config, check_rpc_config, check_rpc_added,
@@ -38,11 +33,11 @@ using update = std::variant<entries, new_leader, partition, disconnect1, disconn
 
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream_prevote) {
     replication_test<steady_clock_type>(
-        {                      .nodes = 600, .total_values = 10,
+        {                      .nodes = 400, .total_values = 10,
          .updates = {entries{1},
-                     disconnect1{0},             // drop leader, free election
+                     disconnect1{0},    // drop leader, free election
                      entries{2},
                      }}
-    , true, false, tick_delta);
+    , true, false, 100ms,
+    delays{ .network_delay = 20ms, .local_delay = 1ms });
 }
-
