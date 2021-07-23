@@ -818,18 +818,17 @@ raft_cluster<Clock>::raft_cluster(test_case test,
         config.current.emplace(states[i].address);
     }
 
+    if (_delays) {
+        init_tick_delays();
+        _rpc_extra_delay_dist = std::uniform_int_distribution<int>(0, (*_delays).extra_delay_max);
+    }
+
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = states[i].address;
         states[i].snapshot.config = config;
         (*_snapshots)[s.id] = states[i].snp_value;
         _servers.emplace_back(create_server(i, states[i]));
     }
-
-    if (_delays) {
-        init_tick_delays();
-        _rpc_extra_delay_dist = std::uniform_int_distribution<int>(0, (*_delays).extra_delay_max);
-    }
-
 }
 
 template <typename Clock>
@@ -838,7 +837,7 @@ void raft_cluster<Clock>::init_tick_delays() {
     auto gen = random_generator();
 
     _tick_delay = {};
-    (*_tick_delay).reserve(_servers.size());
+    // XXX (*_tick_delay).reserve(_servers.size());
     for (size_t s = 0; s < _servers.size(); s++) {
         auto delay = dist(gen);
         (*_tick_delay).push_back(delay * _tick_delta / _tick_delta.count());
