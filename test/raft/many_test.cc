@@ -30,6 +30,7 @@ using update = std::variant<entries, new_leader, partition, disconnect1, disconn
       check_rpc_removed, rpc_reset_counters, tick>;
 
 SEASTAR_THREAD_TEST_CASE(test_many_100) {
+fmt::print("test_many 100\n"); // XXX
     replication_test<steady_clock_type>(
         {.nodes = 100, .total_values = 10,
          .updates = {entries{1},
@@ -40,9 +41,11 @@ SEASTAR_THREAD_TEST_CASE(test_many_100) {
     delays{ .network_delay = 20ms, .local_delay = 1ms });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_many_400) {
+#if 1
+SEASTAR_THREAD_TEST_CASE(test_many_300) {
+fmt::print("test_many 300\n"); // XXX
     replication_test<steady_clock_type>(
-        {.nodes = 400, .total_values = 10,
+        {.nodes = 300, .total_values = 10,
          .updates = {entries{1},
                      disconnect1{0},    // drop leader, free election
                      entries{2},
@@ -52,6 +55,7 @@ SEASTAR_THREAD_TEST_CASE(test_many_400) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_many_600) {
+fmt::print("test_many 600\n"); // XXX
     replication_test<steady_clock_type>(
         {.nodes = 600, .total_values = 10,
          .updates = {entries{1},
@@ -63,6 +67,7 @@ SEASTAR_THREAD_TEST_CASE(test_many_600) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_many_700) {
+fmt::print("test_many 700\n"); // XXX
     replication_test<steady_clock_type>(
         {.nodes = 700, .total_values = 10,
          .updates = {entries{1},
@@ -74,6 +79,7 @@ SEASTAR_THREAD_TEST_CASE(test_many_700) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_many_800) {
+fmt::print("test_many 800\n"); // XXX
     replication_test<steady_clock_type>(
         {.nodes = 800, .total_values = 10,
          .updates = {entries{1},
@@ -83,3 +89,4 @@ SEASTAR_THREAD_TEST_CASE(test_many_800) {
     , true, false, 100ms,
     delays{ .network_delay = 20ms, .local_delay = 1ms });
 }
+#endif
