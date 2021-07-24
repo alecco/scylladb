@@ -154,6 +154,16 @@ raft::server_address to_server_address(size_t local_id) {
     return raft::server_address{raft::server_id{to_raft_uuid(local_id)}};
 }
 
+raft::server_address_set address_set(size_t n, size_t start) {
+    assert(n > 0);
+    assert(start > 0);
+    raft::server_address_set set(n);
+    for (size_t i = start; i < (start + n); ++i) {
+        set.emplace(raft::server_address{.id = raft::server_id{utils::UUID(0, i)}});
+    }
+    return set;
+}
+
 size_t to_local_id(utils::UUID uuid) {
     return uuid.get_least_significant_bits() - 1;
 }

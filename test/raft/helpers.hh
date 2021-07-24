@@ -141,10 +141,10 @@ raft::fsm* select_leader(Args&&... args) {
 
 
 raft::server_id id();
+raft::server_address_set address_set(size_t n, size_t start = 1);
 raft::server_address_set address_set(std::vector<raft::server_id> ids);
 fsm_debug create_follower(raft::server_id id, raft::log log,
         raft::failure_detector& fd = trivial_failure_detector);
-
 
 // Raft uses UUID 0 as special case.
 // Convert local 0-based integer id to raft +1 UUID
