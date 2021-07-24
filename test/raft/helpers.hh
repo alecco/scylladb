@@ -237,6 +237,16 @@ raft::server_address_set address_set(std::vector<raft::server_id> ids) {
     return set;
 }
 
+raft::server_address_set address_set(size_t n, size_t start = 1) {
+    assert(n > 0);
+    assert(start > 0);
+    raft::server_address_set set(n);
+    for (size_t i = start; i < (start + n); ++i) {
+        set.emplace(raft::server_address{.id = raft::server_id{utils::UUID(0, i)}});
+    }
+    return set;
+}
+
 fsm_debug create_follower(raft::server_id id, raft::log log, raft::failure_detector& fd = trivial_failure_detector) {
     return fsm_debug(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fsm_cfg);
 }
