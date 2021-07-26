@@ -513,6 +513,9 @@ public:
             _rpc_config(rpc_config) {
         net[_id] = this;
     }
+    bool drop_packet() {
+        return _rpc_config.drops && !(rand() % 5);
+    }
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
         if (!net.count(id)) {
             throw std::runtime_error("trying to send a message to an unknown node");
@@ -535,7 +538,7 @@ public:
         if (!(*_connected)(id, _id)) {
             return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
         }
-        if (!_rpc_config.drops || (rand() % 5)) {
+        if (!drop_packet()) {
             net[id]->_client->append_entries(_id, append_request);
         }
         return make_ready_future<>();
@@ -547,7 +550,7 @@ public:
         if (!(*_connected)(id, _id)) {
             return;
         }
-        if (!_rpc_config.drops || (rand() % 5)) {
+        if (!drop_packet()) {
             net[id]->_client->append_entries_reply(_id, std::move(reply));
         }
     }
