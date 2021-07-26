@@ -218,9 +218,15 @@ struct tick {
     uint64_t ticks;
 };
 
+struct sleep_x {
+    int id = 0;
+};
+
 using update = std::variant<entries, new_leader, partition, isolate, disconnect,
       stop, reset, wait_log, set_config, check_rpc_config, check_rpc_added,
-      check_rpc_removed, rpc_reset_counters, tick>;
+      check_rpc_removed, rpc_reset_counters, tick
+,struct sleep_x // XXX
+>;
 
 struct log_entry {
     unsigned term;
@@ -299,6 +305,7 @@ class raft_cluster {
     apply_fn _apply;
     std::unordered_set<size_t> _in_configuration;   // Servers in current configuration
     std::vector<seastar::timer<Clock>> _tickers;
+std::vector<size_t> _tick_counts;
     size_t _leader;
     std::vector<initial_state> get_states(test_case test, bool prevote);
     typename Clock::duration _tick_delta;
@@ -776,6 +783,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
             _apply(apply),
             _leader(first_leader),
             _tick_delta(tick_delta) {
+_tick_counts = std::vector<size_t>(test.nodes); // XXX
 
     rpc::reset_network();
 
@@ -846,9 +854,22 @@ future<> raft_cluster<Clock>::start_all() {
 
 template <typename Clock>
 future<> raft_cluster<Clock>::stop_all() {
+size_t total = 0;
+for (auto s: _tick_counts) {
+    total += s;
+}
+size_t max = 0;
+size_t min = std::numeric_limits<size_t>::max();
+
     for (auto s: _in_configuration) {
         co_await stop_server(s);
+if (_tick_counts[s] > max) { // XXX
+    max = _tick_counts[s];
+} else if (_tick_counts[s] < min) {
+    min = _tick_counts[s];
+}
     };
+fmt::print("ticks per server: n {} average {:.2f}, min {}, max {}\n", _servers.size(), (double)total / _servers.size(), min, max);
 }
 
 template <typename Clock>
@@ -899,6 +920,8 @@ future<> raft_cluster<Clock>::init_raft_tickers() {
     // Only start tickers for servers in configuration
     for (auto s: _in_configuration) {
         _tickers[s].set_callback([&, s] {
+_tick_counts[s]++; // XXX
+// XXX fmt::print("X");
             _servers[s].server->tick();
         });
         if (_tick_delays) {
@@ -941,6 +964,8 @@ void raft_cluster<Clock>::cancel_ticker(size_t id) {
 template <typename Clock>
 void raft_cluster<Clock>::set_ticker_callback(size_t id) noexcept {
     _tickers[id].set_callback([&, id] {
+_tick_counts[id]++; // XXX
+fmt::print("X");
         _servers[id].server->tick();
     });
 }
@@ -1409,6 +1434,10 @@ struct run_test {
             [&rafts] (tick update) -> future<> {
                 co_await rafts.tick(update);
             }
+// XXX
+, [&rafts] (struct sleep_x update) -> future<> {
+    return seastar::sleep(10s);
+}
             ), std::move(update));
         }
 

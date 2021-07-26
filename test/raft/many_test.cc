@@ -27,10 +27,11 @@
 
 SEASTAR_THREAD_TEST_CASE(test_many_100) {
     replication_test<steady_clock_type>(
-        {.nodes = 100, .total_values = 10,
+        {.nodes = 100, .total_values = 200,
          .updates = {entries{1},
                      isolate{0},    // drop leader, free election
-                     entries{2},
+                     entries{150},
+sleep_x{} // XXX
                      }}
     , true, 100ms,
     rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
@@ -38,10 +39,35 @@ SEASTAR_THREAD_TEST_CASE(test_many_100) {
 
 SEASTAR_THREAD_TEST_CASE(test_many_400) {
     replication_test<steady_clock_type>(
-        {.nodes = 400, .total_values = 10,
+        {.nodes = 400, .total_values = 200,
          .updates = {entries{1},
                      isolate{0},    // drop leader, free election
-                     entries{2},
+                     entries{150},
+sleep_x{} // XXX
+                     }}
+    , true, 100ms,
+    rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_many_500) {
+    replication_test<steady_clock_type>(
+        {.nodes = 500, .total_values = 200,
+         .updates = {entries{1},
+                     isolate{0},    // drop leader, free election
+                     entries{150},
+sleep_x{} // XXX
+                     }}
+    , true, 100ms,
+    rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_many_550) {
+    replication_test<steady_clock_type>(
+        {.nodes = 550, .total_values = 200,
+         .updates = {entries{1},
+                     isolate{0},    // drop leader, free election
+                     entries{150},
+sleep_x{} // XXX
                      }}
     , true, 100ms,
     rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
