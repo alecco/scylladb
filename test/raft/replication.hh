@@ -561,7 +561,9 @@ public:
         if (!(*_connected)(id, _id)) {
             return;
         }
-        net[id]->_client->request_vote(_id, std::move(vote_request));
+        if (!drop_packet()) {
+            net[id]->_client->request_vote(_id, std::move(vote_request));
+        }
     }
     virtual void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
         if (!net.count(id)) {
@@ -570,7 +572,9 @@ public:
         if (!(*_connected)(id, _id)) {
             return;
         }
-        net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
+        if (!drop_packet()) {
+            net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
+        }
     }
     virtual void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
         if (!net.count(id)) {
