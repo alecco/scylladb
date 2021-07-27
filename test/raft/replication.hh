@@ -557,6 +557,7 @@ public:
         if (!drop_packet()) {
             net[id]->_client->append_entries(_id, append_request);
         }
+else fmt::print("{} -> {} send_append_entries dropped\n", _id, id);
         return make_ready_future<>();
     }
     virtual void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
@@ -569,6 +570,7 @@ public:
         if (!drop_packet()) {
             net[id]->_client->append_entries_reply(_id, std::move(reply));
         }
+else fmt::print("{} -> {} send_append_entries_reply dropped\n", _id, id);
     }
     virtual void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
         if (!net.count(id)) {
@@ -577,9 +579,17 @@ public:
         if (!(*_connected)(id, _id)) {
             return;
         }
-        if (!drop_packet()) {
+        if (
+#if 1
+                !drop_packet()
+#else
+                true
+#endif
+                ) {
             net[id]->_client->request_vote(_id, std::move(vote_request));
+fmt::print("{} -> {} send_vote_request\n", _id, id);
         }
+else fmt::print("{} -> {} send_vote_request dropped\n", _id, id);
     }
     virtual void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
         if (!net.count(id)) {
@@ -588,9 +598,17 @@ public:
         if (!(*_connected)(id, _id)) {
             return;
         }
-        if (!drop_packet()) {
+        if (
+#if 1
+                !drop_packet()
+#else
+                true
+#endif
+                ) {
+fmt::print("{} -> {} send_vote_reply {} {}\n", _id, id, vote_reply.is_prevote? "PREVOTE" : "NORMAL", vote_reply.vote_granted? "YES" : "NO");
             net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         }
+else fmt::print("{} -> {} send_vote_reply dropped\n", _id, id);
     }
     virtual void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
         if (!net.count(id)) {
@@ -846,9 +864,11 @@ future<> raft_cluster<Clock>::start_all() {
         return r.server->start();
     });
     co_await init_raft_tickers();
+fmt::print("Electing first leader {}\n", _leader);
     BOOST_TEST_MESSAGE("Electing first leader " << _leader);
     _servers[_leader].server->wait_until_candidate();
     co_await _servers[_leader].server->wait_election_done();
+fmt::print(" electing first leader DONE\n");
 }
 
 template <typename Clock>
@@ -879,20 +899,28 @@ void raft_cluster<Clock>::connect_all() {
 template <typename Clock>
 future<> raft_cluster<Clock>::add_entries(size_t n) {
     size_t end = _next_val + n;
+fmt::print("add_entries to leader {} next {} end {}\n", _leader, _next_val, end); // XXX
     while (_next_val != end) {
         try {
+// fmt::print("   adding {}\n", _next_val); // XXX
             co_await _servers[_leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
+// fmt::print("       done\n"); // XXX
             _next_val++;
         } catch (raft::not_a_leader& e) {
+// fmt::print("   not a leader\n"); // XXX
             // leader stepped down, update with new leader if present
             if (e.leader != raft::server_id{}) {
+// fmt::print("   new leader {}\n", e.leader.id); // XXX
                 _leader = to_local_id(e.leader.id);
             }
         } catch (raft::commit_status_unknown& e) {
+// fmt::print("   unknown error\n"); // XXX
         } catch (raft::dropped_entry& e) {
+// fmt::print("   dropped entry\n"); // XXX
             // retry if an entry is dropped because the leader have changed after it was submitetd
         }
     }
+fmt::print("  add entries DONE\n"); // XXX
 }
 
 template <typename Clock>
@@ -1084,10 +1112,12 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
 // NOTE: there should be enough nodes capable of participating
 template <typename Clock>
 future<> raft_cluster<Clock>::free_election() {
+fmt::print("Running free election\n");
     tlogger.debug("Running free election");
     size_t node = 0;
     size_t loops = 0;
     for (;; loops++) {
+fmt::print("   loop ----------------------\n");
         co_await seastar::sleep(_tick_delta);   // Wait for election rpc exchanges
         // find if we have a leader
         for (auto s: _in_configuration) {
@@ -1365,12 +1395,14 @@ struct run_test {
                 tick_delta, rpc_config);
         co_await rafts.start_all();
 
+fmt::print("processing updates\n");
         BOOST_TEST_MESSAGE("Processing updates");
 
         // Process all updates in order
         for (auto update: test.updates) {
             co_await std::visit(make_visitor(
             [&rafts] (entries update) -> future<> {
+fmt::print("add entries {}\n", update.n);
                 co_await rafts.add_entries(update.n);
             },
             [&rafts] (new_leader update) -> future<> {
@@ -1419,16 +1451,20 @@ struct run_test {
             ), std::move(update));
         }
 
+fmt::print("done processing updates\n");
         // Reconnect and bring all nodes back into configuration, if needed
         rafts.connect_all();
         co_await rafts.reconfigure_all();
 
         if (test.total_values > 0) {
             BOOST_TEST_MESSAGE("Appending remaining values");
+fmt::print("adding remaining\n");
             co_await rafts.add_remaining_entries();
+fmt::print("wait all\n");
             co_await rafts.wait_all();
         }
 
+fmt::print("stop all\n");
         co_await rafts.stop_all();
 
         if (test.total_values > 0) {

@@ -179,6 +179,7 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
+fmt::print("{} become candidate {}\n", _my_id, is_prevote? "PREVOTE" : "NORMAL"); // XXX
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
@@ -505,6 +506,7 @@ void fsm::tick_leader() {
 
 void fsm::tick() {
     _clock.advance();
+fmt::print("tick[{}]: term {}, last election: {}, now: {}\n", _my_id, _current_term, _last_election_time, _clock.now()); // XXX
 
     auto has_stable_leader = [this]() {
         // We may have received a C_new which does not contain the

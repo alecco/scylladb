@@ -28,12 +28,16 @@ lowres_clock::duration tick_delta = 10ms; // minimum granularity of lowres_clock
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
+fmt::print("\n test " # test_name "===========================\n"); \
         replication_test<lowres_clock>(test_body, false, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+fmt::print("\n test " # test_name "_drops ==========================\n"); \
         replication_test<lowres_clock>(test_body, false, tick_delta, {.drops = true}); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+fmt::print("\n test " # test_name "_prevote ==========================\n"); \
         replication_test<lowres_clock>(test_body, true, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+fmt::print("\n test " # test_name "_prevote_drops ==========================\n"); \
         replication_test<lowres_clock>(test_body, true, tick_delta, {.drops = true}); }
 
 // 1 nodes, simple replication, empty, no updates
@@ -84,11 +88,12 @@ RAFT_TEST_CASE(leader_changes, (test_case{
 //       2 for simplicity and to avoid a stalemate. This behaviour can be disabled.
 //
 
-// 3 nodes, 7 leader entries, 12 client entries, change leader, 12 client entries
+// 3 nodes, 7 leader entries, 2 client entries, change leader, 2 client entries
 RAFT_TEST_CASE(simple_3_pre_chg, (test_case{
-         .nodes = 3, .initial_term = 2,
+         // XXX
+         .nodes = 3, .total_values = 20, .initial_term = 2, 
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12},new_leader{1},entries{12}},}));
+         .updates = {entries{2},new_leader{1},entries{2}},}));
 
 // 3 nodes, leader empty, follower has 3 spurious entries
 // node 1 was leader but did not propagate entries, node 0 becomes leader in new term
@@ -100,37 +105,37 @@ RAFT_TEST_CASE(replace_log_leaders_log_empty, (test_case{
 
 // 3 nodes, 7 leader entries, follower has 9 spurious entries
 RAFT_TEST_CASE(simple_3_spurious_1, (test_case{
-         .nodes = 3, .initial_term = 2,
+         .nodes = 3, .total_values = 20, .initial_term = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {{{2,10},{2,11},{2,12},{2,13},{2,14},{2,15},{2,16},{2,17},{2,18}}}},
-         .updates = {entries{4}},}));
+         .updates = {entries{2}},}));
 
 // 3 nodes, term 3, leader has 9 entries, follower has 5 spurious entries, 4 client entries
 RAFT_TEST_CASE(simple_3_spurious_2, (test_case{
-         .nodes = 3, .initial_term = 3,
+         .nodes = 3, .total_values = 20, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {{{2,10},{2,11},{2,12},{2,13},{2,14}}}},
-         .updates = {entries{4}},}));
+         .updates = {entries{2}},}));
 
 // 3 nodes, term 2, leader has 7 entries, follower has 3 good and 3 spurious entries
 RAFT_TEST_CASE(simple_3_follower_4_1, (test_case{
-         .nodes = 3, .initial_term = 3,
+         .nodes = 3, .total_values = 20, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {.le = {{1,0},{1,1},{1,2},{2,20},{2,30},{2,40}}}},
-         .updates = {entries{4}}}));
+         .updates = {entries{2}}}));
 
 // A follower and a leader have matching logs but leader's is shorter
 // 3 nodes, term 2, leader has 2 entries, follower has same and 5 more, 12 updates
 RAFT_TEST_CASE(simple_3_short_leader, (test_case{
-         .nodes = 3, .initial_term = 3,
+         .nodes = 3, .total_values = 20, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1}}},
                             {.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12}}}));
+         .updates = {entries{2}}}));
 
 // A follower and a leader have no common entries
 // 3 nodes, term 2, leader has 7 entries, follower has non-matching 6 entries, 12 updates
 RAFT_TEST_CASE(follower_not_matching, (test_case{
-         .nodes = 3, .initial_term = 3,
+         .nodes = 3, .total_values = 20, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {.le = {{2,10},{2,20},{2,30},{2,40},{2,50},{2,60}}}},
          .updates = {entries{12}},}));
