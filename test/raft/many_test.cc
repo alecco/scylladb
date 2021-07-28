@@ -25,6 +25,7 @@
 
 #include "replication.hh"
 
+#if 0
 SEASTAR_THREAD_TEST_CASE(test_many_100) {
     replication_test<steady_clock_type>(
         {.nodes = 100, .total_values = 10,
@@ -39,6 +40,18 @@ SEASTAR_THREAD_TEST_CASE(test_many_100) {
 SEASTAR_THREAD_TEST_CASE(test_many_400) {
     replication_test<steady_clock_type>(
         {.nodes = 400, .total_values = 10,
+         .updates = {entries{1},
+                     isolate{0},    // drop leader, free election
+                     entries{2},
+                     }}
+    , true, 100ms,
+    rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
+}
+#endif
+
+SEASTAR_THREAD_TEST_CASE(test_many_700) {
+    replication_test<steady_clock_type>(
+        {.nodes = 700, .total_values = 10,
          .updates = {entries{1},
                      isolate{0},    // drop leader, free election
                      entries{2},
