@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "fsm.hh"
-#include <random>
 #include <seastar/core/coroutine.hh>
 
 namespace raft {
@@ -41,6 +40,12 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     _commit_idx = _log.get_snapshot().idx;
     _observed.advance(*this);
     logger.trace("{}: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
+
+    // Init timeout settings
+    _re = std::make_unique<std::default_random_engine>(std::random_device{}());
+    _conf_size = _log.get_configuration().current.size();
+    _dist = std::make_unique<std::uniform_int_distribution<>>(1,
+                    std::max((size_t) ELECTION_TIMEOUT.count(), _conf_size));
     reset_election_timeout();
 }
 
@@ -143,9 +148,7 @@ void fsm::update_current_term(term_t current_term)
 }
 
 void fsm::reset_election_timeout() {
-    static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{(*_dist)(*_re)};
 }
 
 void fsm::become_leader() {
@@ -567,6 +570,15 @@ void fsm::append_entries(server_id from, append_request&& request) {
 
     if (!request.entries.empty()) {
         last_new_idx = _log.maybe_append(std::move(request.entries));
+        // If cluster size changed, update 
+        size_t conf_size = _log.get_configuration().current.size();
+        if (_conf_size != conf_size) {
+            logger.trace("append_entries[{}]: new configuration size {} -> {}",
+                    _my_id, _conf_size, conf_size);
+            _conf_size = conf_size;
+            _dist = std::make_unique<std::uniform_int_distribution<>>(1,
+                            std::max((size_t) ELECTION_TIMEOUT.count(), conf_size));
+        }
     }
 
     advance_commit_idx(request.leader_commit_idx);
