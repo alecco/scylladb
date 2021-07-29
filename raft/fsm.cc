@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "fsm.hh"
-#include <random>
 #include <seastar/core/coroutine.hh>
 
 namespace raft {
@@ -33,7 +32,7 @@ leader::~leader() {
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
-        _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
+        _log(std::move(log)), _failure_detector(failure_detector), _config(config){
     if (id == raft::server_id{}) {
         throw std::invalid_argument("raft::fsm: raft instance cannot have id zero");
     }
@@ -41,8 +40,14 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     _commit_idx = _log.get_snapshot().idx;
     _observed.advance(*this);
     logger.trace("fsm[{}]: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
+
+    _conf_size = _log.get_configuration().current.size();
+    // Init timeout settings
     reset_election_timeout();
 }
+
+thread_local std::default_random_engine fsm::_re;
+thread_local std::uniform_int_distribution<int> fsm::_dist;
 
 future<> fsm::wait_max_log_size() {
     check_is_leader();
@@ -143,9 +148,10 @@ void fsm::update_current_term(term_t current_term)
 }
 
 void fsm::reset_election_timeout() {
-    static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
+    // Timeout within range of [1, conf size]
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{_dist(_re,
+            std::uniform_int_distribution<int>::param_type{1,
+                    std::max((size_t) ELECTION_TIMEOUT.count(), _conf_size)})};
 }
 
 void fsm::become_leader() {
@@ -567,6 +573,13 @@ void fsm::append_entries(server_id from, append_request&& request) {
 
     if (!request.entries.empty()) {
         last_new_idx = _log.maybe_append(std::move(request.entries));
+        // If cluster size changed, update
+        size_t conf_size = _log.get_configuration().current.size();
+        if (_conf_size != conf_size) {
+            logger.trace("append_entries[{}]: new configuration size {} -> {}",
+                    _my_id, _conf_size, conf_size);
+            _conf_size = conf_size;
+        }
     }
 
     advance_commit_idx(request.leader_commit_idx);
