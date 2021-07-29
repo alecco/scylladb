@@ -20,6 +20,7 @@
  */
 #pragma once
 
+#include <random>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "raft.hh"
@@ -203,6 +204,11 @@ class fsm {
     // reset on each term change. For testing, it's necessary to have the value
     // at election_timeout without becoming a candidate.
     logical_clock::duration _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{1};
+
+    // Timeout generation
+    std::unique_ptr<std::default_random_engine> _re;
+    std::unique_ptr<std::uniform_int_distribution<>> _dist;
+    size_t _conf_size;
 
 private:
     // Holds all replies to AppendEntries RPC which are not
