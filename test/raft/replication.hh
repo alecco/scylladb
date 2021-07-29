@@ -1088,7 +1088,6 @@ future<> raft_cluster<Clock>::free_election() {
         // find if we have a leader
         for (auto s: _in_configuration) {
             if (_servers[s].server->is_leader()) {
-fmt::print("\nNew leader {} (in {} loops) <<<<<<<<<<<<<<\n", to_raft_id(s), loops);
                 tlogger.debug("New leader {} (in {} loops)", to_raft_id(s), loops);
                 _leader = s;
                 co_return;
