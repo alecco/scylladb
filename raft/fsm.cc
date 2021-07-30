@@ -383,6 +383,7 @@ void fsm::maybe_commit() {
             _my_id, _log[new_commit_idx]->term, _current_term);
         return;
     }
+fmt::print("\nmaybe_commit[{}]: commit {} (old {}) <<<< \n\n", _my_id, new_commit_idx, _commit_idx); // XXX
     logger.trace("maybe_commit[{}]: commit {}", _my_id, new_commit_idx);
 
     _commit_idx = new_commit_idx;
@@ -439,6 +440,7 @@ void fsm::maybe_commit() {
 }
 
 void fsm::tick_leader() {
+fmt::print("\n{} tick leader <<<<<<<<<<<<<<<\n\n", _my_id); // XXX
     if (election_elapsed() >= ELECTION_TIMEOUT) {
         // 6.2 Routing requests to the leader
         // A leader in Raft steps down if an election timeout
@@ -555,6 +557,7 @@ void fsm::append_entries(server_id from, append_request&& request) {
     // bandwidth.
     auto [match, term] = _log.match_term(request.prev_log_idx, request.prev_log_term);
     if (!match) {
+fmt::print("append_entries[{}]: no matching term at position {}: expected {}, found {} from {}\n", _my_id, request.prev_log_idx, request.prev_log_term, term, from);
         logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
                 _my_id, request.prev_log_idx, request.prev_log_term, term);
         // Reply false if log doesn't contain an entry at
@@ -615,6 +618,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // accepted
         index_t last_idx = std::get<append_reply::accepted>(reply.result).last_new_idx;
 
+fmt::print("[{}] append_entries_reply {}: accepted match={} last index={}\n", _my_id, from, progress.match_idx, last_idx);
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}",
             _my_id, from, progress.match_idx, last_idx);
 
@@ -646,11 +650,13 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
 
+fmt::print("append_entries_reply[{}->{}]: rejected match={} index={}\n", _my_id, from, progress.match_idx, rejected.non_matching_idx);
         logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}",
             _my_id, from, progress.match_idx, rejected.non_matching_idx);
 
         // check reply validity
         if (progress.is_stray_reject(rejected)) {
+fmt::print("append_entries_reply[{}->{}]: drop stray append reject\n", _my_id, from);
             logger.trace("append_entries_reply[{}->{}]: drop stray append reject", _my_id, from);
             return;
         }
@@ -676,6 +682,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     // follower, so re-track it.
     opt_progress = leader_state().tracker.find(from);
     if (opt_progress != nullptr) {
+fmt::print("\n[{}] append_entries_reply  [->{}]: next_idx={}, match_idx={} <<<<<<<< replicate_to\n", _my_id, from, opt_progress->next_idx, opt_progress->match_idx);
         logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}",
             _my_id, from, opt_progress->next_idx, opt_progress->match_idx);
 
@@ -791,6 +798,7 @@ static size_t entry_size(const log_entry& e) {
 
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
+fmt::print("[{}] replicate_to[->{}]: called next={} match={}\n", _my_id, progress.id, progress.next_idx, progress.match_idx);
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, progress.id, progress.next_idx, progress.match_idx);
 
@@ -798,12 +806,14 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.stable_idx()) {
             next_idx = index_t(0);
+fmt::print("[{}] replicate_to[->{}]: next past stable next={} stable={}, empty={}\n", _my_id, progress.id, progress.next_idx, _log.stable_idx(), allow_empty);
             logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}",
                     _my_id, progress.id, progress.next_idx, _log.stable_idx(), allow_empty);
             if (!allow_empty) {
                 // Send out only persisted entries.
                 return;
             }
+else fmt::print("[{}] replicate_to[->{}]: sent empty\n", _my_id, progress.id);
         }
 
         allow_empty = false; // allow only one empty message
@@ -846,6 +856,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             while (next_idx <= _log.stable_idx() && size < _config.append_request_threshold) {
                 const auto& entry = _log[next_idx];
                 req.entries.push_back(entry);
+fmt::print("[{}] replicate_to[->{}]: send entry idx={}, term={}\n", _my_id, progress.id, entry->idx, entry->term);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
                              _my_id, progress.id, entry->idx, entry->term);
                 size += entry_size(*entry);
@@ -863,6 +874,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
                 progress.next_idx = next_idx;
             }
         } else {
+fmt::print("[{}] replicate_to[->{}]: send empty\n", _my_id, progress.id);
             logger.trace("replicate_to[{}->{}]: send empty", _my_id, progress.id);
         }
 

@@ -70,6 +70,7 @@ void follower_progress::become_probe() {
 
 void follower_progress::become_pipeline() {
     if (state != state::PIPELINE) {
+fmt::print("{} become_pipeline\n", id); // XXX
         // If a previous request was accepted, move to "pipeline" state
         // since we now know the follower's log state.
         state = state::PIPELINE;
