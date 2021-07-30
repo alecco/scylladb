@@ -2408,13 +2408,17 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             co_await env.reconfigure(leader_id,
                 std::vector<raft::server_id>{known_config.begin(), known_config.end()}, timer.now() + 100_t, timer)));
 
-        auto threads = operation::make_thread_set(all_servers.size() + 2);
-        auto nemesis_thread = some(threads);
+        auto threads = operation::make_thread_set(all_servers.size() + 3);
 
-        auto threads_without_nemesis = threads;
-        threads_without_nemesis.erase(nemesis_thread);
+        auto partition_thread = some(threads);
+        auto threads_without_partition = threads;
+        threads_without_partition.erase(partition_thread);
 
-        auto reconfig_thread = some(threads_without_nemesis);
+        auto reconfig_thread = some(threads_without_partition);
+        auto threads_without_reconfig = threads_without_partition;
+        threads_without_reconfig.erase(reconfig_thread);
+
+        auto crash_thread = some(threads_without_reconfig);
 
         auto seed = tests::random::get_int<int32_t>();
 
@@ -2467,7 +2471,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         // we will set request timeout 600_t ~= 6s and partition every 1200_t ~= 12s
 
         auto gen = op_limit(500,
-            pin(nemesis_thread,
+            pin(partition_thread,
                 stagger(seed, timer.now() + 200_t, 1200_t, 1200_t,
                     random(seed, [] (std::mt19937& engine) {
                         static std::uniform_int_distribution<raft::logical_clock::rep> dist{400, 800};
@@ -2478,11 +2482,16 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                     stagger(seed, timer.now() + 1000_t, 500_t, 500_t,
                         constant([] () { return op_type{reconfiguration<AppendReg>{500_t}}; })
                     ),
-                    stagger(seed, timer.now(), 0_t, 50_t,
-                        sequence(1, [] (int32_t i) {
-                            assert(i > 0);
-                            return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
-                        })
+                    pin(crash_thread,
+                        stagger(seed, timer.now() + 200_t, 100_t, 200_t,
+                            constant([] () { return op_type{stop_crash<AppendReg>{50_t}}; })
+                        ),
+                        stagger(seed, timer.now(), 0_t, 50_t,
+                            sequence(1, [] (int32_t i) {
+                                assert(i > 0);
+                                return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
+                            })
+                        )
                     )
                 )
             )
