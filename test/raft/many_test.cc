@@ -65,13 +65,18 @@ SEASTAR_THREAD_TEST_CASE(test_many_600) {
 
 SEASTAR_THREAD_TEST_CASE(test_XXX) {
     replication_test<steady_clock_type>(
-        {.nodes = 100, .total_values = 10,
-         .updates = {entries{1},
-                     isolate{0},              // drop leader, free election
-                     entries{2},
-                     new_leader{1},
-                     set_config{1,2,3,4,5},   // Set configuration to smaller size
-                     }}
+        {
+.nodes = 700, .total_values = 4, .updates = {
+    entries{1},
+    isolate{0},              // drop leader, free election
+    entries{1},
+    new_leader{1},
+    set_config{1,2,3,4,5},   // Set configuration to smaller size
+    entries{1},
+    // config back to all nodes
+    // add remaining entry
+}
+                     }
     , true, 100ms,
     rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
 }

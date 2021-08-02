@@ -555,6 +555,7 @@ void fsm::append_entries(server_id from, append_request&& request) {
     // bandwidth.
     auto [match, term] = _log.match_term(request.prev_log_idx, request.prev_log_term);
     if (!match) {
+fmt::print("append_entries[{}]: no matching term at position {}: expected {}, found {} from {}\n", _my_id, request.prev_log_idx, request.prev_log_term, term, from);
         logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
                 _my_id, request.prev_log_idx, request.prev_log_term, term);
         // Reply false if log doesn't contain an entry at
@@ -646,11 +647,13 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
 
+fmt::print("append_entries_reply[{}->{}]: rejected match={} index={}\n", _my_id, from, progress.match_idx, rejected.non_matching_idx);
         logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}",
             _my_id, from, progress.match_idx, rejected.non_matching_idx);
 
         // check reply validity
         if (progress.is_stray_reject(rejected)) {
+fmt::print("append_entries_reply[{}->{}]: drop stray append reject\n", _my_id, from);
             logger.trace("append_entries_reply[{}->{}]: drop stray append reject", _my_id, from);
             return;
         }

@@ -22,6 +22,8 @@
 #undef SEASTAR_TESTING_MAIN
 #include "replication.hh"
 
+bool DEBUG_PRINT = false; // XXX
+
 seastar::logger tlogger("test");
 
 seastar::semaphore snapshot_sync(0);

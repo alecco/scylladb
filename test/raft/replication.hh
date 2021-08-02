@@ -42,6 +42,12 @@
 #include "test/raft/helpers.hh"
 #include "test/lib/eventually.hh"
 
+// XXX
+#include <fmt/format.h>
+#include <fmt/chrono.h>
+
+extern bool DEBUG_PRINT; // XXX
+
 // Test Raft library with declarative test definitions
 //
 //  Each test can be defined by (struct test_case):
@@ -673,7 +679,7 @@ public:
             return with_gate(_gate, [&, this] () mutable -> future<> {
                 return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
                         [this, id = std::move(id), append_request = std::move(append_request)] {
-// fmt::print("send_append_entries {} -> {}\n", rpc::_id, id); // XXX
+if (DEBUG_PRINT) fmt::print("send_append_entries {} -> {}\n", rpc::_id, id); // XXX
                     rpc::net[id]->_client->append_entries(rpc::_id, append_request);
                 });
             });
@@ -691,7 +697,7 @@ public:
             (void)with_gate(_gate, [&, this] () mutable -> future<> {
                 return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
                         [this, id = std::move(id), reply = std::move(reply)] {
-// fmt::print("send_append_entries_reply {} -> {}\n", rpc::_id, id); // XXX
+if (std::holds_alternative<raft::append_reply::rejected>(reply.result)) fmt::print("send_append_entries_reply {} -> {}  REJECTED\n", rpc::_id, id); // XXX
                     rpc::net[id]->_client->append_entries_reply(rpc::_id, std::move(reply));
                 });
             });
@@ -803,7 +809,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
         config.current.emplace(states[i].address);
     }
 
-fmt::print("_rpc_config network_delay {}\n", _rpc_config.network_delay); // XXX
+// fmt::print("_rpc_config network_delay {}\n", _rpc_config.network_delay); // XXX
     if (_rpc_config.network_delay > 0ms) {
         init_tick_delays(test.nodes);
         _rpc_extra_delay_dist = std::make_unique<std::uniform_int_distribution<int>>(0, _rpc_config.extra_delay_max);
@@ -815,12 +821,12 @@ fmt::print("_rpc_config network_delay {}\n", _rpc_config.network_delay); // XXX
         (*_snapshots)[s.id] = states[i].snp_value;
         _servers.emplace_back(create_server(i, states[i]));
     }
-fmt::print("cluster done\n"); // XXX
+// fmt::print("cluster done\n"); // XXX
 }
 
 template <typename Clock>
 void raft_cluster<Clock>::init_tick_delays(size_t n) {
-fmt::print("init_tick_delays\n"); // XXX
+// fmt::print("init_tick_delays\n"); // XXX
     std::uniform_int_distribution<size_t> dist(0, _tick_delta.count());
     auto gen = random_generator();
 
@@ -849,20 +855,20 @@ future<> raft_cluster<Clock>::reset_server(size_t id, initial_state state) {
 
 template <typename Clock>
 future<> raft_cluster<Clock>::start_all() {
-fmt::print("starting\n"); // XXX
+// fmt::print("starting\n"); // XXX
     co_await parallel_for_each(_servers, [] (auto& r) {
         return r.server->start().then([] {
             return make_ready_future<>();
         });
     });
-fmt::print("servers started<<<<<<<<\n"); // XXX
-fmt::print("\n\ninitializing tickers\n\n"); // XXX
+// fmt::print("servers started<<<<<<<<\n"); // XXX
+// fmt::print("\n\ninitializing tickers\n\n"); // XXX
     co_await init_raft_tickers();
-fmt::print("electing first leader\n"); // XXX
+// fmt::print("electing first leader\n"); // XXX
     BOOST_TEST_MESSAGE("Electing first leader " << _leader);
     _servers[_leader].server->wait_until_candidate();
     co_await _servers[_leader].server->wait_election_done();
-fmt::print("start DONE\n\n"); // XXX
+// fmt::print("start DONE\n\n"); // XXX
 }
 
 template <typename Clock>
@@ -919,6 +925,7 @@ fmt::print("add_entries DONE\n"); // XXX
 
 template <typename Clock>
 future<> raft_cluster<Clock>::add_remaining_entries() {
+fmt::print("\nadd_remaining_entries {} {}\n\n", _next_val, _apply_entries); // XXX
     co_await add_entries(_apply_entries - _next_val);
 }
 
@@ -927,19 +934,19 @@ future<> raft_cluster<Clock>::init_raft_tickers() {
     _tickers.resize(_servers.size());
     // Only start tickers for servers in configuration
 co_await seastar::sleep(_tick_delta * 10); // XXX
-fmt::print("XXX _in_configuration.size() {}\n", _in_configuration.size()); // XXX
+// fmt::print("XXX _in_configuration.size() {}\n", _in_configuration.size()); // XXX
     for (auto s: _in_configuration) {
-fmt::print("initializing ticker for {}\n", to_raft_id(s)); // XXX
+// fmt::print("initializing ticker for {}\n", to_raft_id(s)); // XXX
         _tickers[s].set_callback([&, s] {
-fmt::print("callback {} going to tick\n", to_raft_id(s)); // XXX
+// fmt::print("callback {} going to tick\n", to_raft_id(s)); // XXX
             _servers[s].server->tick();
         });
     }
     if (_tick_delays.size()) {
         co_await parallel_for_each(_in_configuration, [&] (size_t s) -> future<> {
-fmt::print("   {} ticking with delay {}\n", to_raft_id(s), _tick_delays[s]); // XXX
+// fmt::print("   {} ticking with delay {}\n", to_raft_id(s), _tick_delays[s]); // XXX
             co_await seastar::sleep(_tick_delays[s]);
-fmt::print("   {} done sleep\n", to_raft_id(s), _tick_delays[s]); // XXX
+// fmt::print("   {} done sleep\n", to_raft_id(s), _tick_delays[s]); // XXX
             _tickers[s].rearm_periodic(_tick_delta);
         });
     } else {
@@ -947,7 +954,7 @@ fmt::print("   {} done sleep\n", to_raft_id(s), _tick_delays[s]); // XXX
             _tickers[s].arm_periodic(_tick_delta);
         }
     }
-fmt::print("initializing tickers DONE\n"); // XXX
+// fmt::print("initializing tickers DONE\n"); // XXX
 }
 
 template <typename Clock>
@@ -959,7 +966,7 @@ void raft_cluster<Clock>::pause_tickers() {
 
 template <typename Clock>
 future<> raft_cluster<Clock>::restart_tickers() {
-fmt::print("\n\nRestart tickers <<<<<<<<<<<<<<\n\n"); // XXX
+// fmt::print("\n\nRestart tickers <<<<<<<<<<<<<<\n\n"); // XXX
     if (_tick_delays.size()) {
         co_await parallel_for_each(_in_configuration, [&] (size_t s) -> future<> {
             co_await seastar::sleep(_tick_delays[s]);
@@ -1115,6 +1122,7 @@ fmt::print("   wait_election_done\n"); // XXX
         } while (!_servers[new_leader].server->is_leader());
     }
 
+fmt::print("confirmed leader on {}\n", to_raft_id(new_leader));
     tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
     _leader = new_leader;
 }
@@ -1133,7 +1141,7 @@ fmt::print("  loop {}\n", loops);
         // find if we have a leader
         for (auto s: _in_configuration) {
             if (_servers[s].server->is_leader()) {
-fmt::print("New leader {} (in {} loops)\n", to_raft_id(s), loops);
+fmt::print("New leader {} (in {} loops) <<<<\n\n", to_raft_id(s), loops);
                 tlogger.debug("New leader {} (in {} loops)", to_raft_id(s), loops);
                 _leader = s;
                 co_return;
@@ -1398,37 +1406,47 @@ template <typename Clock>
 struct run_test {
     future<> operator() (test_case test, bool prevote, typename Clock::duration tick_delta,
             rpc_config rpc_config) {
+auto start = std::chrono::system_clock::now();
 
-fmt::print("starting test with {}\n", rpc_config.network_delay > 0ms? "delays" : "no delays");
+// fmt::print("starting test with {}\n", rpc_config.network_delay > 0ms? "delays" : "no delays");
         tlogger.debug("starting test with {}",
                 rpc_config.network_delay > 0ms? "delays" : "no delays");
 
         raft_cluster<Clock> rafts(test, ::apply_changes, test.total_values,
                 test.get_first_val(), test.initial_leader, prevote,
                 tick_delta, rpc_config);
+fmt::print("\ninitialized cluster   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
         co_await rafts.start_all();
+fmt::print("\nstarted cluster   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
 
-fmt::print("Processing updates\n"); // XXX
+fmt::print("\nProcessing updates   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
         BOOST_TEST_MESSAGE("Processing updates");
 
         // Process all updates in order
         for (auto update: test.updates) {
             co_await std::visit(make_visitor(
-            [&rafts] (entries update) -> future<> {
-fmt::print("entries\n"); // XXX
+            [&rafts
+, start // XXX
+            ] (entries update) -> future<> {
+fmt::print("\nadding entries   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
                 co_await rafts.add_entries(update.n);
             },
-            [&rafts] (new_leader update) -> future<> {
-fmt::print("new leader {}\n", to_raft_id(update.id)); // XXX
+            [&rafts
+,start // XXX
+            ] (new_leader update) -> future<> {
+fmt::print("\nNew leader   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
                 co_await rafts.elect_new_leader(update.id);
             },
             [&rafts] (disconnect update) -> future<> {
                 rafts.disconnect(update);
                 co_return;
             },
-            [&rafts] (::isolate update) -> future<> {
-fmt::print("isolate\n"); // XXX
+            [&rafts
+,start // XXX
+            ] (::isolate update) -> future<> {
+fmt::print("\nIsolate   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
                 co_await rafts.isolate(update);
+fmt::print("\nIsolate DONE  {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
             },
             [&rafts] (partition update) -> future<> {
                 co_await rafts.partition(update);
@@ -1442,7 +1460,10 @@ fmt::print("isolate\n"); // XXX
             [&rafts] (wait_log update) -> future<> {
                 co_await rafts.wait_log(update);
             },
-            [&rafts] (set_config update) -> future<> {
+            [&rafts
+,start // XXX
+            ] (set_config update) -> future<> {
+fmt::print("\nNew config   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
                 co_await rafts.change_configuration(update);
             },
             [&rafts] (check_rpc_config update) -> future<> {
@@ -1466,25 +1487,34 @@ fmt::print("isolate\n"); // XXX
             ), std::move(update));
         }
 
-fmt::print("reconnecting\n"); // XXX
+
+fmt::print("\nReconnect and reconfigure...   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
         // Reconnect and bring all nodes back into configuration, if needed
         rafts.connect_all();
         co_await rafts.reconfigure_all();
+fmt::print("\nReconnect and reconfigure DONE     {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
 
         if (test.total_values > 0) {
-fmt::print("remaining\n"); // XXX
+
+DEBUG_PRINT = true; // XXX
+
+fmt::print("\nadding remaining   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
             BOOST_TEST_MESSAGE("Appending remaining values");
             co_await rafts.add_remaining_entries();
-fmt::print("waiting\n"); // XXX
+
+fmt::print("\nwait all   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
             co_await rafts.wait_all();
         }
 
-fmt::print("stopping\n"); // XXX
+DEBUG_PRINT = false; // XXX
+fmt::print("\nwait all   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
         co_await rafts.stop_all();
+fmt::print("\nstopped all   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
 
         if (test.total_values > 0) {
             rafts.verify();
         }
+fmt::print("\nverified all   {}\n\n", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start)); // XXX
     }
 };
 
