@@ -874,10 +874,13 @@ void raft_cluster<Clock>::connect_all() {
 // Add consecutive integer entries to a leader
 template <typename Clock>
 future<> raft_cluster<Clock>::add_entries(size_t n) {
+fmt::print("add_entry\n");
     size_t end = _next_val + n;
     while (_next_val != end) {
         try {
+fmt::print("  adding entry {}\n", _next_val);
             co_await _servers[_leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
+fmt::print("  DONE\n", _next_val);
             _next_val++;
         } catch (raft::not_a_leader& e) {
             // leader stepped down, update with new leader if present
@@ -893,6 +896,7 @@ future<> raft_cluster<Clock>::add_entries(size_t n) {
 
 template <typename Clock>
 future<> raft_cluster<Clock>::add_remaining_entries() {
+fmt::print("Remaining {}\n", _apply_entries - _next_val); // XXX
     co_await add_entries(_apply_entries - _next_val);
 }
 
@@ -1369,7 +1373,9 @@ struct run_test {
         for (auto update: test.updates) {
             co_await std::visit(make_visitor(
             [&rafts] (entries update) -> future<> {
+fmt::print("Adding entries...\n"); // XXX
                 co_await rafts.add_entries(update.n);
+fmt::print("  DONE\n"); // XXX
             },
             [&rafts] (new_leader update) -> future<> {
                 co_await rafts.elect_new_leader(update.id);
@@ -1379,7 +1385,9 @@ struct run_test {
                 co_return;
             },
             [&rafts] (::isolate update) -> future<> {
+fmt::print("Isolating...\n"); // XXX
                 co_await rafts.isolate(update);
+fmt::print("  DONE\n"); // XXX
             },
             [&rafts] (partition update) -> future<> {
                 co_await rafts.partition(update);
@@ -1423,10 +1431,12 @@ struct run_test {
 
         if (test.total_values > 0) {
             BOOST_TEST_MESSAGE("Appending remaining values");
+fmt::print("Add remaining...\n"); // XXX
             co_await rafts.add_remaining_entries();
+fmt::print("Wait all...\n"); // XXX
             co_await rafts.wait_all();
         }
-
+fmt::print("Stop all...\n"); // XXX
         co_await rafts.stop_all();
 
         if (test.total_values > 0) {
