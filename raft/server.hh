@@ -55,7 +55,6 @@ public:
     // Returned future is resolved depending on wait_type parameter:
     //  'committed' - when the entry is committed
     //  'applied'   - when the entry is applied (happens after it is committed)
-    // The function has to be called on a leader, throws not_a_leader exception otherwise.
     // May fail because of an internal error or because leader changed and an entry was either
     // replaced by the new leader or the server lost track of it. The former will result in
     // dropped_entry exception the later in commit_status_unknown.
@@ -80,6 +79,16 @@ public:
     // uncertainty, thus commit_status_unknown exception may be
     // returned even in case of a successful config change.
     virtual future<> set_configuration(server_address_set c_new) = 0;
+
+    // A simplified wrapper around set_configuration() which adds
+    // and deletes servers. Unlike set_configuration(),
+    // works on a follower as well as on a leader (forwards the
+    // request to the current leader). If the added servers are
+    // already part of the configuration, or deleted are not
+    // present, does nothing. This makes it possible to retry
+    // this command without adverse effects to the configuration.
+    virtual future<> modify_config(std::vector<server_address> add,
+        std::vector<server_id> del) = 0;
 
     // Return the currently known configuration
     virtual raft::configuration get_configuration() const = 0;

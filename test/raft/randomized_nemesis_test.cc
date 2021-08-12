@@ -300,6 +300,22 @@ class rpc : public raft::rpc {
         reply_id_t reply_id;
     };
 
+    struct add_entry_message {
+        raft::command cmd;
+        reply_id_t reply_id;
+    };
+
+    struct add_entry_reply_message {
+        raft::add_entry_reply reply;
+        reply_id_t reply_id;
+    };
+
+    struct modify_config_message {
+        std::vector<raft::server_address> add;
+        std::vector<raft::server_id> del;
+        reply_id_t reply_id;
+    };
+
 public:
     using message_t = std::variant<
         snapshot_message,
@@ -312,7 +328,11 @@ public:
         raft::read_quorum,
         raft::read_quorum_reply,
         execute_barrier_on_leader,
-        execute_barrier_on_leader_reply>;
+        execute_barrier_on_leader_reply,
+        add_entry_message,
+        add_entry_reply_message,
+        modify_config_message
+        >;
 
     using send_message_t = std::function<void(raft::server_id dst, message_t)>;
 
@@ -329,7 +349,12 @@ private:
     // When (if) a reply returns, we take the ID from the reply (which is the same
     // as the ID in the corresponding request), take the promise under that ID
     // and push the reply through that promise.
-    std::unordered_map<reply_id_t, std::variant<promise<raft::snapshot_reply>, promise<raft::read_barrier_reply>>> _reply_promises;
+    using reply_promise = std::variant<
+        promise<raft::snapshot_reply>,
+        promise<raft::read_barrier_reply>,
+        promise<raft::add_entry_reply>
+    >;
+    std::unordered_map<reply_id_t, reply_promise> _reply_promises;
     reply_id_t _counter = 0;
 
     // Used to ensure that when `abort()` returns there are
@@ -410,6 +435,33 @@ public:
                 std::get<promise<raft::read_barrier_reply>>(it->second).set_value(std::move(m.reply));
             }
             co_return;
+        },
+        [&] (add_entry_message m) -> future<> {
+            co_await with_gate(_gate, [&] () -> future<> {
+                auto reply = co_await c.execute_add_entry(src, std::move(m.cmd));
+
+                _send(src, add_entry_reply_message{
+                    .reply = std::move(reply),
+                    .reply_id = m.reply_id
+                });
+            });
+        },
+        [this] (add_entry_reply_message m) -> future<> {
+            auto it = _reply_promises.find(m.reply_id);
+            if (it != _reply_promises.end()) {
+                std::get<promise<raft::add_entry_reply>>(it->second).set_value(std::move(m.reply));
+            }
+            co_return;
+        },
+        [&] (modify_config_message m) -> future<> {
+            co_await with_gate(_gate, [&] () -> future<> {
+                auto reply = co_await c.execute_modify_config(src, std::move(m.add), std::move(m.del));
+
+                _send(src, add_entry_reply_message{
+                    .reply = std::move(reply),
+                    .reply_id = m.reply_id
+                });
+            });
         }
         ), std::move(payload));
     }
@@ -454,6 +506,35 @@ public:
         });
     }
 
+    virtual future<raft::add_entry_reply> send_add_entry(raft::server_id dst, const raft::command& cmd) override {
+        auto id = _counter++;
+        promise<raft::add_entry_reply> p;
+        auto f = p.get_future();
+        _reply_promises.emplace(id, std::move(p));
+        auto guard = defer([this, id] { _reply_promises.erase(id); });
+
+        _send(dst, add_entry_message{
+            .cmd = cmd,
+            .reply_id = id
+        });
+        co_return co_await std::move(f);
+    }
+    virtual future<raft::add_entry_reply> send_modify_config(raft::server_id dst,
+        const std::vector<raft::server_address>& add,
+        const std::vector<raft::server_id>& del) override {
+        auto id = _counter++;
+        promise<raft::add_entry_reply> p;
+        auto f = p.get_future();
+        _reply_promises.emplace(id, std::move(p));
+        auto guard = defer([this, id] { _reply_promises.erase(id); });
+
+        _send(dst, modify_config_message{
+            .add = add,
+            .del = del,
+            .reply_id = id
+        });
+        co_return co_await std::move(f);
+    }
     virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id dst) override {
         auto id = _counter++;
         promise<raft::read_barrier_reply> p;
