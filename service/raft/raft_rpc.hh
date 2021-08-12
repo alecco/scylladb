@@ -55,6 +55,7 @@ public:
     void send_read_quorum(raft::server_id id, const raft::read_quorum& check_quorum) override;
     void send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& check_quorum_reply) override;
     future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id id) override;
+    future<raft::add_entry_reply> send_add_entry(raft::server_id id, const raft::command& cmd) override;
 
     void add_server(raft::server_id id, raft::server_info info) override;
     void remove_server(raft::server_id id) override;
@@ -71,6 +72,7 @@ public:
     future<raft::read_barrier_reply> execute_read_barrier(raft::server_id);
 
     future<raft::snapshot_reply> apply_snapshot(raft::server_id from, raft::install_snapshot snp);
+    future<raft::add_entry_reply> execute_add_entry(raft::server_id from, raft::command cmd);
 };
 
 } // end of namespace service
