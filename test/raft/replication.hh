@@ -635,6 +635,15 @@ public:
         }
         return net[id]->_client->execute_read_barrier(_id);
     }
+    virtual future<raft::add_entry_reply> send_add_entry(raft::server_id id, const raft::command& cmd) override {
+        if (!net.count(id)) {
+            return make_exception_future<raft::add_entry_reply>(std::runtime_error("trying to send a message to an unknown node"));
+        }
+        if (!(*_connected)(id, _id)) {
+            return make_exception_future<raft::add_entry_reply>(std::runtime_error("cannot send add_entry since nodes are disconnected"));
+        }
+        return net[id]->_client->execute_add_entry(_id, cmd);
+    }
     virtual void add_server(raft::server_id id, bytes node_info) {
         _known_peers.insert(raft::server_address{id});
         ++_servers_added;

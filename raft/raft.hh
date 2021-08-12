@@ -372,6 +372,15 @@ struct read_quorum_reply {
     read_id id;
 };
 
+struct entry_id {
+    // Added entry term
+    term_t term;
+    // Added entry log index
+    index_t idx;
+};
+
+using add_entry_reply = std::variant<raft::entry_id, raft::not_a_leader>;
+
 // std::monostate {} if the leader cannot execute the barrier because
 // it did not commit any entries yet
 // raft::not_a_leader if the node is not a leader
@@ -495,6 +504,13 @@ public:
     // Forward a read barrier request to the leader.
     virtual future<read_barrier_reply> execute_read_barrier_on_leader(server_id id) = 0;
 
+    // Two-way RPC for adding an entry on the leader
+    // @param id the leader
+    // @param cmd raft::command to be added to the leader's log
+    // @retval either term and index of the committed entry or
+    // not_a_leader exception.
+    virtual future<add_entry_reply> send_add_entry(server_id id, const command& cmd) = 0;
+
     // When a new server is learn this function is called with the
     // info about the server.
     virtual void add_server(server_id id, server_info info) = 0;
@@ -540,6 +556,10 @@ public:
 
     // Try to execute read barrier, future resolves when the barrier is completed or error happens
     virtual future<read_barrier_reply> execute_read_barrier(server_id from) = 0;
+
+    // An endpoint on the leader to add an entry to the raft log,
+    // as requested by a remote follower.
+    virtual future<add_entry_reply> execute_add_entry(server_id from, command cmd) = 0;
 
     // Update RPC implementation with this client as
     // the receiver of RPC input.
