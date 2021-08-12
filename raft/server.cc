@@ -70,6 +70,9 @@ public:
     void read_quorum_request(server_id from, struct read_quorum read_quorum) override;
     void read_quorum_reply(server_id from, struct read_quorum_reply read_quorum_reply) override;
     future<read_barrier_reply> execute_read_barrier(server_id) override;
+    future<add_entry_reply> execute_add_entry(server_id from, command cmd) override;
+    future<add_entry_reply> execute_modify_config(server_id from,
+        std::vector<server_address> add, std::vector<server_id> del) override;
 
 
     // server interface
@@ -90,6 +93,7 @@ public:
     void tick() override;
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout) override;
+    future<> modify_config(std::vector<server_address> add, std::vector<server_id> del) override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -200,6 +204,9 @@ private:
     // This fiber runs in the background and applies committed entries.
     future<> applier_fiber();
 
+    // Add a special entry such as configuration or a dummy
+    // entry, is not restricted by max log size to avoid
+    // deadlocks.
     template <typename T> future<> add_entry_internal(T command, wait_type type);
     template <typename Message> void send_message(server_id id, Message m);
 
@@ -244,7 +251,12 @@ private:
 
     // Get "safe to read" index from a leader
     future<read_barrier_reply> get_read_idx(server_id leader);
-    // Wait for the index to be applied
+    // Wait for an entry with a specific term to get committed or
+    // applied locally.
+    future<> wait_for_entry(entry_id eid, wait_type type);
+    // Wait for a read barrier index to be applied. The index
+    // is typically already committed, so we don't worry about the
+    // term.
     future<> wait_for_apply(index_t idx);
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
@@ -312,28 +324,147 @@ future<> server_impl::wait_for_leader() {
     return _leader_promise->get_shared_future();
 }
 
-template <typename T>
-future<> server_impl::add_entry_internal(T command, wait_type type) {
-    logger.trace("An entry is submitted on a leader");
+future<> server_impl::wait_for_entry(entry_id eid, wait_type type) {
+    // The entry may have been already committed and even applied
+    // in case it was forwarded to the leader. In this case
+    // waiting for it is futile.
+    if (eid.idx <= _fsm->commit_idx()) {
+        if ((type == wait_type::committed) ||
+            (type == wait_type::applied && eid.idx <= _applied_idx)) {
 
-    // Wait for a new slot to become available
-    co_await _fsm->wait_max_log_size();
-
-    logger.trace("An entry proceeds after wait");
-
-    const log_entry& e = _fsm->add_entry(std::move(command));
-
+            auto term = _fsm->log_term_for(eid.idx);
+            if (term && *term == eid.term) {
+                co_return;
+            }
+            throw commit_status_unknown();
+        }
+    }
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
+    logger.trace("{} waiting for entry {}.{}", id(), eid.term, eid.idx);
 
     // This will track the commit/apply status of the entry
-    auto [it, inserted] = container.emplace(e.idx, op_status{e.term, promise<>()});
+    auto [it, inserted] = container.emplace(eid.idx, op_status{eid.term, promise<>()});
+    if (!inserted) {
+        // Some entries were dropped due to a leader change
+        assert(it->second.term < eid.term);
+        auto [entry_idx, status] = std::move(*it);
+        container.erase(it);
+        // An entry with an older term T was replaced
+        // with a new entry with term K, K > T. Could we set
+        // dropped_entry exception here?
+        // If we know there was at least one committed entry with
+        // term L, L > T, then yes. Otherwise we must use
+        // commit_status_unknown.
+        if (*_fsm->log_term_for(_fsm->commit_idx()) > it->second.term) {
+            status.done.set_exception(dropped_entry());
+        } else {
+            status.done.set_exception(commit_status_unknown());
+        }
+        _stats.waiters_dropped++;
+        std::tie(it, inserted) = container.emplace(eid.idx, op_status{eid.term, promise<>()});
+    }
     assert(inserted);
-    co_return co_await it->second.done.get_future();
+    co_await it->second.done.get_future();
+    logger.trace("{} done waiting for {}.{}", id(), eid.term, eid.idx);
+    co_return;
+}
+
+template <typename T>
+future<> server_impl::add_entry_internal(T command, wait_type type) {
+    const log_entry& e = _fsm->add_entry(std::move(command));
+    co_return co_await wait_for_entry({.term = e.term, .idx = e.idx}, type);
+}
+
+future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd) {
+    try {
+        // Wait for a new slot to become available
+        co_await _fsm->wait_max_log_size();
+        logger.trace("Adding entry after log size limit check.");
+
+        const log_entry& e = _fsm->add_entry(std::move(cmd));
+
+        co_return add_entry_reply{entry_id{.term = e.term, .idx = e.idx}};
+    } catch (raft::not_a_leader& e) {
+        co_return add_entry_reply{e};
+    }
 }
 
 future<> server_impl::add_entry(command command, wait_type type) {
     _stats.add_command++;
-    return add_entry_internal(std::move(command), type);
+    server_id leader = _fsm->current_leader();
+    logger.trace("An entry is submitted");
+    while (true) {
+        if (leader == server_id{}) {
+            logger.trace("The leader is unknown, waiting through uncertainty");
+            co_await wait_for_leader();
+            leader = _fsm->current_leader();
+        } else {
+            auto reply = co_await [&] {
+                if (leader == _id) {
+                    logger.trace("An entry proceeds on a leader");
+                    return execute_add_entry(leader, std::move(command));
+                } else {
+                    logger.trace("Forwarding the entry to {}", leader);
+                    return _rpc->send_add_entry(leader, command);
+                }
+            }();
+            if (std::holds_alternative<raft::entry_id>(reply)) {
+                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), type);
+            }
+            leader = std::get<raft::not_a_leader>(reply).leader;
+        }
+    }
+}
+
+future<add_entry_reply> server_impl::execute_modify_config(server_id from,
+    std::vector<server_address> add, std::vector<server_id> del) {
+    try {
+        // Wait for a new slot to become available
+        auto cfg = get_configuration().current;
+        for (auto& addr : add) {
+            logger.trace("Adding server {}", addr.id);
+            auto [it, inserted] = cfg.insert(addr);
+            if (!inserted) {
+                logger.warn("The server {} already exists in configuration of {}", addr.id, _id);
+            }
+        }
+        for (auto& id : del) {
+            logger.trace("Removing server {}", id);
+            cfg.erase(server_address{.id = id});
+        }
+        co_await set_configuration(cfg);
+        const log_entry& e = _fsm->add_entry(log_entry::dummy());
+        co_return add_entry_reply{entry_id{.term = e.term, .idx = e.idx}};
+
+    } catch (raft::error& e) {
+        if (! is_transient_error(e)) {
+            throw;
+        }
+    }
+    co_return add_entry_reply{not_a_leader{_fsm->current_leader()}};
+}
+
+future<> server_impl::modify_config(std::vector<server_address> add, std::vector<server_id> del) {
+    server_id leader = _fsm->current_leader();
+    while (true) {
+        if (leader == server_id{}) {
+            co_await wait_for_leader();
+            leader = _fsm->current_leader();
+        } else {
+            auto reply = co_await [&] {
+                if (leader == _id) {
+                    return execute_modify_config(leader, std::move(add), std::move(del));
+                } else {
+                    logger.trace("Forwarding the entry to {}", leader);
+                    return _rpc->send_modify_config(leader, add, del);
+                }
+            }();
+            if (std::holds_alternative<raft::entry_id>(reply)) {
+                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), wait_type::committed);
+            }
+            leader = std::get<raft::not_a_leader>(reply).leader;
+        }
+    }
 }
 
 void server_impl::append_entries(server_id from, append_request append_request) {
