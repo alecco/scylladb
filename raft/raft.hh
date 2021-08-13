@@ -510,6 +510,12 @@ public:
     // not_a_leader exception.
     virtual future<add_entry_reply> send_add_entry(server_id id, const command& cmd) = 0;
 
+    // Send a configuration change request to the leader. Block until the
+    // leader replies.
+    virtual future<add_entry_reply> send_modify_config(server_id id,
+        const std::vector<server_address>& add,
+        const std::vector<server_id>& del) = 0;
+
     // When a new server is learn this function is called with the
     // info about the server.
     virtual void add_server(server_id id, server_info info) = 0;
@@ -559,6 +565,12 @@ public:
     // An endpoint on the leader to add an entry to the raft log,
     // as requested by a remote follower.
     virtual future<add_entry_reply> execute_add_entry(server_id from, command cmd) = 0;
+
+    // An endpoint on the leader to change configuration,
+    // as requested by a remote follower.
+    virtual future<add_entry_reply> execute_modify_config(server_id from,
+        std::vector<server_address> add,
+        std::vector<server_id> del) = 0;
 
     // Update RPC implementation with this client as
     // the receiver of RPC input.
