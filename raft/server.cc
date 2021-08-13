@@ -71,10 +71,12 @@ public:
     void read_quorum_reply(server_id from, struct read_quorum_reply read_quorum_reply) override;
     future<read_barrier_reply> execute_read_barrier(server_id) override;
     future<add_entry_reply> execute_add_entry(server_id from, command cmd) override;
+    future<add_entry_reply> execute_modify_config(server_id from,
+        std::vector<server_address> add, std::vector<server_id> del) override;
 
 
     // server interface
-    future<> add_entry(command command, wait_type type);
+    future<> add_entry(command command, wait_type type) override;
     future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
     future<> set_configuration(server_address_set c_new) override;
     raft::configuration get_configuration() const override;
@@ -91,6 +93,7 @@ public:
     void tick() override;
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout) override;
+    future<> modify_config(std::vector<server_address> add, std::vector<server_id> del) override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -183,6 +186,8 @@ private:
 
     // An id of last loaded snapshot into a state machine
     snapshot_id _last_loaded_snapshot_id;
+
+    semaphore _cfg_sem{1};
 
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
@@ -375,6 +380,54 @@ future<> server_impl::add_entry(command command, wait_type type) {
             }();
             if (std::holds_alternative<raft::entry_id>(reply)) {
                 co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), type);
+            }
+            leader = std::get<raft::not_a_leader>(reply).leader;
+        }
+    }
+}
+
+future<add_entry_reply> server_impl::execute_modify_config(server_id from,
+    std::vector<server_address> add, std::vector<server_id> del) {
+    try {
+        // Wait for a new slot to become available
+        logger.trace("Adding server {}", add.front().id);
+        auto lock = co_await get_units(_cfg_sem, 1);
+        auto cfg = get_configuration().current;
+        for (auto& addr : add) {
+            cfg.emplace(addr);
+        }
+        for (auto& id : del) {
+            cfg.erase(server_address{.id = id});
+        }
+        co_await set_configuration(cfg);
+        const log_entry& e = _fsm->add_entry(log_entry::dummy());
+        co_return add_entry_reply{entry_id{.term = e.term, .idx = e.idx}};
+
+    } catch (raft::error& e) {
+        if (is_transient_error(e)) {
+            co_return add_entry_reply{not_a_leader{_fsm->current_leader()}};
+        }
+        throw;
+    }
+}
+
+future<> server_impl::modify_config(std::vector<server_address> add, std::vector<server_id> del) {
+    server_id leader = _fsm->current_leader();
+    while (true) {
+        if (leader == server_id{}) {
+            co_await wait_for_leader();
+            leader = _fsm->current_leader();
+        } else {
+            auto reply = co_await [&] {
+                if (leader == _id) {
+                    return execute_modify_config(leader, std::move(add), std::move(del));
+                } else {
+                    logger.trace("Forwarding the entry to {}", leader);
+                    return _rpc->send_modify_config(leader, add, del);
+                }
+            }();
+            if (std::holds_alternative<raft::entry_id>(reply)) {
+                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), wait_type::committed);
             }
             leader = std::get<raft::not_a_leader>(reply).leader;
         }
@@ -880,6 +933,7 @@ void server_impl::abort_snapshot_transfers() {
 future<> server_impl::abort() {
     logger.trace("abort() called");
     _fsm->stop();
+    _cfg_sem.broken();
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
 
     // IO and applier fibers may update waiters and start new snapshot

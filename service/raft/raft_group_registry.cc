@@ -137,6 +137,16 @@ void raft_group_registry::init_rpc_verbs() {
             return rpc.execute_add_entry(from, cmd);
         });
     });
+
+    _ms.register_raft_modify_config([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::group_id gid, raft::server_id from, raft::server_id dst,
+            std::vector<raft::server_address> add, std::vector<raft::server_id> del) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst,
+            [from, add = std::move(add), del = std::move(del)] (raft_rpc& rpc) mutable {
+
+            return rpc.send_modify_config(from, add, del);
+        });
+    });
 }
 
 future<> raft_group_registry::uninit_rpc_verbs() {
@@ -150,7 +160,8 @@ future<> raft_group_registry::uninit_rpc_verbs() {
         _ms.unregister_raft_read_quorum(),
         _ms.unregister_raft_read_quorum_reply(),
         _ms.unregister_raft_execute_read_barrier_on_leader(),
-        _ms.unregister_raft_add_entry()
+        _ms.unregister_raft_add_entry(),
+        _ms.unregister_raft_modify_config()
     ).discard_result();
 }
 

@@ -80,6 +80,16 @@ public:
     // returned even in case of a successful config change.
     virtual future<> set_configuration(server_address_set c_new) = 0;
 
+    // A simplified wrapper around set_configuration() which adds
+    // and deletes servers. Unlike set_configuration(),
+    // works on a follower as well as on a leader (forwards the
+    // request to the current leader). If the added servers are
+    // already part of the configuration, or deleted are not
+    // present, does nothing. This makes it possible to retry
+    // this command without adverse effects to the configuration.
+    virtual future<> modify_config(std::vector<server_address> add,
+        std::vector<server_id> del) = 0;
+
     // Return the currently known configuration
     virtual raft::configuration get_configuration() const = 0;
 
