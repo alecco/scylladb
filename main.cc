@@ -494,7 +494,9 @@ int main(int ac, char** av) {
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
     debug::db = &db;
+    // XXX here??
     auto& proxy = service::get_storage_proxy();
+    auto& proxy2 = service::get_storage_proxy();
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     api::http_context ctx(db, proxy, load_meter, token_metadata);
@@ -504,6 +506,8 @@ int main(int ac, char** av) {
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
     sharded<cql3::query_processor> qp;
+// XXX query_processor for raft group 0
+sharded<cql3::query_processor> qp_raft;
     sharded<semaphore> sst_dir_semaphore;
     sharded<service::raft_group_registry> raft_gr;
     sharded<service::memory_limiter> service_memory_limiter;
@@ -534,7 +538,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([cfg, ext, &db, &qp, &qp_raft, &proxy, &proxy2, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &ss, &lifecycle_notifier] {
@@ -943,7 +947,7 @@ int main(int ac, char** av) {
             view_hints_dir_initializer.ensure_created_and_verified().get();
 
             // We need the compaction manager ready early so we can reshard.
-            db.invoke_on_all([&proxy, &stop_signal] (database& db) {
+            db.invoke_on_all([&proxy, &proxy2, &stop_signal] (database& db) {
                 db.get_compaction_manager().enable();
             }).get();
 
@@ -972,6 +976,7 @@ int main(int ac, char** av) {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
             }).get();
 
+            // XXX here??
             supervisor::notify("starting storage proxy");
             service::storage_proxy::config spcfg {
                 .hints_directory_initializer = hints_dir_initializer,
@@ -996,6 +1001,10 @@ int main(int ac, char** av) {
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
                     std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
+            // XXX why doesn't this blow up??
+            proxy2.start(std::ref(db), spcfg, std::ref(node_backlog),
+                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
@@ -1007,7 +1016,10 @@ int main(int ac, char** av) {
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
+fmt::print("\n\n   CUEC\n\n");
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
+            // XXX
+qp_raft.start(std::ref(proxy2), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");
@@ -1187,6 +1199,7 @@ int main(int ac, char** av) {
                 cdc.stop().get();
             });
 
+            // XXX here?
             supervisor::notify("starting storage service", true);
             ss.local().init_messaging_service_part().get();
             auto stop_ss_msg = defer_verbose_shutdown("storage service messaging", [&ss] {
@@ -1221,6 +1234,7 @@ int main(int ac, char** av) {
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
             });
 
+            // XXX and this?
             // Register storage_service to migration_notifier so we can update
             // pending ranges when keyspace is chagned
             mm_notifier.local().register_listener(&ss.local());
@@ -1229,7 +1243,9 @@ int main(int ac, char** av) {
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().init_server(qp.local());
+                return ss.local().init_server(qp.local(),     // storage_service.cc:1403
+                        qp_raft.local()   // XXX here this also inits raft_group0
+                        );
             }).get();
 
             sst_format_selector.sync();
@@ -1444,6 +1460,7 @@ int main(int ac, char** av) {
                 view_update_generator.stop().get();
             });
 
+            // XXX local storage?
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
                 ss.local().drain_on_shutdown().get();
             });

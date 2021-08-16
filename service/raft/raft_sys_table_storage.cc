@@ -46,6 +46,7 @@ raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::
 {
     static const auto store_cql = format("INSERT INTO system.{} (group_id, term, \"index\", data) VALUES (?, ?, ?, ?)",
         db::system_keyspace::RAFT);
+    // XXX this
     auto prepared_stmt_ptr = _qp.prepare_internal(store_cql);
     shared_ptr<cql3::cql_statement> cql_stmt = prepared_stmt_ptr->statement;
     _store_entry_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
