@@ -38,7 +38,7 @@ public:
     raft_group_registry& _raft_gr;
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
-    cql3::query_processor& _qp;
+    cql3::query_processor& _qp;  // XXX this one
     service::migration_manager& _mm;
     // Status of leader discovery. Initially there is no group 0,
     // and the variant contains no state. During initial cluster

@@ -40,7 +40,7 @@ namespace service {
 raft_group0::raft_group0(raft_group_registry& raft_gr,
         netw::messaging_service& ms,
         gms::gossiper& gs,
-        cql3::query_processor& qp,
+        cql3::query_processor& qp,  // XXX here
         service::migration_manager& mm)
     : _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm)
 {
@@ -67,6 +67,7 @@ raft_server_for_group raft_group0::create_server_for_group(raft::group_id gid,
     auto rpc = std::make_unique<raft_rpc>(_ms, _raft_gr.address_map(), gid, my_addr.id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
+    // XXX here
     auto storage = std::make_unique<raft_sys_table_storage>(_qp, gid);
     auto state_machine = std::make_unique<schema_raft_state_machine>();
     auto server = raft::create_server(my_addr.id, std::move(rpc), std::move(state_machine),

@@ -374,6 +374,7 @@ public:
         return _db.local();
     }
 
+    // XXX here?
     cql3::query_processor& local_qp() override {
         return _qp.local();
     }
@@ -562,7 +563,7 @@ public:
             raft_gr.start(std::ref(ms), std::ref(gms::get_gossiper())).get();
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
-            sharded<service::storage_service> ss;
+            sharded<service::storage_service> ss; // XXX here
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
             ss.start(std::ref(abort_sources), std::ref(db),
@@ -627,6 +628,7 @@ public:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            // XXX starts storage_proxy
             proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(ms)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
@@ -702,7 +704,8 @@ public:
                 cdc.stop().get();
             });
 
-            ss.local().init_server(qp.local(), service::bind_messaging_port(false)).get();
+            // XXX match new def
+            ss.local().init_server(qp.local(), qp.local(), service::bind_messaging_port(false)).get();
             ss.local().join_cluster().get();
 
             auth::permissions_cache_config perm_cache_config;

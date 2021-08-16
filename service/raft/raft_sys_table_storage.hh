@@ -53,7 +53,7 @@ class raft_sys_table_storage : public raft::persistence {
     // Prepared statement instance used for construction of batch statements on
     // `store_log_entries` calls.
     shared_ptr<cql3::statements::modification_statement> _store_entry_stmt;
-    cql3::query_processor& _qp;
+    cql3::query_processor& _qp; // XXX this
     service::query_state _dummy_query_state;
     // The future of the currently executing (or already finished) write operation.
     //
