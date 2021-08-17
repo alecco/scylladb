@@ -530,17 +530,18 @@ class raft_cluster<Clock>::rpc : public raft::rpc {
     std::mt19937& _gen;
     // prefix mask for nodes (shards) per server
     uint64_t _local_mask;
-
+    bool _delays;
 public:
     rpc(raft::server_id id, connected* connected, snapshots* snapshots,
-            rpc_config rpc_config,
-            std::uniform_int_distribution<int>& dist, std::mt19937& gen) :
-            _id(id)
+        rpc_config rpc_config,
+        std::uniform_int_distribution<int>& dist, std::mt19937& gen)
+            : _id(id)
             , _connected(connected)
             , _snapshots(snapshots)
             , _rpc_config(rpc_config)
-            ,_dist(dist)
+            , _dist(dist)
             , _gen(gen)
+            , _delays(rpc_config.network_delay > 0ms)
     {
         net[_id] = this;
         // Rounds to next power of 2
@@ -549,8 +550,11 @@ public:
     bool drop_packet() {
         return _rpc_config.drops && !(rand() % 5);
     }
+    bool is_local_node(raft::server_id& id) {
+        return (to_local_id(_id.id) & _local_mask) == (to_local_id(id.id) & _local_mask);
+    }
     typename Clock::duration get_delay(raft::server_id id) {
-        if ((to_local_id(_id.id) & _local_mask) == (to_local_id(id.id) & _local_mask)) {
+        if (is_local_node(id)) {
             return  _rpc_config.local_delay;
         } else {
             return _rpc_config.network_delay;
