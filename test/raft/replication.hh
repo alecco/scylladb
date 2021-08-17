@@ -539,7 +539,7 @@ public:
             , _connected(connected)
             , _snapshots(snapshots)
             , _rpc_config(rpc_config)
-            ,_dist(dist)
+            , _dist(dist)
             , _gen(gen)
             , _delays(rpc_config.network_delay > 0ms)
     {
@@ -554,8 +554,7 @@ public:
         return (to_local_id(_id.id) & _local_mask) == (to_local_id(id.id) & _local_mask);
     }
     typename Clock::duration get_delay(raft::server_id id) {
-        if (is_local_node(id))
-            {
+        if (is_local_node(id)) {
             return  _rpc_config.local_delay;
         } else {
             return _rpc_config.network_delay;
@@ -563,6 +562,23 @@ public:
     }
     auto rand_extra_delay() {
         return _dist(_gen, std::uniform_int_distribution<int>::param_type{0, _rpc_config.extra_delay_max}) * 1us;
+    }
+    void XXX_send(raft::server_id& id, std::function<void()> func) {
+        if (!_rpc_config.drops || (rand() % 5)) {
+            if (!net.count(id)) {
+                return;
+            }
+            if (!(*_connected)(id, _id)) {
+                return;
+            }
+            if (_delays) {
+                (void)with_gate(_gate, [&, this] () mutable -> future<> {
+                    return seastar::sleep(get_delay(id) + rand_extra_delay()).then(std::move(func));
+                });
+            } else {
+                func();
+            }
+        }
     }
 
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
@@ -582,23 +598,25 @@ public:
     }
 
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
-        if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
-        }
-        if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
-        }
-        if (!_rpc_config.drops || (rand() % 5)) {
-            return with_gate(_gate, [&, this] () mutable -> future<> {
-                return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
-                        [this, id = std::move(id), append_request = std::move(append_request)] {
-                    net[id]->_client->append_entries(_id, append_request);
-                });
-            });
-        }
-        return make_ready_future<>();
+       if (!net.count(id)) {
+           return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+       }
+       if (!(*_connected)(id, _id)) {
+           return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
+       }
+       if (!_rpc_config.drops || (rand() % 5)) {
+           return with_gate(_gate, [&, this] () mutable -> future<> {
+               return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
+                       [this, id = std::move(id), append_request = std::move(append_request)] {
+            net[id]->_client->append_entries(_id, append_request);
+        });
+           });
+       }
+       return make_ready_future<>();
     }
     virtual void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+// #define NEW_DELAYS
+#ifndef NEW_DELAYS
         if (!net.count(id)) {
             return;
         }
@@ -609,12 +627,18 @@ public:
             (void)with_gate(_gate, [&, this] () mutable -> future<> {
                 return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
                         [this, id = std::move(id), reply = std::move(reply)] {
-                    net[id]->_client->append_entries_reply(_id, std::move(reply));
+                 net[id]->_client->append_entries_reply(_id, std::move(reply));
                 });
             });
         }
+#else
+        XXX_send(id, [this, id = std::move(id), reply = std::move(reply)] {
+                net[id]->_client->append_entries_reply(_id, std::move(reply));
+        });
+#endif
     }
     virtual void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+#ifndef NEW_DELAYS
         if (!net.count(id)) {
             return;
         }
@@ -625,23 +649,21 @@ public:
             auto extra_delay = rand_extra_delay();
             return seastar::sleep(get_delay(id) + extra_delay).then(
                     [this, id = std::move(id), vote_request = std::move(vote_request)] {
-                net[id]->_client->request_vote(_id, std::move(vote_request));
             });
         });
+#else
+        XXX_send(id, [this, id = std::move(id), vote_request = std::move(vote_request)] {
+            net[id]->_client->request_vote(_id, std::move(vote_request));
+        });
+#endif
     }
     virtual void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-        if (!net.count(id)) {
-            return;
-        }
-        if (!(*_connected)(id, _id)) {
-            return;
-        }
-        (void)with_gate(_gate, [&, this] () mutable -> future<> {
-            auto extra_delay = rand_extra_delay();
-            return seastar::sleep(get_delay(id) + extra_delay).then([=, this] {
-                net[id]->_client->request_vote_reply(_id, vote_reply);
-            });
+#ifndef NEW_DELAYS
+#else
+        XXX_send(id, [=, this] {
+            net[id]->_client->request_vote_reply(_id, vote_reply);
         });
+#endif
     }
 
     virtual void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
