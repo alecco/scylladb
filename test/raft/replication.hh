@@ -615,6 +615,8 @@ public:
         return make_ready_future<>();
     }
     virtual void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+// #define NEW_DELAYS
+#ifndef NEW_DELAYS
         if (!net.count(id)) {
             return;
         }
@@ -625,12 +627,18 @@ public:
             (void)with_gate(_gate, [&, this] () mutable -> future<> {
                 return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
                         [this, id = std::move(id), reply = std::move(reply)] {
-                    net[id]->_client->append_entries_reply(_id, std::move(reply));
+                 net[id]->_client->append_entries_reply(_id, std::move(reply));
                 });
             });
         }
+#else
+        XXX_send(id, [this, id = std::move(id), reply = std::move(reply)] {
+                net[id]->_client->append_entries_reply(_id, std::move(reply));
+        });
+#endif
     }
     virtual void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+#ifndef NEW_DELAYS
         if (!net.count(id)) {
             return;
         }
@@ -641,11 +649,16 @@ public:
             auto extra_delay = rand_extra_delay();
             return seastar::sleep(get_delay(id) + extra_delay).then(
                     [this, id = std::move(id), vote_request = std::move(vote_request)] {
-                net[id]->_client->request_vote(_id, std::move(vote_request));
             });
         });
+#else
+        XXX_send(id, [this, id = std::move(id), vote_request = std::move(vote_request)] {
+            net[id]->_client->request_vote(_id, std::move(vote_request));
+        });
+#endif
     }
     virtual void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+#ifndef NEW_DELAYS
         if (!net.count(id)) {
             return;
         }
@@ -658,6 +671,11 @@ public:
                 net[id]->_client->request_vote_reply(_id, vote_reply);
             });
         });
+#else
+        XXX_send(id, [=, this] {
+            net[id]->_client->request_vote_reply(_id, vote_reply);
+        });
+#endif
     }
 
     virtual void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
