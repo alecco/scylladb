@@ -563,6 +563,23 @@ public:
     auto rand_extra_delay() {
         return _dist(_gen, std::uniform_int_distribution<int>::param_type{0, _rpc_config.extra_delay_max}) * 1us;
     }
+    void XXX_send(raft::server_id& id, std::function<void()> func) {
+        if (!_rpc_config.drops || (rand() % 5)) {
+            if (!net.count(id)) {
+                return;
+            }
+            if (!(*_connected)(id, _id)) {
+                return;
+            }
+            if (_delays) {
+                (void)with_gate(_gate, [&, this] () mutable -> future<> {
+                    return seastar::sleep(get_delay(id) + rand_extra_delay()).then(std::move(func));
+                });
+            } else {
+                func();
+            }
+        }
+    }
 
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
         if (!net.count(id)) {
@@ -653,6 +670,7 @@ public:
         net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
     }
     virtual future<> abort() {
+        tlogger.debug("[{}] rpc aborting", _id);
         return _gate.close();
     }
     virtual void add_server(raft::server_id id, bytes node_info) {
