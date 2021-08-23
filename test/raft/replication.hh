@@ -957,7 +957,7 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
 
         do {
             // Consume leader output messages since a stray append might make new leader step down
-            co_await later();                 // yield
+            co_await seastar::sleep(_tick_delta * 2);
             _servers[new_leader].server->wait_until_candidate();
 
             if (both_connected) {
