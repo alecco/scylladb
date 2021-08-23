@@ -952,12 +952,13 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
         struct connected prev_disconnected = *_connected;
         // Disconnect current leader from everyone
         _connected->disconnect(to_raft_id(_leader));
+        co_await seastar::sleep(_tick_delta); // Wait for stray messages
         // Make move all nodes past election threshold, also making old leader follower
         elapse_elections();
 
         do {
             // Consume leader output messages since a stray append might make new leader step down
-            co_await later();                 // yield
+            co_await seastar::sleep(_tick_delta);
             _servers[new_leader].server->wait_until_candidate();
 
             if (both_connected) {
