@@ -27,11 +27,12 @@
 
 #ifdef SEASTAR_DEBUG
 // Increase tick time to allow debug to process messages
-const auto tick_delay = 200ms;
+const auto tick_delay = 300ms;
 #else
 const auto tick_delay = 100ms;
 #endif
 
+#if 0
 SEASTAR_THREAD_TEST_CASE(test_many_100) {
     replication_test<steady_clock_type>(
         {.nodes = 100, .total_values = 10,
@@ -53,6 +54,7 @@ SEASTAR_THREAD_TEST_CASE(test_many_400) {
     , true, tick_delay,
     rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
 }
+#endif
 
 #ifndef SEASTAR_DEBUG
 // Expected to work for release and dev builds
@@ -63,9 +65,16 @@ SEASTAR_THREAD_TEST_CASE(test_many_1000) {
                      isolate{0},              // drop leader, free election
                      entries{1},
                      new_leader{1},
+#if 0
                      set_config{1,2,3,4,5},   // Set configuration to smaller size
+#endif
                      }}
-    , true, tick_delay,
-    rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
+    , true,
+#if 0
+    tick_delay,
+#else
+    200ms,
+#endif
+    rpc_config{ .network_delay = 10ms, .local_delay = 1ms });
 }
 #endif
