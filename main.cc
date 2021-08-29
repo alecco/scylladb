@@ -496,6 +496,7 @@ int main(int ac, char** av) {
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
     sharded<service::storage_proxy> proxy_local;
+    sharded<cql3::query_processor> qp_local;
     sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
     sharded<service::raft_group_registry> raft_gr;
@@ -527,7 +528,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &proxy_local, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([cfg, ext, &db, &qp, &qp_local, &proxy, &proxy_local, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &ss, &lifecycle_notifier] {
@@ -1220,7 +1221,7 @@ int main(int ac, char** av) {
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().init_server(qp.local());
+                return ss.local().init_server(qp_local.local());
             }).get();
 
             sst_format_selector.sync();
