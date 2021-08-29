@@ -420,7 +420,8 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> init_server(cql3::query_processor& qp, bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> init_server(cql3::query_processor& qp_local,
+            bind_messaging_port do_bind = bind_messaging_port::yes);
 
     future<> join_cluster();
 

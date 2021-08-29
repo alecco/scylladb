@@ -145,6 +145,7 @@ public:
 private:
     sharded<database>& _db;
     sharded<cql3::query_processor>& _qp;
+    sharded<cql3::query_processor>& _qp_local;
     sharded<auth::service>& _auth_service;
     sharded<db::view::view_builder>& _view_builder;
     sharded<db::view::view_update_generator>& _view_update_generator;
@@ -193,6 +194,7 @@ public:
     single_node_cql_env(
             sharded<database>& db,
             sharded<cql3::query_processor>& qp,
+            sharded<cql3::query_processor>& qp_local,
             sharded<auth::service>& auth_service,
             sharded<db::view::view_builder>& view_builder,
             sharded<db::view::view_update_generator>& view_update_generator,
@@ -201,6 +203,7 @@ public:
             sharded<qos::service_level_controller> &sl_controller)
             : _db(db)
             , _qp(qp)
+            , _qp_local(qp_local)
             , _auth_service(auth_service)
             , _view_builder(view_builder)
             , _view_update_generator(view_update_generator)
@@ -386,6 +389,10 @@ public:
         return _qp;
     }
 
+    distributed<cql3::query_processor>& qp_local() override {
+        return _qp_local;
+    }
+
     auth::service& local_auth_service() override {
         return _auth_service.local();
     }
@@ -558,6 +565,7 @@ public:
             sharded<cdc::generation_service> cdc_generation_service;
             sharded<repair_service> repair;
             sharded<cql3::query_processor> qp;
+            sharded<cql3::query_processor> qp_local;
             sharded<service::raft_group_registry> raft_gr;
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
                 std::ref(ms), std::ref(gms::get_gossiper())).get();
@@ -635,8 +643,10 @@ public:
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
+            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), false).get();
+            qp_local.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
+            auto stop_qp_local = defer([&qp_local] { qp_local.stop().get(); });
 
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
@@ -703,7 +713,7 @@ public:
                 cdc.stop().get();
             });
 
-            ss.local().init_server(qp.local(), service::bind_messaging_port(false)).get();
+            ss.local().init_server(qp.local(), qp_local.local(), service::bind_messaging_port(false)).get();
             try {
                 ss.local().join_cluster().get();
             } catch (std::exception& e) {
@@ -759,7 +769,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller));
+            single_node_cql_env env(db, qp, qp_local, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller));
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
