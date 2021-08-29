@@ -132,6 +132,7 @@ private:
     cql_stats _cql_stats;
 
     seastar::metrics::metric_groups _metrics;
+    seastar::metrics::label_instance _qp_label;
 
     class internal_state;
     std::unique_ptr<internal_state> _internal_state;
@@ -156,7 +157,7 @@ public:
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
+    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, bool local);
 
     ~query_processor();
 
