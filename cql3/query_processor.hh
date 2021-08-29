@@ -120,8 +120,8 @@ private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
     service::storage_proxy& _proxy;
     database& _db;
-    service::migration_notifier& _mnotifier;
-    service::migration_manager& _mm;
+    service::migration_notifier* _mnotifier;
+    service::migration_manager* _mm;
     const cql_config& _cql_config;
 
     struct stats {
@@ -132,6 +132,7 @@ private:
     cql_stats _cql_stats;
 
     seastar::metrics::metric_groups _metrics;
+    seastar::metrics::label_instance _qp_label;
 
     class internal_state;
     std::unique_ptr<internal_state> _internal_state;
@@ -156,7 +157,7 @@ public:
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
+    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier* mn, service::migration_manager* mm, memory_config mcfg, cql_config& cql_cfg, bool local);
 
     ~query_processor();
 
@@ -172,8 +173,14 @@ public:
         return _proxy;
     }
 
-    const service::migration_manager& get_migration_manager() const noexcept { return _mm; }
-    service::migration_manager& get_migration_manager() noexcept { return _mm; }
+    const service::migration_manager& get_migration_manager() const noexcept {
+        assert(_mm);
+        return *_mm;
+    }
+    service::migration_manager& get_migration_manager() noexcept {
+        assert(_mm);
+        return *_mm;
+    }
 
     cql_stats& get_cql_stats() {
         return _cql_stats;

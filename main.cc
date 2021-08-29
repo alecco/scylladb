@@ -495,6 +495,7 @@ int main(int ac, char** av) {
     sharded<gms::feature_service> feature_service;
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
+    sharded<cql3::query_processor> qp_local;
     sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
     sharded<service::raft_group_registry> raft_gr;
@@ -526,7 +527,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([cfg, ext, &db, &qp, &qp_local, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &ss, &lifecycle_notifier] {
@@ -968,9 +969,16 @@ int main(int ac, char** av) {
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
+            qp.start(std::ref(proxy), std::ref(db), std::addressof(mm_notifier.local()), std::addressof(mm.local()), qp_mcfg, std::ref(cql_config), false).get();
+            qp_local.start(std::ref(proxy), std::ref(db), nullptr, nullptr, qp_mcfg, std::ref(cql_config), true).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
+
+            auto stop_qp_local = defer_verbose_shutdown("local query processor", [ &qp_local ] {
+                supervisor::notify("stopping local query processor");
+                qp_local.stop().get();
+            });
+
             supervisor::notify("initializing batchlog manager");
             db::batchlog_manager_config bm_cfg;
             bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
@@ -1190,7 +1198,7 @@ int main(int ac, char** av) {
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().init_server(qp.local());
+                return ss.local().init_server(qp_local.local());
             }).get();
 
             sst_format_selector.sync();
