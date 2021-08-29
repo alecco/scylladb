@@ -151,6 +151,8 @@ public:
 
     virtual distributed<cql3::query_processor> & qp() = 0;
 
+    virtual distributed<cql3::query_processor> & qp_local() = 0;
+
     virtual auth::service& local_auth_service() = 0;
 
     virtual db::view::view_builder& local_view_builder() = 0;
