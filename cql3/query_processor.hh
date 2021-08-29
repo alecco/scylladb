@@ -124,6 +124,8 @@ private:
     service::migration_manager& _mm;
     const cql_config& _cql_config;
 
+    bool _local;
+
     struct stats {
         uint64_t prepare_invocations = 0;
         uint64_t queries_by_cl[size_t(db::consistency_level::MAX_VALUE) + 1] = {};
@@ -156,7 +158,7 @@ public:
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
+    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, bool local);
 
     ~query_processor();
 

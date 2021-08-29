@@ -85,13 +85,14 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, bool local)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
         , _mnotifier(mn)
         , _mm(mm)
         , _cql_config(cql_cfg)
+        , _local(local)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.get_config().permissions_validity_in_ms()),
@@ -123,14 +124,14 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                 sm::description("Counts queries by consistency level."),
                 {cl_label(clevel(cl))}));
     }
-    _metrics.add_group("query_processor", qp_group);
+    _metrics.add_group(_local? "query_processor_local" : "query_processor", qp_group);
 
     sm::label cas_label("conditional");
     auto cas_label_instance = cas_label("yes");
     auto non_cas_label_instance = cas_label("no");
 
     _metrics.add_group(
-            "cql",
+            _local? "cql_local" : "cql",
             {
                     sm::make_derive(
                             "reads",

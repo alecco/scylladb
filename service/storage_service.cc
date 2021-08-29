@@ -1399,13 +1399,17 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::init_server(cql3::query_processor& qp, bind_messaging_port do_bind) {
+future<> storage_service::init_server(cql3::query_processor& qp,
+        cql3::query_processor& qp_local,
+        bind_messaging_port do_bind) {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, &qp, do_bind] {
+    return seastar::async([this, &qp, &qp_local, do_bind] {
         _initialized = true;
 
-        _group0 = std::make_unique<raft_group0>(_raft_gr, _messaging.local(), _gossiper, qp,
+        // XXX here
+        _group0 = std::make_unique<raft_group0>(_raft_gr, _messaging.local(), _gossiper,
+            qp_local,
             _migration_manager.local());
 
         std::unordered_set<inet_address> loaded_endpoints;
