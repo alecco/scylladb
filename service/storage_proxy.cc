@@ -372,6 +372,7 @@ protected:
     size_t _total_block_for = 0;
     db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
+    seastar::metrics::label_instance& _local_label;
     inet_address_vector_replica_set _targets; // who we sent this mutation to
     // added dead_endpoints as a memeber here as well. This to be able to carry the info across
     // calls in helper methods in a convinient way. Since we hope this will be empty most of the time
@@ -401,8 +402,8 @@ protected:
 public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state,
-            storage_proxy::write_stats& stats, service_permit permit, size_t pending_endpoints = 0, inet_address_vector_topology_change dead_endpoints = {})
-            : _id(p->get_next_response_id()), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
+            storage_proxy::write_stats& stats, service_permit permit, seastar::metrics::label_instance& local_label, size_t pending_endpoints = 0, inet_address_vector_topology_change dead_endpoints = {})
+            : _id(p->get_next_response_id()), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _local_label(local_label), _targets(std::move(targets)),
               _dead_endpoints(std::move(dead_endpoints)), _stats(stats), _expire_timer([this] { timeout_cb(); }), _permit(std::move(permit)) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
@@ -535,7 +536,7 @@ public:
             }
             if (_cl_achieved) { // For CL=ANY this can still be false
                 for (auto&& ep : get_targets()) {
-                    ++stats().background_replica_writes_failed.get_ep_stat(ep);
+                    ++stats().background_replica_writes_failed.get_ep_stat(ep, _local_label);
                 }
                 stats().background_writes_failed += int(!_targets.empty());
             }
@@ -641,9 +642,10 @@ public:
     datacenter_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
-            storage_proxy::write_stats& stats, service_permit permit) :
+            storage_proxy::write_stats& stats, service_permit permit,
+            seastar::metrics::label_instance& local_label) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), stats, std::move(permit), db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
+                        std::move(targets), std::move(tr_state), stats, std::move(permit), local_label, db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
         _total_endpoints = db::count_local_endpoints(_targets);
     }
 };
@@ -656,9 +658,9 @@ public:
     write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
-            storage_proxy::write_stats& stats, service_permit permit) :
+            storage_proxy::write_stats& stats, service_permit permit, seastar::metrics::label_instance& local_label) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), stats, std::move(permit), pending_endpoints.size(), std::move(dead_endpoints)) {
+                        std::move(targets), std::move(tr_state), stats, std::move(permit), local_label, pending_endpoints.size(), std::move(dead_endpoints)) {
         _total_endpoints = _targets.size();
     }
 };
@@ -668,9 +670,9 @@ public:
     view_update_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
-            storage_proxy::write_stats& stats, service_permit permit):
+            storage_proxy::write_stats& stats, service_permit permit, seastar::metrics::label_instance& local_label):
                 write_response_handler(p, ks, cl, db::write_type::VIEW, std::move(mh),
-                        std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit)) {
+                        std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), local_label) {
         register_in_intrusive_list(*p);
     }
     ~view_update_write_response_handler();
@@ -747,8 +749,8 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
 public:
     datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets, const inet_address_vector_topology_change& pending_endpoints,
-            inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit) :
-        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh), targets, std::move(tr_state), stats, std::move(permit), 0, dead_endpoints) {
+            inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, seastar::metrics::label_instance& local_label) :
+        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh), targets, std::move(tr_state), stats, std::move(permit), local_label, 0, dead_endpoints) {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         for (auto& target : targets) {
@@ -1431,13 +1433,13 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
     auto& rs = ks.get_replication_strategy();
 
     if (db::is_datacenter_local(cl)) {
-        h = ::make_shared<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit));
+        h = ::make_shared<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), _local_label);
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = ::make_shared<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit));
+        h = ::make_shared<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), _local_label);
     } else if (type == db::write_type::VIEW) {
-        h = ::make_shared<view_update_write_response_handler>(shared_from_this(), ks, cl, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit));
+        h = ::make_shared<view_update_write_response_handler>(shared_from_this(), ks, cl, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), _local_label);
     } else {
-        h = ::make_shared<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit));
+        h = ::make_shared<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), _local_label);
     }
     return register_response_handler(std::move(h));
 }
@@ -1463,64 +1465,64 @@ storage_proxy_stats::write_stats::write_stats(const sstring& category, bool auto
         , background_replica_writes_failed(category, "background_replica_writes_failed", "number of replica writes that timed out or failed after CL was reached", "mutation_data", auto_register_stats)
         , read_repair_write_attempts(category, "read_repair_write_attempts", "number of write operations in a read repair context", "mutation_data", auto_register_stats) { }
 
-void storage_proxy_stats::write_stats::register_split_metrics_local() {
-    writes_attempts.register_metrics_local();
-    writes_errors.register_metrics_local();
-    background_replica_writes_failed.register_metrics_local();
-    read_repair_write_attempts.register_metrics_local();
+void storage_proxy_stats::write_stats::register_split_metrics_local(seastar::metrics::label_instance& local_label) {
+    writes_attempts.register_metrics_local(local_label);
+    writes_errors.register_metrics_local(local_label);
+    background_replica_writes_failed.register_metrics_local(local_label);
+    read_repair_write_attempts.register_metrics_local(local_label);
 }
 
-void storage_proxy_stats::write_stats::register_stats() {
+void storage_proxy_stats::write_stats::register_stats(seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
             sm::make_histogram("write_latency", sm::description("The general write latency histogram"),
-                    {storage_proxy_stats::current_scheduling_group_label()},
+                    {storage_proxy_stats::current_scheduling_group_label(), local_label},
                     [this]{return to_metrics_histogram(estimated_write);}),
 
             sm::make_queue_length("foreground_writes", [this] { return writes - background_writes; },
                            sm::description("number of currently pending foreground write requests"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_queue_length("background_writes", background_writes,
                            sm::description("number of currently pending background write requests"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_queue_length("current_throttled_base_writes", throttled_base_writes,
                            sm::description("number of currently throttled base replica write requests"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_gauge("last_mv_flow_control_delay", [this] { return std::chrono::duration<float>(last_mv_flow_control_delay).count(); },
                                           sm::description("delay (in seconds) added for MV flow control in the last request"),
-                                          {storage_proxy_stats::current_scheduling_group_label()}),
+                                          {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_total_operations("throttled_writes", throttled_writes,
                                       sm::description("number of throttled write requests"),
-                                      {storage_proxy_stats::current_scheduling_group_label()}),
+                                      {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_total_operations("write_timeouts", write_timeouts._count,
                            sm::description("number of write request failed due to a timeout"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_total_operations("write_unavailable", write_unavailables._count,
                            sm::description("number write requests failed due to an \"unavailable\" error"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_total_operations("background_writes_failed", background_writes_failed,
                            sm::description("number of write requests that failed after CL was reached"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_total_operations("writes_coordinator_outside_replica_set", writes_coordinator_outside_replica_set,
                     sm::description("number of CQL write requests which arrived to a non-replica and had to be forwarded to a replica"),
-                    {storage_proxy_stats::current_scheduling_group_label()}),
+                    {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_total_operations("reads_coordinator_outside_replica_set", reads_coordinator_outside_replica_set,
                     sm::description("number of CQL read requests which arrived to a non-replica and had to be forwarded to a replica"),
-                    {storage_proxy_stats::current_scheduling_group_label()}),
+                    {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
             sm::make_total_operations("writes_failed_due_to_too_many_in_flight_hints", writes_failed_due_to_too_many_in_flight_hints,
                     sm::description("number of CQL write requests which failed because the hinted handoff mechanism is overloaded "
                     "and cannot store any more in-flight hints"),
-                    {storage_proxy_stats::current_scheduling_group_label()}),
+                    {storage_proxy_stats::current_scheduling_group_label(), local_label}),
         });
 }
 
@@ -1536,189 +1538,189 @@ storage_proxy_stats::stats::stats()
         , mutation_data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_reads", "number of mutation data read requests that completed", "mutation_data")
         , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of mutation data read requests that failed", "mutation_data") { }
 
-void storage_proxy_stats::stats::register_split_metrics_local() {
-    write_stats::register_split_metrics_local();
+void storage_proxy_stats::stats::register_split_metrics_local(seastar::metrics::label_instance& local_label) {
+    write_stats::register_split_metrics_local(local_label);
 
-    data_read_attempts.register_metrics_local();
-    data_read_completed.register_metrics_local();
-    data_read_errors.register_metrics_local();
-    digest_read_attempts.register_metrics_local();
-    digest_read_completed.register_metrics_local();
-    mutation_data_read_attempts.register_metrics_local();
-    mutation_data_read_completed.register_metrics_local();
-    mutation_data_read_errors.register_metrics_local();
+    data_read_attempts.register_metrics_local(local_label);
+    data_read_completed.register_metrics_local(local_label);
+    data_read_errors.register_metrics_local(local_label);
+    digest_read_attempts.register_metrics_local(local_label);
+    digest_read_completed.register_metrics_local(local_label);
+    mutation_data_read_attempts.register_metrics_local(local_label);
+    mutation_data_read_completed.register_metrics_local(local_label);
+    mutation_data_read_errors.register_metrics_local(local_label);
 }
 
-void storage_proxy_stats::stats::register_stats() {
+void storage_proxy_stats::stats::register_stats(seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
-    write_stats::register_stats();
+    write_stats::register_stats(local_label);
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"),
-                {storage_proxy_stats::current_scheduling_group_label()},
+                {storage_proxy_stats::current_scheduling_group_label(), local_label},
                 [this]{ return to_metrics_histogram(estimated_read);}),
 
         sm::make_queue_length("foreground_reads", foreground_reads,
                 sm::description("number of currently pending foreground read requests"),
-                {storage_proxy_stats::current_scheduling_group_label()}),
+                {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_queue_length("background_reads", [this] { return reads - foreground_reads; },
                        sm::description("number of currently pending background read requests"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("read_retries", read_retries,
                        sm::description("number of read retry attempts"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("canceled_read_repairs", global_read_repairs_canceled_due_to_concurrent_write,
                        sm::description("number of global read repairs canceled due to a concurrent write"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("foreground_read_repairs", read_repair_repaired_blocking,
                       sm::description("number of foreground read repairs"),
-                      {storage_proxy_stats::current_scheduling_group_label()}),
+                      {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("background_read_repairs", read_repair_repaired_background,
                        sm::description("number of background read repairs"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("read_timeouts", read_timeouts._count,
                        sm::description("number of read request failed due to a timeout"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("read_unavailable", read_unavailables._count,
                        sm::description("number read requests failed due to an \"unavailable\" error"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("range_timeouts", range_slice_timeouts._count,
                        sm::description("number of range read operations failed due to a timeout"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("range_unavailable", range_slice_unavailables._count,
                        sm::description("number of range read operations failed due to an \"unavailable\" error"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("speculative_digest_reads", speculative_digest_reads,
                        sm::description("number of speculative digest read requests that were sent"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("speculative_data_reads", speculative_data_reads,
                        sm::description("number of speculative data read requests that were sent"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_histogram("cas_read_latency", sm::description("Transactional read latency histogram"),
-                {storage_proxy_stats::current_scheduling_group_label()},
+                {storage_proxy_stats::current_scheduling_group_label(), local_label},
                 [this]{ return to_metrics_histogram(estimated_cas_read);}),
 
         sm::make_histogram("cas_write_latency", sm::description("Transactional write latency histogram"),
-                {storage_proxy_stats::current_scheduling_group_label()},
+                {storage_proxy_stats::current_scheduling_group_label(), local_label},
                 [this]{return to_metrics_histogram(estimated_cas_write);}),
 
         sm::make_total_operations("cas_write_timeouts", cas_write_timeouts._count,
                        sm::description("number of transactional write request failed due to a timeout"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_write_unavailable", cas_write_unavailables._count,
                        sm::description("number of transactional write requests failed due to an \"unavailable\" error"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_read_timeouts", cas_read_timeouts._count,
                        sm::description("number of transactional read request failed due to a timeout"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_read_unavailable", cas_read_unavailables._count,
                        sm::description("number of transactional read requests failed due to an \"unavailable\" error"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
 
         sm::make_total_operations("cas_read_unfinished_commit", cas_read_unfinished_commit,
                        sm::description("number of transaction commit attempts that occurred on read"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_write_unfinished_commit", cas_write_unfinished_commit,
                        sm::description("number of transaction commit attempts that occurred on write"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_write_condition_not_met", cas_write_condition_not_met,
                        sm::description("number of transaction preconditions that did not match current values"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_write_timeout_due_to_uncertainty", cas_write_timeout_due_to_uncertainty,
                        sm::description("how many times write timeout was reported because of uncertainty in the result"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_failed_read_round_optimization", cas_failed_read_round_optimization,
                        sm::description("CAS read rounds issued only if previous value is missing on some replica"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_histogram("cas_read_contention", sm::description("how many contended reads were encountered"),
-                       {storage_proxy_stats::current_scheduling_group_label()},
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label},
                        [this]{ return cas_read_contention.get_histogram(1, 8);}),
 
         sm::make_histogram("cas_write_contention", sm::description("how many contended writes were encountered"),
-                       {storage_proxy_stats::current_scheduling_group_label()},
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label},
                        [this]{ return cas_write_contention.get_histogram(1, 8);}),
 
         sm::make_total_operations("cas_prune", cas_prune,
                        sm::description("how many times paxos prune was done after successful cas operation"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_dropped_prune", cas_coordinator_dropped_prune,
                        sm::description("how many times a coordinator did not perfom prune after cas"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_total_operations", cas_total_operations,
                        sm::description("number of total paxos operations executed (reads and writes)"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_gauge("cas_foreground", cas_foreground,
                         sm::description("how many paxos operations that did not yet produce a result are running"),
-                        {storage_proxy_stats::current_scheduling_group_label()}),
+                        {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_gauge("cas_background", [this] { return cas_total_running - cas_foreground; },
                         sm::description("how many paxos operations are still running after a result was alredy returned"),
-                        {storage_proxy_stats::current_scheduling_group_label()}),
+                        {storage_proxy_stats::current_scheduling_group_label(), local_label}),
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {
         sm::make_total_operations("received_counter_updates", received_counter_updates,
                        sm::description("number of counter updates received by this node acting as an update leader"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("received_mutations", received_mutations,
                        sm::description("number of mutations received by a replica Node"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("forwarded_mutations", forwarded_mutations,
                        sm::description("number of mutations forwarded to other replica Nodes"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("forwarding_errors", forwarding_errors,
                        sm::description("number of errors during forwarding mutations to other replica Nodes"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("reads", replica_data_reads,
                        sm::description("number of remote data read requests this Node received"),
-                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("data")}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label, storage_proxy_stats::op_type_label("data")}),
 
         sm::make_total_operations("reads", replica_mutation_data_reads,
                        sm::description("number of remote mutation data read requests this Node received"),
-                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("mutation_data")}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label, storage_proxy_stats::op_type_label("mutation_data")}),
 
         sm::make_total_operations("reads", replica_digest_reads,
                        sm::description("number of remote digest read requests this Node received"),
-                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("digest")}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label, storage_proxy_stats::op_type_label("digest")}),
 
         sm::make_total_operations("cross_shard_ops", replica_cross_shard_ops,
                        sm::description("number of operations that crossed a shard boundary"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
 
         sm::make_total_operations("cas_dropped_prune", cas_replica_dropped_prune,
                        sm::description("how many times a coordinator did not perfom prune after cas"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label(), local_label}),
     });
 }
 
-inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(gms::inet_address ep) noexcept {
+inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(gms::inet_address ep, seastar::metrics::label_instance& local_label) noexcept {
     if (fbu::is_me(ep)) {
         return _local.val;
     }
@@ -1726,7 +1728,7 @@ inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(gms::inet_address
     try {
         sstring dc = get_dc(ep);
         if (_auto_register_metrics) {
-            register_metrics_for(ep);
+            register_metrics_for(ep, local_label);
         }
         return _dc_stats[dc].val;
     } catch (...) {
@@ -1736,16 +1738,16 @@ inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(gms::inet_address
     }
 }
 
-void storage_proxy_stats::split_stats::register_metrics_local() {
+void storage_proxy_stats::split_stats::register_metrics_local(seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group(_category, {
         sm::make_derive(_short_description_prefix + sstring("_local_node"), [this] { return _local.val; },
-                       sm::description(_long_description_prefix + "on a local Node"), {storage_proxy_stats::current_scheduling_group_label(), op_type_label(_op_type)})
+                       sm::description(_long_description_prefix + "on a local Node"), {storage_proxy_stats::current_scheduling_group_label(), op_type_label(_op_type), local_label})
     });
 }
 
-void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep) {
+void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep, seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
 
     sstring dc = get_dc(ep);
@@ -1754,12 +1756,12 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
     if (auto [ignored, added] = _dc_stats.try_emplace(dc); added) {
         _metrics.add_group(_category, {
             sm::make_derive(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
-                            sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type)})
+                            sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type), local_label})
         });
     }
 }
 
-void storage_proxy_stats::global_write_stats::register_stats() {
+void storage_proxy_stats::global_write_stats::register_stats(seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
             sm::make_current_bytes("queued_write_bytes", queued_write_bytes,
@@ -1772,8 +1774,8 @@ void storage_proxy_stats::global_write_stats::register_stats() {
         });
 }
 
-void storage_proxy_stats::global_stats::register_stats() {
-    global_write_stats::register_stats();
+void storage_proxy_stats::global_stats::register_stats(seastar::metrics::label_instance& local_label) {
+    global_write_stats::register_stats(local_label);
 }
 
 // A helper structure for differentiating hints from mutations in overload resolution
@@ -1789,7 +1791,7 @@ using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms)
+        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms, bool local)
     : _db(db)
     , _shared_token_metadata(stm)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -1797,13 +1799,10 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _hints_write_smp_service_group(cfg.hints_write_smp_service_group)
     , _write_ack_smp_service_group(cfg.write_ack_smp_service_group)
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
-    , _hints_resource_manager(cfg.available_memory / 10, _db.local().get_config().max_hinted_handoff_concurrency)
-    , _hints_manager(_db.local().get_config().hints_directory(), cfg.hinted_handoff_enabled, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
-    , _hints_directory_initializer(std::move(cfg.hints_directory_initializer))
-    , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
     , _messaging(ms)
+    , _local_label("local", local)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
@@ -1811,12 +1810,32 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     namespace sm = seastar::metrics;
     _metrics.add_group(storage_proxy_stats::COORDINATOR_STATS_CATEGORY, {
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
-                       sm::description("number of currently throttled write requests")),
+                       sm::description("number of currently throttled write requests"),
+                       {_local_label}),
     });
 
-    slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
-    _hints_manager.register_metrics("hints_manager");
-    _hints_for_views_manager.register_metrics("hints_for_views_manager");
+    if (!local) {
+        _cdc_stats = std::make_unique<cdc_stats>();
+        slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
+
+        _hints_resource_manager = std::make_unique<db::hints::resource_manager>(
+                cfg.available_memory / 10, _db.local().get_config().max_hinted_handoff_concurrency);
+        _hints_for_views_manager = std::make_unique<db::hints::manager>(
+                _db.local().get_config().view_hints_directory(), db::hints::host_filter{},
+                _db.local().get_config().max_hint_window_in_ms(), *_hints_resource_manager, _db);
+
+        _hints_manager = std::make_unique<db::hints::manager>(
+                _db.local().get_config().hints_directory(),
+                cfg.hinted_handoff_enabled,
+                _db.local().get_config().max_hint_window_in_ms(),
+                *_hints_resource_manager,
+                _db);
+        _hints_directory_initializer = std::make_unique<db::hints::directory_initializer>(
+                std::move(cfg.hints_directory_initializer));
+
+        _hints_manager->register_metrics("hints_manager");
+        _hints_for_views_manager->register_metrics("hints_for_views_manager");
+    }
 }
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
@@ -1951,7 +1970,8 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
         // a small number of nodes causing problems, so we should avoid shutting down writes completely to
         // healthy nodes.  Any node with no hintsInProgress is considered healthy.
-        throw overloaded_exception(_hints_manager.size_of_hints_in_progress());
+        assert(_hints_manager); // make sure it's not local proxy
+        throw overloaded_exception(_hints_manager->size_of_hints_in_progress());
     }
 
     // filter live endpoints from dead ones
@@ -2509,7 +2529,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 template<typename Range>
 bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const {
     // if hints are disabled we "can always hint" since there's going to be no hint generated in this case
-    return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
+    return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, _hints_manager.get(), std::placeholders::_1));
 }
 
 future<> storage_proxy::send_to_endpoint(
@@ -2708,9 +2728,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             got_response(response_id, coordinator, std::nullopt);
         } else {
             if (!handler.read_repair_write()) {
-                ++stats.writes_attempts.get_ep_stat(coordinator);
+                ++stats.writes_attempts.get_ep_stat(coordinator, _local_label);
             } else {
-                ++stats.read_repair_write_attempts.get_ep_stat(coordinator);
+                ++stats.read_repair_write_attempts.get_ep_stat(coordinator, _local_label);
             }
 
             if (coordinator == my_address) {
@@ -2721,8 +2741,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         }
 
         // Waited on indirectly.
-        (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
-            ++stats.writes_errors.get_ep_stat(coordinator);
+        (void)f.handle_exception([this, response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
+            ++stats.writes_errors.get_ep_stat(coordinator, _local_label);
             error err = error::FAILURE;
             try {
                 std::rethrow_exception(eptr);
@@ -2748,6 +2768,7 @@ template<typename Range>
 size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept
 {
     if (hints_enabled(type)) {
+        // XXX
         db::hints::manager& hints_manager = hints_manager_for(type);
         return boost::count_if(targets, [this, &mh, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
             return mh->store_hint(hints_manager, target, tr_state);
@@ -3440,6 +3461,7 @@ protected:
     inet_address_vector_replica_set _used_targets;
     promise<foreign_ptr<lw_shared_ptr<query::result>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
+    seastar::metrics::label_instance _local_label;
     lw_shared_ptr<column_family> _cf;
     bool _foreground = true;
     service_permit _permit; // holds admission permit until operation completes
@@ -3452,9 +3474,9 @@ private:
     }
 public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
-            inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit) :
+            inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, seastar::metrics::label_instance& local_label) :
                            _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
-                           _cf(std::move(cf)), _permit(std::move(permit)) {
+                           _local_label(local_label), _cf(std::move(cf)), _permit(std::move(permit)) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
     }
@@ -3473,7 +3495,7 @@ public:
 
 protected:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
-        ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(ep);
+        ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(ep, _local_label);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
@@ -3487,7 +3509,7 @@ protected:
         }
     }
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
-        ++_proxy->get_stats().data_read_attempts.get_ep_stat(ep);
+        ++_proxy->get_stats().data_read_attempts.get_ep_stat(ep, _local_label);
         auto opts = want_digest
                   ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
@@ -3504,7 +3526,7 @@ protected:
         }
     }
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
-        ++_proxy->get_stats().digest_read_attempts.get_ep_stat(ep);
+        ++_proxy->get_stats().digest_read_attempts.get_ep_stat(ep, _local_label);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state,
@@ -3529,10 +3551,10 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
-                    ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(ep);
+                    ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(ep, _local_label);
                     register_request_latency(latency_clock::now() - start);
                 } catch(...) {
-                    ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(ep);
+                    ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(ep, _local_label);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -3547,11 +3569,11 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
-                    ++_proxy->get_stats().data_read_completed.get_ep_stat(ep);
+                    ++_proxy->get_stats().data_read_completed.get_ep_stat(ep, _local_label);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
                 } catch(...) {
-                    ++_proxy->get_stats().data_read_errors.get_ep_stat(ep);
+                    ++_proxy->get_stats().data_read_errors.get_ep_stat(ep, _local_label);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -3566,11 +3588,11 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
-                    ++_proxy->get_stats().digest_read_completed.get_ep_stat(ep);
+                    ++_proxy->get_stats().digest_read_completed.get_ep_stat(ep, _local_label);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
                 } catch(...) {
-                    ++_proxy->get_stats().digest_read_errors.get_ep_stat(ep);
+                    ++_proxy->get_stats().digest_read_errors.get_ep_stat(ep, _local_label);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -3778,8 +3800,8 @@ private:
 class never_speculating_read_executor : public abstract_read_executor {
 public:
     never_speculating_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state,
-                                    service_permit permit) :
-                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit)) {
+                                    service_permit permit, seastar::metrics::label_instance& local_label) :
+                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit), local_label) {
         _block_for = _targets.size();
     }
 };
@@ -3911,21 +3933,21 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
-        return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit));
+        return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), _local_label);
     }
 
     if (target_replicas.size() == all_replicas.size()) {
         // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
         // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
         // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
-        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit));
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), _local_label);
     }
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
         if (is_datacenter_local(cl) && !db::is_local(extra_replica)) {
             slogger.trace("read executor no extra target to speculate");
-            return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit));
+            return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), _local_label);
         } else {
             target_replicas.push_back(extra_replica);
             slogger.trace("creating read executor with extra target {}", extra_replica);
@@ -3933,9 +3955,9 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {
-        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit));
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), _local_label);
     } else {// PERCENTILE or CUSTOM.
-        return ::make_shared<speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit));
+        return ::make_shared<speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), _local_label);
     }
 }
 
@@ -4188,7 +4210,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             throw;
         }
 
-        exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit));
+        exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, _local_label));
         ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
     }
 
@@ -4781,11 +4803,11 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
 }
 
 bool storage_proxy::hints_enabled(db::write_type type) const noexcept {
-    return (!_hints_manager.is_disabled_for_all() && type != db::write_type::CAS) || type == db::write_type::VIEW;
+    return (_hints_manager && !_hints_manager->is_disabled_for_all() && type != db::write_type::CAS) || type == db::write_type::VIEW;
 }
 
 db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
-    return type == db::write_type::VIEW ? _hints_for_views_manager : _hints_manager;
+    return type == db::write_type::VIEW ? *_hints_for_views_manager : *_hints_manager;
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
@@ -5292,37 +5314,38 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
 
 future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr) {
     future<> f = make_ready_future<>();
-    if (!_hints_manager.is_disabled_for_all()) {
-        f = _hints_resource_manager.register_manager(_hints_manager);
+    assert(_hints_manager); // make sure it's not local proxy
+    if (!_hints_manager->is_disabled_for_all()) {
+        f = _hints_resource_manager->register_manager(*_hints_manager);
     }
     return f.then([this] {
-        return _hints_resource_manager.register_manager(_hints_for_views_manager);
+        return _hints_resource_manager->register_manager(*_hints_for_views_manager);
     }).then([this, gossiper_ptr] {
-        return _hints_resource_manager.start(shared_from_this(), gossiper_ptr);
+        return _hints_resource_manager->start(shared_from_this(), gossiper_ptr);
     });
 }
 
 void storage_proxy::allow_replaying_hints() noexcept {
-    return _hints_resource_manager.allow_replaying();
+    return _hints_resource_manager->allow_replaying();
 }
 
 future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filter) {
-    if (new_filter == _hints_manager.get_host_filter()) {
+    if (new_filter == _hints_manager->get_host_filter()) {
         return make_ready_future<>();
     }
 
-    return _hints_directory_initializer.ensure_created_and_verified().then([this] {
-        return _hints_directory_initializer.ensure_rebalanced();
+    return _hints_directory_initializer->ensure_created_and_verified().then([this] {
+        return _hints_directory_initializer->ensure_rebalanced();
     }).then([this] {
         // This function is idempotent
-        return _hints_resource_manager.register_manager(_hints_manager);
+        return _hints_resource_manager->register_manager(*_hints_manager);
     }).then([this, new_filter = std::move(new_filter)] () mutable {
-        return _hints_manager.change_host_filter(std::move(new_filter));
+        return _hints_manager->change_host_filter(std::move(new_filter));
     });
 }
 
 const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
-    return _hints_manager.get_host_filter();
+    return _hints_manager->get_host_filter();
 }
 
 future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::vector<gms::inet_address> target_hosts) const {
@@ -5335,8 +5358,8 @@ future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::v
         // sharded::invoke_on does not have a const-method version, so we cannot use it here
         return smp::submit_to(shard, [&sharded_sp, &target_hosts] {
             const storage_proxy& sp = sharded_sp.local();
-            auto regular_rp = sp._hints_manager.calculate_current_sync_point(target_hosts);
-            auto mv_rp = sp._hints_for_views_manager.calculate_current_sync_point(target_hosts);
+            auto regular_rp = sp._hints_manager->calculate_current_sync_point(target_hosts);
+            auto mv_rp = sp._hints_for_views_manager->calculate_current_sync_point(target_hosts);
             return std::make_pair(std::move(regular_rp), std::move(mv_rp));
         }).then([shard, &spoint] (auto p) {
             spoint.regular_per_shard_rps[shard] = std::move(p.first);
@@ -5405,8 +5428,8 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
         };
 
         return when_all_succeed(
-            wait_for(sp._hints_manager, spoint.regular_per_shard_rps),
-            wait_for(sp._hints_for_views_manager, spoint.mv_per_shard_rps)
+            wait_for(*sp._hints_manager, spoint.regular_per_shard_rps),
+            wait_for(*sp._hints_for_views_manager, spoint.mv_per_shard_rps)
         ).discard_result();
     }).finally([&t, &timer_gate] {
         t.cancel();
@@ -5423,8 +5446,8 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
 void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
 
 void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint) {
-    _hints_manager.drain_for(endpoint);
-    _hints_for_views_manager.drain_for(endpoint);
+    _hints_manager->drain_for(endpoint);
+    _hints_for_views_manager->drain_for(endpoint);
 }
 
 void storage_proxy::on_up(const gms::inet_address& endpoint) {};
@@ -5457,7 +5480,7 @@ future<> storage_proxy::drain_on_shutdown() {
     // and writing them down with plain futures is error-prone.
     return async([this] {
         retire_view_response_handlers([] (const abstract_write_response_handler&) { return true; });
-        _hints_resource_manager.stop().get();
+        _hints_resource_manager->stop().get();
     });
 }
 
