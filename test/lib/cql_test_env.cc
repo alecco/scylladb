@@ -636,16 +636,26 @@ public:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(ms)).get();
+            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(ms), false).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
+
+            sharded<service::storage_proxy> proxy_local;
+            proxy_local.start(std::ref(db), spcfg, std::ref(b),
+                scheduling_group_key_create(sg_conf).get0(),
+                std::ref(feature_service),
+                std::ref(token_metadata),
+                std::ref(ms), true).get();
+            auto stop_proxy_local = defer([&proxy_local] { proxy_local.stop().get(); });
 
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), false).get();
-            qp_local.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
+
             auto stop_qp = defer([&qp] { qp.stop().get(); });
+
+            qp_local.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
             auto stop_qp_local = defer([&qp_local] { qp_local.stop().get(); });
 
             // In main.cc we call db::system_keyspace::setup which calls
@@ -713,7 +723,7 @@ public:
                 cdc.stop().get();
             });
 
-            ss.local().init_server(qp.local(), qp_local.local(), service::bind_messaging_port(false)).get();
+            ss.local().init_server(qp_local.local(), service::bind_messaging_port(false)).get();
             try {
                 ss.local().join_cluster().get();
             } catch (std::exception& e) {
