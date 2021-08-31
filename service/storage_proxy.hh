@@ -278,6 +278,7 @@ private:
     std::default_random_engine _urandom;
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
     seastar::metrics::metric_groups _metrics;
+    bool _local;
     uint64_t _background_write_throttle_threahsold;
     inheriting_concrete_execution_stage<
             future<>,
@@ -443,7 +444,7 @@ private:
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms, bool local);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;

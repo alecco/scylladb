@@ -1788,7 +1788,7 @@ using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms)
+        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms, bool local)
     : _db(db)
     , _shared_token_metadata(stm)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -1803,11 +1803,13 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _stats_key(stats_key)
     , _features(feat)
     , _messaging(ms)
+    , _local(local)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
     , _view_update_handlers_list(std::make_unique<view_update_handlers_list>()) {
     namespace sm = seastar::metrics;
+    // XXX here? but storage_proxy_stats::XXX ??
     _metrics.add_group(storage_proxy_stats::COORDINATOR_STATS_CATEGORY, {
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
                        sm::description("number of currently throttled write requests")),
