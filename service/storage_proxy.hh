@@ -272,10 +272,10 @@ private:
     // not remove request from the buffer), but this is fine since request ids are unique, so we
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
-    db::hints::resource_manager _hints_resource_manager;
-    db::hints::manager _hints_manager;
-    db::hints::directory_initializer _hints_directory_initializer;
-    db::hints::manager _hints_for_views_manager;
+    std::unique_ptr<db::hints::resource_manager> _hints_resource_manager;
+    std::unique_ptr<db::hints::manager> _hints_manager;
+    std::unique_ptr<db::hints::directory_initializer> _hints_directory_initializer;
+    std::unique_ptr<db::hints::manager> _hints_for_views_manager;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
@@ -285,6 +285,7 @@ private:
     std::default_random_engine _urandom;
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
     seastar::metrics::metric_groups _metrics;
+    seastar::metrics::label_instance _local_label;
     uint64_t _background_write_throttle_threahsold;
     inheriting_concrete_execution_stage<
             future<>,
@@ -321,7 +322,7 @@ private:
      */
     cdc::cdc_service* _cdc = nullptr;
 
-    cdc_stats _cdc_stats;
+    std::unique_ptr<cdc_stats> _cdc_stats;
 private:
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -453,7 +454,7 @@ private:
     void connection_dropped(gms::inet_address);
 public:
     storage_proxy(distributed<database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms, bool local);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;
@@ -640,10 +641,12 @@ public:
         return _global_stats;
     }
     const cdc_stats& get_cdc_stats() const {
-        return _cdc_stats;
+        assert(_cdc_stats);
+        return *_cdc_stats;
     }
     cdc_stats& get_cdc_stats() {
-        return _cdc_stats;
+        assert(_cdc_stats);
+        return *_cdc_stats;
     }
 
     scheduling_group_key get_stats_key() const {
