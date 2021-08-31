@@ -103,6 +103,7 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
     namespace stm = statements;
     using clevel = db::consistency_level;
     sm::label cl_label("consistency_level");
+fmt::print("QP  01\n");
 
     sm::label who_label("who");  // Who queried system tables
     const auto user_who_label_instance = who_label("user");
@@ -131,6 +132,7 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
     auto cas_label_instance = cas_label("yes");
     auto non_cas_label_instance = cas_label("no");
 
+fmt::print("QP  02\n");
     _metrics.add_group(
             "cql",
             {
@@ -487,9 +489,11 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
 
             });
 
+fmt::print("QP  03\n");
     if (_mnotifier) {
         _mnotifier->register_listener(_migration_subscriber.get());
     }
+fmt::print("QP  04\n");
 }
 
 query_processor::~query_processor() {
