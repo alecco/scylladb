@@ -671,15 +671,19 @@ future<> distributed_loader::ensure_system_table_directories(distributed<databas
 future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db,
         distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm) {
     return seastar::async([&db, &proxy, &mm] {
+fmt::print("DL 01\n");
         db.invoke_on_all([&proxy, &mm] (database& db) {
+fmt::print("DL 01a\n");
             return db.parse_system_tables(proxy, mm);
         }).get();
 
+fmt::print("DL 02\n");
         const auto& cfg = db.local().get_config();
         using ks_dirs = std::unordered_multimap<sstring, sstring>;
 
         ks_dirs dirs;
 
+fmt::print("DL 03\n");
         parallel_for_each(cfg.data_file_directories(), [&db, &dirs] (sstring directory) {
             // we want to collect the directories first, so we can get a full set of potential dirs
             return lister::scan_dir(directory, { directory_entry_type::directory }, [&dirs] (fs::path datadir, directory_entry de) {
@@ -690,6 +694,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
             });
         }).get();
 
+fmt::print("DL 04\n");
         db.invoke_on_all([&dirs] (database& db) {
             for (auto& [name, ks] : db.get_keyspaces()) {
                 // mark all user keyspaces that are _not_ on disk as already
@@ -702,6 +707,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
 
         std::vector<future<>> futures;
 
+fmt::print("DL 05\n");
         // treat "dirs" as immutable to avoid modifying it while still in 
         // a range-iteration. Also to simplify the "finally"
         for (auto i = dirs.begin(); i != dirs.end();) {
@@ -725,8 +731,10 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
                 });
             }));
         }
+fmt::print("DL 06\n");
 
         when_all_succeed(futures.begin(), futures.end()).discard_result().get();
+fmt::print("DL 07\n");
 
         db.invoke_on_all([] (database& db) {
             return parallel_for_each(db.get_non_system_column_families(), [] (lw_shared_ptr<table> table) {
@@ -735,6 +743,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
                 return make_ready_future<>();
             });
         }).get();
+fmt::print("DL 08\n");
     });
 }
 
