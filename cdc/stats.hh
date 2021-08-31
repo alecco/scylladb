@@ -33,6 +33,7 @@ namespace cdc {
 
 class stats final {
     seastar::metrics::metric_groups _metrics;
+    seastar::metrics::label_instance _local_label;
 
 public:
     enum class part_type {
@@ -70,7 +71,8 @@ public:
             }
         }
 
-        void register_metrics(seastar::metrics::metric_groups& metrics, std::string_view suffix);
+        void register_metrics(seastar::metrics::metric_groups& metrics, std::string_view suffix,
+                seastar::metrics::label_instance& local_label);
     };
 
     struct counters final {
@@ -86,7 +88,7 @@ public:
     counters counters_total;
     counters counters_failed;
 
-    stats();
+    stats(seastar::metrics::label_instance local_label);
 };
 
 // Contains the details on what happened during a CDC operation.
