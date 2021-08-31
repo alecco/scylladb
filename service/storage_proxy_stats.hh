@@ -63,8 +63,8 @@ public:
      */
     split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix, const sstring& op_type, bool auto_register_metrics = true);
 
-    void register_metrics_local();
-    void register_metrics_for(gms::inet_address ep);
+    void register_metrics_local(seastar::metrics::label_instance& local_label);
+    void register_metrics_for(gms::inet_address ep, seastar::metrics::label_instance& local_label);
 
     /**
      * Get a reference to the statistics counter corresponding to the given
@@ -74,7 +74,7 @@ public:
      *
      * @return a reference to the requested counter
      */
-    uint64_t& get_ep_stat(gms::inet_address ep) noexcept;
+    uint64_t& get_ep_stat(gms::inet_address ep, seastar::metrics::label_instance& local_label) noexcept;
 };
 
 struct write_stats {
@@ -128,8 +128,8 @@ public:
     write_stats();
     write_stats(const sstring& category, bool auto_register_stats);
 
-    void register_stats();
-    void register_split_metrics_local();
+    void register_stats(seastar::metrics::label_instance& local_label);
+    void register_split_metrics_local(seastar::metrics::label_instance& local_label);
 protected:
     seastar::metrics::metric_groups _metrics;
 };
@@ -204,8 +204,8 @@ struct stats : public write_stats {
 
 public:
     stats();
-    void register_stats();
-    void register_split_metrics_local();
+    void register_stats(seastar::metrics::label_instance& local_label);
+    void register_split_metrics_local(seastar::metrics::label_instance& local_label);
 };
 
  /*** This struct represents stats that has meaning (only or also)
@@ -220,14 +220,14 @@ struct global_write_stats {
     seastar::metrics::metric_groups _metrics;
     uint64_t background_write_bytes = 0;
     uint64_t queued_write_bytes = 0;
-    void register_stats();
+    void register_stats(seastar::metrics::label_instance& local_label);
 };
 
 /***
  *  Following the convention of stats and write_stats
  */
 struct global_stats : public global_write_stats {
-    void register_stats();
+    void register_stats(seastar::metrics::label_instance& local_label);
 };
 
 }
