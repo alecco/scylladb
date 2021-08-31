@@ -991,12 +991,14 @@ int main(int ac, char** av) {
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
                 plain_constructor(ptr);
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
+                seastar::metrics::label_instance local_label{"local", true};
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats(local_label);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local(local_label);
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
-                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), false).get();
+
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
@@ -1009,7 +1011,27 @@ int main(int ac, char** av) {
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), false).get();
-            qp_local.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
+
+            // Local query_processor/storage_proxy
+            service::storage_proxy::config spcfg_dummy {
+                .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
+            };
+            sharded<service::storage_proxy> proxy_local;
+            scheduling_group_key_config storage_proxy_stats_local_cfg =
+                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            storage_proxy_stats_local_cfg.constructor = [plain_constructor = storage_proxy_stats_local_cfg.constructor] (void* ptr) {
+                plain_constructor(ptr);
+                seastar::metrics::label_instance nonlocal_label{"local", false};
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats(nonlocal_label);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local(nonlocal_label);
+            };
+            proxy_local.start(std::ref(db), spcfg_dummy, std::ref(node_backlog),
+                scheduling_group_key_create(storage_proxy_stats_local_cfg).get0(),
+                std::ref(feature_service.local()),
+                std::ref(token_metadata.local()),
+                std::ref(messaging.local()), true).get();
+            qp_local.start(std::ref(proxy_local), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
+
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             // engine().at_exit([&qp_local] { return qp_local.stop(); });

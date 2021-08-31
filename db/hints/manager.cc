@@ -70,37 +70,47 @@ manager::~manager() {
     assert(_ep_managers.empty());
 }
 
-void manager::register_metrics(const sstring& group_name) {
+void manager::register_metrics(const sstring& group_name, seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group(group_name, {
         sm::make_gauge("size_of_hints_in_progress", _stats.size_of_hints_in_progress,
-                        sm::description("Size of hinted mutations that are scheduled to be written.")),
+                        sm::description("Size of hinted mutations that are scheduled to be written."),
+                        {local_label}),
 
         sm::make_derive("written", _stats.written,
-                        sm::description("Number of successfully written hints.")),
+                        sm::description("Number of successfully written hints."),
+                        {local_label}),
 
         sm::make_derive("errors", _stats.errors,
-                        sm::description("Number of errors during hints writes.")),
+                        sm::description("Number of errors during hints writes."),
+                        {local_label}),
 
         sm::make_derive("dropped", _stats.dropped,
-                        sm::description("Number of dropped hints.")),
+                        sm::description("Number of dropped hints."),
+                        {local_label}),
 
         sm::make_derive("sent", _stats.sent,
-                        sm::description("Number of sent hints.")),
+                        sm::description("Number of sent hints."),
+                        {local_label}),
 
         sm::make_derive("discarded", _stats.discarded,
-                        sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
+                        sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.)."),
+                        {local_label}),
 
         sm::make_derive("corrupted_files", _stats.corrupted_files,
-                        sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
+                        sm::description("Number of hints files that were discarded during sending because the file was corrupted."),
+                        {local_label}),
 
         sm::make_gauge("pending_drains", 
                         sm::description("Number of tasks waiting in the queue for draining hints"),
-                        [this] { return _drain_lock.waiters(); }),
+                        {local_label},
+                        [this] { return _drain_lock.waiters(); }
+                        ),
 
         sm::make_gauge("pending_sends",
                         sm::description("Number of tasks waiting in the queue for sending a hint"),
+                        {local_label},
                         [this] { return _resource_manager.sending_queue_length(); })
     });
 }
