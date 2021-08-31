@@ -495,6 +495,7 @@ int main(int ac, char** av) {
     sharded<gms::feature_service> feature_service;
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
+    sharded<service::storage_proxy> proxy_local;
     sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
     sharded<service::raft_group_registry> raft_gr;
@@ -526,7 +527,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([cfg, ext, &db, &qp, &proxy, &proxy_local, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &ss, &lifecycle_notifier] {
@@ -951,12 +952,17 @@ int main(int ac, char** av) {
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
                 plain_constructor(ptr);
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
+                seastar::metrics::label_instance local_label{"local", true};
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats(local_label);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local(local_label);
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
-                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
+                    std::addressof(feature_service.local()),
+                    std::addressof(token_metadata.local()),  // XXX  LOCAL???
+                    std::addressof(messaging.local()),       // XXX  LOCAL???
+                    false).get();
+
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
@@ -968,9 +974,33 @@ int main(int ac, char** av) {
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
+            qp.start(std::ref(proxy), std::ref(db), std::addressof(mm_notifier.local()), std::addressof(mm.local()), qp_mcfg, std::ref(cql_config), false).get();
+
+            // Local query_processor/storage_proxy
+            service::storage_proxy::config spcfg_dummy {
+                .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
+            };
+            scheduling_group_key_config storage_proxy_stats_local_cfg =
+                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            storage_proxy_stats_local_cfg.constructor = [plain_constructor = storage_proxy_stats_local_cfg.constructor] (void* ptr) {
+                plain_constructor(ptr);
+                seastar::metrics::label_instance nonlocal_label{"local", false};
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats(nonlocal_label);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local(nonlocal_label);
+            };
+            // local proxy without feature_service, token_metadata, messaging
+            proxy_local.start(std::ref(db), spcfg_dummy, std::ref(node_backlog),
+                scheduling_group_key_create(storage_proxy_stats_local_cfg).get0(),
+                nullptr, nullptr, nullptr, true).get();
+
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
+
+            auto stop_proxy_local = defer_verbose_shutdown("local query processor", [ &proxy_local ] {
+                supervisor::notify("stopping local storage proxy");
+                proxy_local.stop().get();
+            });
+
             supervisor::notify("initializing batchlog manager");
             db::batchlog_manager_config bm_cfg;
             bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;

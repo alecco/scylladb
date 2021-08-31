@@ -626,17 +626,36 @@ public:
             };
             spcfg.available_memory = memory::stats().total_memory();
             db::view::node_update_backlog b(smp::count, 10ms);
+fmt::print("XXX 1\n");
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(ms)).get();
+fmt::print("XXX 2\n");
+            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::addressof(feature_service.local()), std::addressof(token_metadata.local()), std::addressof(ms.local()), false).get();
+fmt::print("XXX 3\n");
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
+
+fmt::print("XXX 4\n");
+            service::storage_proxy_local::config spcfg_local {
+                .available_memory = memory::stats().total_memory(),
+            };
+            sharded<service::storage_proxy_local> proxy_local; // XXX sharded not distributed
+fmt::print("XXX 5\n");
+            proxy_local.start(std::ref(db), spcfg_local, std::ref(b),
+                    scheduling_group_key_create(sg_conf).get0()).get();
+            auto stop_proxy_local = defer([&proxy_local] { proxy_local.stop().get(); });
+fmt::print("XXX 6\n");
 
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
+fmt::print("XXX 7\n");
 
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+fmt::print("XXX 8\n");
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
+fmt::print("XXX 9\n");
+
+fmt::print("XXX 10\n");
 
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
@@ -648,21 +667,27 @@ public:
             bm.start(std::ref(qp), bmcfg).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
 
+fmt::print("XXX 11\n");
             view_update_generator.start(std::ref(db)).get();
             view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
+fmt::print("XXX 12\n");
             auto stop_view_update_generator = defer([&view_update_generator] {
                 view_update_generator.stop().get();
             });
 
+fmt::print("XXX 13\n");
             distributed_loader::init_system_keyspace(db, ss).get();
 
+fmt::print("XXX 14\n");
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
                 auto cfm = pair.second;
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
+fmt::print("XXX 15\n");
             distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
+fmt::print("XXX 16\n");
             db.invoke_on_all([] (database& db) {
                 for (auto& x : db.get_column_families()) {
                     table& t = *(x.second);
@@ -673,6 +698,7 @@ public:
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
             start_large_data_handler(db).get();
 
+fmt::print("XXX 13\n");
             db.invoke_on_all([] (database& db) {
                 db.get_compaction_manager().enable();
             }).get();
@@ -680,12 +706,14 @@ public:
             auto stop_database_d = defer([&db] {
                 stop_database(db).get();
             });
+fmt::print("XXX 14\n");
             // XXX: stop_raft before stopping the database and
             // query processor. Group registry stop raft groups
             // when stopped, and until then the groups may use
             // the database and the query processor.
             auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
+fmt::print("XXX 15\n");
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
@@ -698,11 +726,13 @@ public:
 
             sharded<cdc::cdc_service> cdc;
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
+fmt::print("XXX 16\n");
             cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), std::ref(mm_notif)).get();
             auto stop_cdc_service = defer([&] {
                 cdc.stop().get();
             });
 
+fmt::print("XXX 17\n");
             ss.local().init_server(qp.local(), service::bind_messaging_port(false)).get();
             try {
                 ss.local().join_cluster().get();
@@ -716,10 +746,12 @@ public:
             perm_cache_config.validity_period = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
             perm_cache_config.update_period = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
+fmt::print("XXX 17\n");
             const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
             const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
 
+fmt::print("XXX 19\n");
             auth::service_config auth_config;
             auth_config.authorizer_java_name = qualified_authorizer_name;
             auth_config.authenticator_java_name = qualified_authenticator_name;
@@ -730,11 +762,13 @@ public:
                 return auth.start(mm.local());
             }).get();
 
+fmt::print("XXX 20\n");
             auto deinit_storage_service_server = defer([&auth_service] {
                 gms::stop_gossiping().get();
                 auth_service.stop().get();
             });
 
+fmt::print("XXX 20\n");
             sharded<db::view::view_builder> view_builder;
             view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm_notif)).get();
             view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) {
@@ -744,6 +778,7 @@ public:
                 view_builder.stop().get();
             });
 
+fmt::print("XXX 21\n");
             // Create the testing user.
             try {
                 auth::role_config config;
@@ -759,17 +794,21 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
+fmt::print("XXX 22\n");
             single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller));
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
+fmt::print("XXX 23\n");
             if (!env.local_db().has_keyspace(ks_name)) {
                 env.create_keyspace(ks_name).get();
             }
 
+fmt::print("XXX 24\n");
             with_scheduling_group(dbcfg.statement_scheduling_group, [&func, &env] {
                 return func(env);
             }).get();
+fmt::print("XXX 25\n");
         });
     }
 
