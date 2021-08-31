@@ -997,6 +997,7 @@ int main(int ac, char** av) {
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
                     std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
+
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
@@ -1010,7 +1011,18 @@ int main(int ac, char** av) {
             debug::the_query_processor = &qp;
             // XXX start / constructor
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), false).get();
-            qp_local.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
+
+            // Local query_processor/storage_proxy
+            service::storage_proxy::config spcfg_dummy {
+                .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
+            };
+            service::storage_proxy proxy_local{std::ref(db), spcfg_dummy, std::ref(node_backlog),
+                scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
+                std::ref(feature_service.local()),
+                std::ref(token_metadata.local()),
+                std::ref(messaging.local())};
+            qp_local.start(std::ref(proxy_local), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
+
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             // engine().at_exit([&qp_local] { return qp_local.stop(); });
