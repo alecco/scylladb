@@ -544,7 +544,7 @@ public:
     virtual ~manager();
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
-    void register_metrics(const sstring& group_name);
+    void register_metrics(const sstring& group_name, seastar::metrics::label_instance& local_label);
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
     bool store_hint(gms::inet_address ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;

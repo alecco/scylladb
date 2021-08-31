@@ -80,13 +80,13 @@ static schema_ptr create_log_schema(const schema&, std::optional<utils::UUID> = 
 
 static constexpr auto cdc_group_name = "cdc";
 
-void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_groups& metrics, std::string_view suffix) {
+void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_groups& metrics, std::string_view suffix, seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
     auto register_part = [&] (part_type part, sstring part_name) {
         metrics.add_group(cdc_group_name, {
                 sm::make_total_operations(format("operations_on_{}_performed_{}", part_name, suffix), count[(size_t)part],
                         sm::description(format("number of {} CDC operations that processed a {}", suffix, part_name)),
-                        {})
+                        {local_label})
             });
     };
 
@@ -101,7 +101,8 @@ void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_
     register_part(part_type::ROW_DELETE, "row_delete");
 }
 
-cdc::stats::stats() {
+cdc::stats::stats(seastar::metrics::label_instance local_label)
+    : _local_label(local_label) {
     namespace sm = seastar::metrics;
 
     auto register_counters = [this] (counters& counters, sstring kind) {
@@ -109,26 +110,25 @@ cdc::stats::stats() {
         _metrics.add_group(cdc_group_name, {
                 sm::make_total_operations("operations_" + kind, counters.unsplit_count,
                         sm::description(format("number of {} CDC operations", kind)),
-                        {split_label(false)}),
-
+                        {split_label(false), _local_label}),
                 sm::make_total_operations("operations_" + kind, counters.split_count,
                         sm::description(format("number of {} CDC operations", kind)),
-                        {split_label(true)}),
+                        {split_label(true), _local_label}),
 
                 sm::make_total_operations("preimage_selects_" + kind, counters.preimage_selects,
                         sm::description(format("number of {} preimage queries performed", kind)),
-                        {}),
+                        {_local_label}),
 
                 sm::make_total_operations("operations_with_preimage_" + kind, counters.with_preimage_count,
                         sm::description(format("number of {} operations that included preimage", kind)),
-                        {}),
+                        {_local_label}),
 
                 sm::make_total_operations("operations_with_postimage_" + kind, counters.with_postimage_count,
                         sm::description(format("number of {} operations that included postimage", kind)),
-                        {})
+                        {_local_label})
             });
 
-        counters.touches.register_metrics(_metrics, kind);
+        counters.touches.register_metrics(_metrics, kind, _local_label);
     };
     register_counters(counters_total, "total");
     register_counters(counters_failed, "failed");
