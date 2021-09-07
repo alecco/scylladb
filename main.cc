@@ -991,8 +991,9 @@ int main(int ac, char** av) {
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
                 plain_constructor(ptr);
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
+                seastar::metrics::label_instance local_label{"local", true};
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats(local_label);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local(local_label);
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
@@ -1016,13 +1017,27 @@ int main(int ac, char** av) {
             service::storage_proxy::config spcfg_dummy {
                 .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
             };
+#if 1
+supervisor::notify(">>>>>>>>>>>>>>>>>>> proxy_local start() <<<<<<<<<<<<<<<<<<<<<<");
             sharded<service::storage_proxy> proxy_local;
+            scheduling_group_key_config storage_proxy_stats_local_cfg =
+                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            storage_proxy_stats_local_cfg.constructor = [plain_constructor = storage_proxy_stats_local_cfg.constructor] (void* ptr) {
+                plain_constructor(ptr);
+                seastar::metrics::label_instance nonlocal_label{"local", false};
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats(nonlocal_label);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local(nonlocal_label);
+            };
             proxy_local.start(std::ref(db), spcfg_dummy, std::ref(node_backlog),
-                scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
+                scheduling_group_key_create(storage_proxy_stats_local_cfg).get0(),
                 std::ref(feature_service.local()),
                 std::ref(token_metadata.local()),
                 std::ref(messaging.local()), true).get();
+fmt::print("\n\n------------------- proxy_local start() done -----------------------\n\n");
             qp_local.start(std::ref(proxy_local), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
+#else
+            qp_local.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
+#endif
 
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });

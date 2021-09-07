@@ -278,7 +278,7 @@ private:
     std::default_random_engine _urandom;
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
     seastar::metrics::metric_groups _metrics;
-    bool _local;
+    seastar::metrics::label_instance _local_label;
     uint64_t _background_write_throttle_threahsold;
     inheriting_concrete_execution_stage<
             future<>,
