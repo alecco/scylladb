@@ -111,6 +111,9 @@ public:
     template <typename... Ts>
     schema_change(change_type change, target_type target, sstring keyspace, Ts... arguments)
         : schema_change(change, target, keyspace, std::vector<sstring>{std::move(arguments)...}) {}
+
+    schema_change& operator=(schema_change&&) = default;
+    schema_change(schema_change&&) = default;
 };
 
 }
