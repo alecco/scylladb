@@ -1473,7 +1473,6 @@ void storage_proxy_stats::write_stats::register_split_metrics_local(seastar::met
 
 void storage_proxy_stats::write_stats::register_stats(seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
-fmt::print("\nXXX write_stats register_stats() {}\n\n", local_label.value());
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
             sm::make_histogram("write_latency", sm::description("The general write latency histogram"),
                     {storage_proxy_stats::current_scheduling_group_label(), local_label},
@@ -1553,7 +1552,6 @@ void storage_proxy_stats::stats::register_split_metrics_local(seastar::metrics::
 
 void storage_proxy_stats::stats::register_stats(seastar::metrics::label_instance& local_label) {
     namespace sm = seastar::metrics;
-fmt::print("\nXXX stats register_stats() {}\n\n", local_label.value());
     write_stats::register_stats(local_label);
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"),
@@ -1776,7 +1774,6 @@ void storage_proxy_stats::global_write_stats::register_stats(seastar::metrics::l
 }
 
 void storage_proxy_stats::global_stats::register_stats(seastar::metrics::label_instance& local_label) {
-fmt::print("\nXXX global_write_stats register_stats() {}\n\n", local_label.value());
     global_write_stats::register_stats(local_label);
 }
 
@@ -1812,7 +1809,8 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
-    , _view_update_handlers_list(std::make_unique<view_update_handlers_list>()) {
+    , _view_update_handlers_list(std::make_unique<view_update_handlers_list>())
+    , _cdc_stats({"local", local}) {
     namespace sm = seastar::metrics;
     _metrics.add_group(storage_proxy_stats::COORDINATOR_STATS_CATEGORY, {
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
@@ -1821,8 +1819,8 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     });
 
     slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
-    _hints_manager.register_metrics("hints_manager");
-    _hints_for_views_manager.register_metrics("hints_for_views_manager");
+    _hints_manager.register_metrics("hints_manager", _local_label);
+    _hints_for_views_manager.register_metrics("hints_for_views_manager", _local_label);
 }
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
@@ -3461,8 +3459,7 @@ public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, seastar::metrics::label_instance& local_label) :
                            _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
-                           _local_label(local_label),  // XXX come back to this
-                           _cf(std::move(cf)), _permit(std::move(permit)) {
+                           _local_label(local_label), _cf(std::move(cf)), _permit(std::move(permit)) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
     }
