@@ -59,6 +59,7 @@ class canonical_mutation;
 class frozen_mutation;
 namespace cql3 { namespace functions { class user_function; class user_aggregate; }}
 namespace netw { class messaging_service; }
+namespace raft { using command = bytes_ostream; }
 
 namespace service {
 
@@ -165,6 +166,8 @@ public:
     future<> announce(std::vector<mutation> schema);
 
     static future<> passive_announce(utils::UUID version);
+
+    raft::command adjust_for_distribution(const std::vector<mutation>& schema);
 
     future<> stop();
 

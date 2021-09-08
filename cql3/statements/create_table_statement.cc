@@ -60,6 +60,7 @@
 #include "gms/feature_service.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "db/config.hh"
 
 namespace cql3 {
@@ -107,9 +108,31 @@ std::vector<column_definition> create_table_statement::get_columns() const
 future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(query_processor& qp) const {
     auto schema = get_cf_meta_data(qp.db());
     auto& mm = qp.get_migration_manager();
+    auto& raft_gr = qp.raft();
     try {
+        if (raft_gr.local().is_enabled())  {
+            co_await raft_gr.invoke_on(0, [this, &mm = mm, schema = std::move(schema)]
+                    (service::raft_group_registry& raft_gr) -> future<> {
+                raft::server& group0 = raft_gr.group0();
 
-        co_await mm.announce_new_column_family(std::move(schema));
+                co_await group0.read_barrier();
+
+                std::vector<mutation> m = co_await mm.prepare_new_column_family_announcement(std::move(schema));
+                // todo: add schema version into command, to apply
+                // only on condition the version is the same.
+                // qqq: what happens if there is a command in between?
+                // there is a new schema version, apply skipped, but
+                // we don't get a proper error.
+                auto cmd = mm.adjust_for_distribution(std::move(m));
+                co_await group0.add_entry(cmd, raft::wait_type::applied);
+                // TODO: loop and retry if apply is a no-op - check
+                // new schema version
+                co_return;
+            });
+        } else {
+
+            co_await mm.announce_new_column_family(std::move(schema));
+        }
         using namespace cql_transport;
         co_return ::make_shared<event::schema_change>(
             event::schema_change::change_type::CREATED,

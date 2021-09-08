@@ -58,6 +58,14 @@
 #include "db/schema_tables.hh"
 #include "cql3/functions/user_aggregate.hh"
 
+#include "serialization_visitors.hh"
+#include "serializer.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/uuid.dist.hh"
+#include "serializer_impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
+#include "idl/uuid.dist.impl.hh"
+
 namespace service {
 
 static logging::logger mlogger("migration_manager");
@@ -959,6 +967,14 @@ public static void announceAggregateDrop(UDAggregate udf, boolean announceLocall
     announce(LegacySchemaTables.makeDropAggregateMutation(ksm, udf, FBUtilities.timestampMicros()), announceLocally);
 }
 #endif
+
+raft::command migration_manager::adjust_for_distribution(const std::vector<mutation>& schema) {
+    auto schema_features = _feat.cluster_schema_features();
+    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
+    raft::command cmd;
+    ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
+    return cmd;
+}
 
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
