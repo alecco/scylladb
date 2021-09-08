@@ -31,6 +31,10 @@ namespace utils {
     class UUID;
 } // namespace utils
 
+namespace api {
+using timestamp_type = int64_t;
+}; // namespace api
+
 // Immutable mutation form which can be read using any schema version of the same table.
 // Safe to access from other shards via const&.
 // Safe to pass serialized across nodes.
@@ -58,3 +62,11 @@ public:
 
     friend std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm);
 };
+
+// Representation of schema DDL
+struct schema_change {
+    api::timestamp_type prev_schema_timestamp;
+    api::timestamp_type next_schema_timestamp;
+    std::vector<canonical_mutation> schema_change;
+};
+

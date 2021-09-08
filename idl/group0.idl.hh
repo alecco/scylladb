@@ -30,4 +30,4 @@ struct group0_peer_exchange {
     std::variant<std::monostate, service::group0_info, std::vector<raft::server_address>> info;
 };
 
-} // namespace raft
+} // namespace service

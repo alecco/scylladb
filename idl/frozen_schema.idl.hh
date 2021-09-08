@@ -42,3 +42,9 @@ class schema stub [[writable]] {
 class frozen_schema final {
     bytes representation();
 };
+
+struct schema_change {
+    api::timestamp_type prev_schema_timestamp;
+    api::timestamp_type next_schema_timestamp;
+    std::vector<canonical_mutation> schema_change;
+};
