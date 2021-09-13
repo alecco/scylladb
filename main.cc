@@ -890,6 +890,42 @@ int main(int ac, char** av) {
             api::set_server_config(ctx).get();
             verify_seastar_io_scheduler(opts, cfg->developer_mode());
 
+            // XXX move local qp/sp here?
+            // Local query_processor/storage_proxy
+            service::storage_proxy::config spcfg_dummy {
+                .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
+            };
+            static db::view::node_update_backlog node_backlog(smp::count, 10ms);
+            scheduling_group_key_config storage_proxy_stats_local_cfg =
+                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            storage_proxy_stats_local_cfg.constructor = [plain_constructor = storage_proxy_stats_local_cfg.constructor] (void* ptr) {
+                plain_constructor(ptr);
+                seastar::metrics::label_instance nonlocal_label{"local", false};
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats(nonlocal_label);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local(nonlocal_label);
+            };
+
+            // local proxy without feature_service, token_metadata, messaging
+            supervisor::notify("starting local storage proxy");
+            proxy_local.start(std::ref(db), spcfg_dummy, std::ref(node_backlog),
+                scheduling_group_key_create(storage_proxy_stats_local_cfg).get0(),
+                nullptr, nullptr, nullptr, true).get();
+
+            // local query processor
+            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            supervisor::notify("starting local query processor");
+            qp_local.start(std::ref(proxy_local), std::ref(db), nullptr, nullptr, qp_mcfg,
+                    std::ref(cql_config), true).get();
+
+            auto stop_qp_local = defer_verbose_shutdown("local query processor", [ &qp_local ] {
+                supervisor::notify("stopping local query processor");
+                qp_local.stop().get();
+            });
+            auto stop_proxy_local = defer_verbose_shutdown("local query processor", [ &proxy_local ] {
+                supervisor::notify("stopping local storage proxy");
+                proxy_local.stop().get();
+            });
+
             supervisor::notify("creating and verifying directories");
             utils::directories::set dir_set;
             dir_set.add(cfg->data_file_directories());
@@ -947,7 +983,6 @@ int main(int ac, char** av) {
             spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
             spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
             spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            static db::view::node_update_backlog node_backlog(smp::count, 10ms);
             scheduling_group_key_config storage_proxy_stats_cfg =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
@@ -967,9 +1002,8 @@ int main(int ac, char** av) {
                 mm.stop().get();
             });
             supervisor::notify("starting query processor");
-            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), false).get();
+            qp.start(std::ref(proxy), std::ref(db), std::addressof(mm_notifier.local()), std::addressof(mm.local()), qp_mcfg, std::ref(cql_config), false).get();
             qp_local.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), true).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });

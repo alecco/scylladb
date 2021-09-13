@@ -85,7 +85,7 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, bool local)
+query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier* mn, service::migration_manager* mm, query_processor::memory_config mcfg, cql_config& cql_cfg, bool local)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
@@ -487,16 +487,22 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
 
             });
 
-    _mnotifier.register_listener(_migration_subscriber.get());
+    if (_mnotifier) {
+        _mnotifier->register_listener(_migration_subscriber.get());
+    }
 }
 
 query_processor::~query_processor() {
 }
 
 future<> query_processor::stop() {
-    return _mnotifier.unregister_listener(_migration_subscriber.get()).then([this] {
-        return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
-    });
+    if (_mnotifier) {
+        return _mnotifier->unregister_listener(_migration_subscriber.get()).then([this] {
+            return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
+        });
+    } else {
+        return make_ready_future<>();
+    }
 }
 
 future<::shared_ptr<result_message>>
