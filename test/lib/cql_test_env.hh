@@ -50,6 +50,7 @@ class service;
 
 namespace cql3 {
     class query_processor;
+    class query_processor_local;
 }
 
 namespace service {
@@ -151,7 +152,7 @@ public:
 
     virtual distributed<cql3::query_processor> & qp() = 0;
 
-    virtual distributed<cql3::query_processor> & qp_local() = 0;
+    virtual sharded<cql3::query_processor_local>& qp_local() = 0;
 
     virtual auth::service& local_auth_service() = 0;
 

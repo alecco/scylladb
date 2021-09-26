@@ -85,14 +85,27 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier* mn, service::migration_manager* mm, query_processor::memory_config mcfg, cql_config& cql_cfg, bool local)
+query_processor_local::query_processor_local(service::storage_proxy_local& proxy,
+        database& db, query_processor_local::memory_config mcfg, cql_config& cql_cfg)
+        : _proxy(proxy)
+        , _db(db)
+        , _cql_config(cql_cfg)
+        , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
+        , _authorized_prepared_cache(std::min(std::chrono::milliseconds(
+                        _db.get_config().permissions_validity_in_ms()),
+                        std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry)),
+                        std::chrono::milliseconds(_db.get_config().permissions_update_interval_in_ms()),
+                        mcfg.authorized_prepared_cache_size, authorized_prepared_statements_cache_log) {
+    // XXX
+}
+
+query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
         , _mnotifier(mn)
         , _mm(mm)
         , _cql_config(cql_cfg)
-        , _qp_label({"qp", local? "local" : "global"})
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.get_config().permissions_validity_in_ms()),
@@ -490,22 +503,19 @@ fmt::print("QP  02\n");
             });
 
 fmt::print("QP  03\n");
-    if (_mnotifier) {
-        _mnotifier->register_listener(_migration_subscriber.get());
-    }
+    _mnotifier.register_listener(_migration_subscriber.get());
+}
+
+query_processor_local::~query_processor_local() {
 }
 
 query_processor::~query_processor() {
 }
 
 future<> query_processor::stop() {
-    if (_mnotifier) {
-        return _mnotifier->unregister_listener(_migration_subscriber.get()).then([this] {
-            return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
-        });
-    } else {
-        return make_ready_future<>();
-    }
+    return _mnotifier.unregister_listener(_migration_subscriber.get()).then([this] {
+        return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
+    });
 }
 
 future<::shared_ptr<result_message>>

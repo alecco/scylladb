@@ -1382,7 +1382,8 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::init_server(cql3::query_processor& qp, bind_messaging_port do_bind) {
+future<> storage_service::init_server(cql3::query_processor_local& qp, 
+        bind_messaging_port do_bind) {
     assert(this_shard_id() == 0);
 
     return seastar::async([this, &qp, do_bind] {

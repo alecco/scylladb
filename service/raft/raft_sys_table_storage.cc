@@ -226,6 +226,7 @@ future<> raft_sys_table_storage::truncate_log(raft::index_t idx) {
     return execute_with_linearization_point([this, idx] {
         static const auto truncate_cql = format("DELETE FROM system.{} WHERE group_id = ? AND \"index\" >= ?",
             db::system_keyspace::RAFT); 
+        // XXX
         return _qp.execute_internal(truncate_cql, {_group_id.id, int64_t(idx)}).discard_result();
     });
 }

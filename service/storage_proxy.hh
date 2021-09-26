@@ -197,6 +197,7 @@ public:
             db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key);
     ~storage_proxy_local();
+    future<> stop();
 };
 
 

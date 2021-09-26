@@ -46,6 +46,7 @@
 namespace service {
 
 class storage_proxy;
+class storage_proxy_local;
 class query_state;
 class client_state;
 

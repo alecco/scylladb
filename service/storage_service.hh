@@ -79,7 +79,7 @@ namespace service {
 class raft_group_registry;
 }
 
-namespace cql3 { class query_processor; }
+namespace cql3 { class query_processor_local; }
 
 namespace cql_transport { class controller; }
 
@@ -420,7 +420,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> init_server(cql3::query_processor& qp_local,
+    future<> init_server(cql3::query_processor_local& qp,
             bind_messaging_port do_bind = bind_messaging_port::yes);
 
     future<> join_cluster();

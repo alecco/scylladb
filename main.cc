@@ -496,7 +496,7 @@ int main(int ac, char** av) {
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
     sharded<service::storage_proxy> proxy_local;
-    sharded<cql3::query_processor> qp_local;
+    sharded<cql3::query_processor_local> qp_local;
     sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
     sharded<service::raft_group_registry> raft_gr;
@@ -972,7 +972,6 @@ int main(int ac, char** av) {
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
-
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
 
             // Local query_processor/storage_proxy

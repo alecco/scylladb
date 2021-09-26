@@ -145,7 +145,7 @@ public:
 private:
     sharded<database>& _db;
     sharded<cql3::query_processor>& _qp;
-    sharded<cql3::query_processor>& _qp_local;
+    sharded<cql3::query_processor_local>& _qp_local;
     sharded<auth::service>& _auth_service;
     sharded<db::view::view_builder>& _view_builder;
     sharded<db::view::view_update_generator>& _view_update_generator;
@@ -194,7 +194,7 @@ public:
     single_node_cql_env(
             sharded<database>& db,
             sharded<cql3::query_processor>& qp,
-            sharded<cql3::query_processor>& qp_local,
+            sharded<cql3::query_processor_local>& qp_local,
             sharded<auth::service>& auth_service,
             sharded<db::view::view_builder>& view_builder,
             sharded<db::view::view_update_generator>& view_update_generator,
@@ -389,7 +389,7 @@ public:
         return _qp;
     }
 
-    distributed<cql3::query_processor>& qp_local() override {
+    sharded<cql3::query_processor_local>& qp_local() override {
         return _qp_local;
     }
 
@@ -565,7 +565,7 @@ public:
             sharded<cdc::generation_service> cdc_generation_service;
             sharded<repair_service> repair;
             sharded<cql3::query_processor> qp;
-            sharded<cql3::query_processor> qp_local;
+            sharded<cql3::query_processor_local> qp_local;
             sharded<service::raft_group_registry> raft_gr;
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
                 std::ref(ms), std::ref(gms::get_gossiper())).get();
@@ -659,12 +659,16 @@ fmt::print("XXX 7\n");
 
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
 fmt::print("XXX 8\n");
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
+            qp.start(std::ref(proxy), std::ref(db),
+                    std::ref(mm_notif),
+                    std::ref(mm),
+                    qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 fmt::print("XXX 9\n");
 
             // XXX use proper
-            qp_local.start(std::ref(proxy), std::ref(db), nullptr, nullptr, qp_mcfg, std::ref(cql_config), true).get();
+            cql3::query_processor_local::memory_config qp_local_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            qp_local.start(std::ref(proxy_local), std::ref(db), qp_local_mcfg, std::ref(cql_config)).get();
 fmt::print("XXX 10\n");
             auto stop_qp_local = defer([&qp_local] { qp_local.stop().get(); });
 
@@ -744,7 +748,7 @@ fmt::print("XXX 16\n");
             });
 
 fmt::print("XXX 17\n");
-            ss.local().init_server(qp.local(), service::bind_messaging_port(false)).get();
+            ss.local().init_server(qp_local.local(), service::bind_messaging_port(false)).get();
             try {
                 ss.local().join_cluster().get();
             } catch (std::exception& e) {
@@ -806,7 +810,7 @@ fmt::print("XXX 21\n");
             }
 
 fmt::print("XXX 22\n");
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller));
+            single_node_cql_env env(db, qp, qp_local, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller));
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

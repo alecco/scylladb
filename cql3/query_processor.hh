@@ -108,6 +108,34 @@ class cql_config;
 class query_options;
 class cql_statement;
 
+class query_processor_local {
+private:
+    service::storage_proxy_local& _proxy;
+    database& _db;
+    const cql_config& _cql_config;
+
+    struct stats {
+        uint64_t prepare_invocations = 0;
+        uint64_t queries_by_cl[size_t(db::consistency_level::MAX_VALUE) + 1] = {};
+    } _stats;
+
+    cql_stats _cql_stats;
+
+    seastar::metrics::metric_groups _metrics;
+    seastar::metrics::label_instance _qp_label{"local", true};
+
+    prepared_statements_cache _prepared_cache;
+    authorized_prepared_statements_cache _authorized_prepared_cache;
+public:
+    struct memory_config {
+        size_t prepared_statment_cache_size = 0;
+        size_t authorized_prepared_cache_size = 0;
+    };
+    query_processor_local(service::storage_proxy_local& proxy, database& db,
+            memory_config mcfg, cql_config& cql_cfg);
+    ~query_processor_local();
+};
+
 class query_processor {
 public:
     class migration_subscriber;
@@ -120,8 +148,8 @@ private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
     service::storage_proxy& _proxy;
     database& _db;
-    service::migration_notifier* _mnotifier;
-    service::migration_manager* _mm;
+    service::migration_notifier& _mnotifier;
+    service::migration_manager& _mm;
     const cql_config& _cql_config;
 
     struct stats {
@@ -132,7 +160,7 @@ private:
     cql_stats _cql_stats;
 
     seastar::metrics::metric_groups _metrics;
-    seastar::metrics::label_instance _qp_label;
+    seastar::metrics::label_instance _qp_label{"local", false};
 
     class internal_state;
     std::unique_ptr<internal_state> _internal_state;
@@ -157,7 +185,7 @@ public:
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier* mn, service::migration_manager* mm, memory_config mcfg, cql_config& cql_cfg, bool local);
+    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
 
     ~query_processor();
 
@@ -174,12 +202,10 @@ public:
     }
 
     const service::migration_manager& get_migration_manager() const noexcept {
-        assert(_mm);
-        return *_mm;
+        return _mm;
     }
     service::migration_manager& get_migration_manager() noexcept {
-        assert(_mm);
-        return *_mm;
+        return _mm;
     }
 
     cql_stats& get_cql_stats() {
