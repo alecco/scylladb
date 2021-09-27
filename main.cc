@@ -958,10 +958,7 @@ int main(int ac, char** av) {
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
-                    std::addressof(feature_service.local()),
-                    std::addressof(token_metadata.local()),  // XXX  LOCAL???
-                    std::addressof(messaging.local()),       // XXX  LOCAL???
-                    false).get();
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
 
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
@@ -974,7 +971,8 @@ int main(int ac, char** av) {
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
-            qp.start(std::ref(proxy), std::ref(db), std::addressof(mm_notifier.local()), std::addressof(mm.local()), qp_mcfg, std::ref(cql_config), false).get();
+
+            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
 
             // Local query_processor/storage_proxy
             service::storage_proxy::config spcfg_dummy {
@@ -990,8 +988,8 @@ int main(int ac, char** av) {
             };
             // local proxy without feature_service, token_metadata, messaging
             proxy_local.start(std::ref(db), spcfg_dummy, std::ref(node_backlog),
-                scheduling_group_key_create(storage_proxy_stats_local_cfg).get0(),
-                nullptr, nullptr, nullptr, true).get();
+                    scheduling_group_key_create(storage_proxy_stats_local_cfg).get0(),
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
 
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });

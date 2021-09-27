@@ -1806,7 +1806,7 @@ storage_proxy_local::storage_proxy_local(distributed<database>& db,
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service* feat, const locator::shared_token_metadata* stm, netw::messaging_service* ms, bool local)
+        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata* stm, netw::messaging_service* ms)
     : _db(db)
     , _shared_token_metadata(stm)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -1828,28 +1828,26 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
                        {_local_label}),
     });
 
-    if (!local) {
-        _cdc_stats = std::make_unique<cdc_stats>();
-        slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
+    _cdc_stats = std::make_unique<cdc_stats>();
+    slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
 
-        _hints_resource_manager = std::make_unique<db::hints::resource_manager>(
-                cfg.available_memory / 10, _db.local().get_config().max_hinted_handoff_concurrency);
-        _hints_for_views_manager = std::make_unique<db::hints::manager>(
-                _db.local().get_config().view_hints_directory(), db::hints::host_filter{},
-                _db.local().get_config().max_hint_window_in_ms(), *_hints_resource_manager, _db);
+    _hints_resource_manager = std::make_unique<db::hints::resource_manager>(
+            cfg.available_memory / 10, _db.local().get_config().max_hinted_handoff_concurrency);
+    _hints_for_views_manager = std::make_unique<db::hints::manager>(
+            _db.local().get_config().view_hints_directory(), db::hints::host_filter{},
+            _db.local().get_config().max_hint_window_in_ms(), *_hints_resource_manager, _db);
 
-        _hints_manager = std::make_unique<db::hints::manager>(
-                _db.local().get_config().hints_directory(),
-                cfg.hinted_handoff_enabled,
-                _db.local().get_config().max_hint_window_in_ms(),
-                *_hints_resource_manager,
-                _db);
-        _hints_directory_initializer = std::make_unique<db::hints::directory_initializer>(
-                std::move(cfg.hints_directory_initializer));
+    _hints_manager = std::make_unique<db::hints::manager>(
+            _db.local().get_config().hints_directory(),
+            cfg.hinted_handoff_enabled,
+            _db.local().get_config().max_hint_window_in_ms(),
+            *_hints_resource_manager,
+            _db);
+    _hints_directory_initializer = std::make_unique<db::hints::directory_initializer>(
+            std::move(cfg.hints_directory_initializer));
 
-        _hints_manager->register_metrics("hints_manager");
-        _hints_for_views_manager->register_metrics("hints_for_views_manager");
-    }
+    _hints_manager->register_metrics("hints_manager");
+    _hints_for_views_manager->register_metrics("hints_for_views_manager");
 }
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
@@ -2634,7 +2632,7 @@ future<> storage_proxy::send_to_endpoint(
 }
 
 future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target) {
-    if (!_features->cluster_supports_hinted_handoff_separate_connection()) {
+    if (!_features.cluster_supports_hinted_handoff_separate_connection()) {
         return send_to_endpoint(
                 std::make_unique<shared_mutation>(std::move(fm_a_s)),
                 std::move(target),
@@ -2656,7 +2654,7 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 }
 
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
-    if (!_features->cluster_supports_hinted_handoff_separate_connection()) {
+    if (!_features.cluster_supports_hinted_handoff_separate_connection()) {
         std::array<mutation, 1> ms{fm_a_s.fm.unfreeze(fm_a_s.s)};
         return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit());
     }
@@ -4125,7 +4123,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
     const auto tmptr = get_token_metadata_ptr();
 
-    if (_features->cluster_supports_range_scan_data_variant()) {
+    if (_features.cluster_supports_range_scan_data_variant()) {
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
     }
 

@@ -286,8 +286,8 @@ public:
         bool has_dead_endpoints;
     };
 
-    gms::feature_service& features() noexcept { return *_features; }
-    const gms::feature_service& features() const { return *_features; }
+    gms::feature_service& features() noexcept { return _features; }
+    const gms::feature_service& features() const { return _features; }
 
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
@@ -295,7 +295,7 @@ public:
 
 private:
     distributed<database>& _db;
-    const locator::shared_token_metadata* _shared_token_metadata;
+    const locator::shared_token_metadata& _shared_token_metadata;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _hints_write_smp_service_group;
@@ -316,7 +316,7 @@ private:
     std::unique_ptr<db::hints::manager> _hints_for_views_manager;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
-    gms::feature_service* _features;
+    gms::feature_service& _features;
     netw::messaging_service* _messaging;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
@@ -489,7 +489,7 @@ private:
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service* feat, const locator::shared_token_metadata* stm, netw::messaging_service* ms, bool local);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata* stm, netw::messaging_service* ms);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;

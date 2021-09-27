@@ -630,7 +630,7 @@ fmt::print("XXX 1\n");
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
 fmt::print("XXX 2\n");
-            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::addressof(feature_service.local()), std::addressof(token_metadata.local()), std::addressof(ms.local()), false).get();
+            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::addressof(feature_service.local()), std::addressof(token_metadata.local()), std::addressof(ms.local())).get();
 fmt::print("XXX 3\n");
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
