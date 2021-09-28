@@ -155,7 +155,7 @@ struct storage_proxy_coordinator_query_result {
 
 class cas_request;
 
-class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
+class storage_proxy_base {
 public:
     enum class error : uint8_t {
         NONE,
@@ -164,33 +164,14 @@ public:
     };
     using clock_type = lowres_clock;
     struct config {
-        db::hints::host_filter hinted_handoff_enabled = {};
-        db::hints::directory_initializer hints_directory_initializer;
         size_t available_memory;
         smp_service_group read_smp_service_group = default_smp_service_group();
         smp_service_group write_smp_service_group = default_smp_service_group();
-        smp_service_group hints_write_smp_service_group = default_smp_service_group();
         // Write acknowledgments might not be received on the correct shard, and
         // they need a separate smp_service_group to prevent an ABBA deadlock
         // with writes.
         smp_service_group write_ack_smp_service_group = default_smp_service_group();
     };
-private:
-
-    using response_id_type = uint64_t;
-    struct unique_response_handler {
-        response_id_type id;
-        storage_proxy& p;
-        unique_response_handler(storage_proxy& p_, response_id_type id_);
-        unique_response_handler(const unique_response_handler&) = delete;
-        unique_response_handler& operator=(const unique_response_handler&) = delete;
-        unique_response_handler(unique_response_handler&& x) noexcept;
-        unique_response_handler& operator=(unique_response_handler&&) noexcept;
-        ~unique_response_handler();
-        response_id_type release();
-    };
-    using unique_response_handler_vector = utils::small_vector<unique_response_handler, 1>;
-    using response_handlers_map = std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>>;
 
 public:
     static const sstring COORDINATOR_STATS_CATEGORY;
@@ -199,7 +180,6 @@ public:
     using write_stats = storage_proxy_stats::write_stats;
     using stats = storage_proxy_stats::stats;
     using global_stats = storage_proxy_stats::global_stats;
-    using cdc_stats = cdc::stats;
 
     class coordinator_query_options {
         clock_type::time_point _timeout;
@@ -232,29 +212,32 @@ public:
 
     using coordinator_query_result = storage_proxy_coordinator_query_result;
 
-    // Holds  a list of endpoints participating in CAS request, for a given
-    // consistency level, token, and state of joining/leaving nodes.
-    struct paxos_participants {
-        inet_address_vector_replica_set endpoints;
-        // How many participants are required for a quorum (i.e. is it SERIAL or LOCAL_SERIAL).
-        size_t required_participants;
-        bool has_dead_endpoints;
-    };
-
-    gms::feature_service& features() noexcept { return _features; }
-    const gms::feature_service& features() const { return _features; }
-
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
 
-private:
+protected:
     distributed<database>& _db;
     const locator::shared_token_metadata& _shared_token_metadata;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
-    smp_service_group _hints_write_smp_service_group;
     smp_service_group _write_ack_smp_service_group;
+
+    using response_id_type = uint64_t;
+    struct unique_response_handler {
+        response_id_type id;
+        storage_proxy& p;
+        unique_response_handler(storage_proxy& p_, response_id_type id_);
+        unique_response_handler(const unique_response_handler&) = delete;
+        unique_response_handler& operator=(const unique_response_handler&) = delete;
+        unique_response_handler(unique_response_handler&& x) noexcept;
+        unique_response_handler& operator=(unique_response_handler&&) noexcept;
+        ~unique_response_handler();
+        response_id_type release();
+    };
+    using unique_response_handler_vector = utils::small_vector<unique_response_handler, 1>;
+    using response_handlers_map = std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>>;
+
     response_id_type _next_response_id;
     response_handlers_map _response_handlers;
     // This buffer hold ids of throttled writes in case resource consumption goes
@@ -265,20 +248,14 @@ private:
     // not remove request from the buffer), but this is fine since request ids are unique, so we
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
-    db::hints::resource_manager _hints_resource_manager;
-    db::hints::manager _hints_manager;
-    db::hints::directory_initializer _hints_directory_initializer;
-    db::hints::manager _hints_for_views_manager;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
-    gms::feature_service& _features;
-    netw::messaging_service& _messaging;
-    static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
     std::default_random_engine _urandom;
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
     seastar::metrics::metric_groups _metrics;
     uint64_t _background_write_throttle_threahsold;
+    static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     inheriting_concrete_execution_stage<
             future<>,
             storage_proxy*,
@@ -289,31 +266,7 @@ private:
             service_permit,
             bool,
             lw_shared_ptr<cdc::operation_result_tracker>> _mutate_stage;
-    db::view::node_update_backlog& _max_view_update_backlog;
-    std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
-
-    //NOTICE(sarna): This opaque pointer is here just to avoid moving write handler class definitions from .cc to .hh. It's slow path.
-    class view_update_handlers_list;
-    std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
-
-    /* This is a pointer to the shard-local part of the sharded cdc_service:
-     * storage_proxy needs access to cdc_service to augument mutations.
-     *
-     * It is a pointer and not a reference since cdc_service must be initialized after storage_proxy,
-     * because it uses storage_proxy to perform pre-image queries, for one thing.
-     * Therefore, at the moment of initializing storage_proxy, we don't have access to cdc_service yet.
-     *
-     * Furthermore, storage_proxy must keep the service object alive while augmenting mutations
-     * (storage_proxy is never deintialized, and even if it would be, it would be after deinitializing cdc_service).
-     * Thus cdc_service inherits from enable_shared_from_this and storage_proxy code must remember to call
-     * shared_from_this().
-     *
-     * Eventual deinitialization of cdc_service is enabled by cdc_service::stop setting this pointer to nullptr.
-     */
-    cdc::cdc_service* _cdc = nullptr;
-
-    cdc_stats _cdc_stats;
-private:
+protected:
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl,
@@ -324,12 +277,12 @@ private:
     void got_response(response_id_type id, gms::inet_address from, std::optional<db::view::update_backlog> backlog);
     void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, error err);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
-    ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
+    ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy_base::response_id_type id);
     response_id_type create_write_response_handler_helper(schema_ptr s, const dht::token& token,
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
             service_permit permit);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
-            const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit);
+            const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy_base::write_stats& stats, service_permit permit);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
@@ -337,18 +290,6 @@ private:
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, inet_address_vector_replica_set>& meta,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
-    void register_cdc_operation_result_tracker(const storage_proxy::unique_response_handler_vector& ids, lw_shared_ptr<cdc::operation_result_tracker> tracker);
-    void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
-    template<typename Range>
-    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;
-    void hint_to_dead_endpoints(response_id_type, db::consistency_level);
-    template<typename Range>
-    bool cannot_hint(const Range& targets, db::write_type type) const;
-    bool hints_enabled(db::write_type type) const noexcept;
-    db::hints::manager& hints_manager_for(db::write_type type);
-    inet_address_vector_replica_set get_live_endpoints(keyspace& ks, const dht::token& token) const;
-    static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
-    inet_address_vector_replica_set get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             schema_ptr schema,
@@ -389,18 +330,7 @@ private:
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
         coordinator_query_options optional_params);
-    future<coordinator_query_result> do_query_with_paxos(schema_ptr,
-        lw_shared_ptr<query::read_command> cmd,
-        dht::partition_range_vector&& partition_ranges,
-        db::consistency_level cl,
-        coordinator_query_options optional_params);
-    template<typename Range, typename CreateWriteHandler>
-    future<unique_response_handler_vector> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler handler);
-    template<typename Range>
-    future<unique_response_handler_vector> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
-    future<> mutate_begin(unique_response_handler_vector ids, db::consistency_level cl, tracing::trace_state_ptr trace_state, std::optional<clock_type::time_point> timeout_opt = { });
-    future<> mutate_end(future<> mutate_result, utils::latency_counter, write_stats& stats, tracing::trace_state_ptr trace_state);
-    future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state, service_permit permit);
+
     bool need_throttle_writes() const;
     void unthrottle();
     void handle_read_error(std::exception_ptr eptr, bool range);
@@ -431,6 +361,20 @@ private:
             write_stats& stats,
             allow_hints allow_hints = allow_hints::yes);
 
+    template<typename Range, typename CreateWriteHandler>
+    future<unique_response_handler_vector> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler handler);
+    template<typename Range>
+    future<unique_response_handler_vector> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
+    future<> mutate_begin(unique_response_handler_vector ids, db::consistency_level cl, tracing::trace_state_ptr trace_state, std::optional<clock_type::time_point> timeout_opt = { });
+    future<> mutate_end(future<> mutate_result, utils::latency_counter, write_stats& stats, tracing::trace_state_ptr trace_state);
+    future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state, service_permit permit);
+
+    future<coordinator_query_result> do_query_with_paxos(schema_ptr,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl,
+        coordinator_query_options optional_params);
+
     db::view::update_backlog get_view_update_backlog() const;
 
     void maybe_update_view_backlog_of(gms::inet_address, std::optional<db::view::update_backlog>);
@@ -440,11 +384,11 @@ private:
     template<typename Range>
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
-    void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 public:
-    storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
-    ~storage_proxy();
+    storage_proxy_base(distributed<database>& db, config cfg,
+            scheduling_group_key stats_key, const locator::shared_token_metadata& stm);
+    ~storage_proxy_base();
+
     const distributed<database>& get_db() const {
         return _db;
     }
@@ -458,28 +402,8 @@ public:
         return _db.local();
     }
 
-    void set_cdc_service(cdc::cdc_service* cdc) {
-        _cdc = cdc;
-    }
-    cdc::cdc_service* get_cdc_service() const {
-        return _cdc;
-    }
 
-    view_update_handlers_list& get_view_update_handlers_list() {
-        return *_view_update_handlers_list;
-    }
-
-    response_id_type get_next_response_id() {
-        auto next = _next_response_id++;
-        if (next == 0) { // 0 is reserved for unique_response_handler
-            next = _next_response_id++;
-        }
-        return next;
-    }
-    void init_messaging_service(shared_ptr<migration_manager>);
-    future<> uninit_messaging_service();
-
-private:
+protected:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp);
@@ -491,6 +415,115 @@ private:
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp);
 
+
+
+// XXX continue here
+};
+
+class storage_proxy_local : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber, public storage_proxy_base {
+    // XXX continue here
+public:
+
+};
+
+class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber, public storage_proxy_base  {
+public:
+    struct config : public storage_proxy_base::config {
+        db::hints::host_filter hinted_handoff_enabled = {};
+        db::hints::directory_initializer hints_directory_initializer;
+        smp_service_group hints_write_smp_service_group = default_smp_service_group();
+    };
+public:
+    using cdc_stats = cdc::stats;
+
+    // Holds  a list of endpoints participating in CAS request, for a given
+    // consistency level, token, and state of joining/leaving nodes.
+    struct paxos_participants {
+        inet_address_vector_replica_set endpoints;
+        // How many participants are required for a quorum (i.e. is it SERIAL or LOCAL_SERIAL).
+        size_t required_participants;
+        bool has_dead_endpoints;
+    };
+
+    gms::feature_service& features() noexcept { return _features; }
+    const gms::feature_service& features() const { return _features; }
+
+private:
+    smp_service_group _hints_write_smp_service_group;
+    db::hints::resource_manager _hints_resource_manager;
+    db::hints::manager _hints_manager;
+    db::hints::directory_initializer _hints_directory_initializer;
+    db::hints::manager _hints_for_views_manager;
+    gms::feature_service& _features;
+    netw::messaging_service& _messaging;
+    // XXX views not for local?
+    db::view::node_update_backlog& _max_view_update_backlog;
+    std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
+
+    //NOTICE(sarna): This opaque pointer is here just to avoid moving write handler class definitions from .cc to .hh. It's slow path.
+    class view_update_handlers_list;
+    std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
+
+    /* This is a pointer to the shard-local part of the sharded cdc_service:
+     * storage_proxy needs access to cdc_service to augument mutations.
+     *
+     * It is a pointer and not a reference since cdc_service must be initialized after storage_proxy,
+     * because it uses storage_proxy to perform pre-image queries, for one thing.
+     * Therefore, at the moment of initializing storage_proxy, we don't have access to cdc_service yet.
+     *
+     * Furthermore, storage_proxy must keep the service object alive while augmenting mutations
+     * (storage_proxy is never deintialized, and even if it would be, it would be after deinitializing cdc_service).
+     * Thus cdc_service inherits from enable_shared_from_this and storage_proxy code must remember to call
+     * shared_from_this().
+     *
+     * Eventual deinitialization of cdc_service is enabled by cdc_service::stop setting this pointer to nullptr.
+     */
+    cdc::cdc_service* _cdc = nullptr;
+
+    cdc_stats _cdc_stats;
+private:
+    void register_cdc_operation_result_tracker(const storage_proxy_base::unique_response_handler_vector& ids, lw_shared_ptr<cdc::operation_result_tracker> tracker);
+    void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
+    template<typename Range>
+    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;
+    void hint_to_dead_endpoints(response_id_type, db::consistency_level);
+    template<typename Range>
+    bool cannot_hint(const Range& targets, db::write_type type) const;
+    bool hints_enabled(db::write_type type) const noexcept;
+    db::hints::manager& hints_manager_for(db::write_type type);
+    inet_address_vector_replica_set get_live_endpoints(keyspace& ks, const dht::token& token) const;
+    static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
+    inet_address_vector_replica_set get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const;
+
+    void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
+public:
+    storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
+    ~storage_proxy();
+
+    void set_cdc_service(cdc::cdc_service* cdc) {
+        _cdc = cdc;
+    }
+    cdc::cdc_service* get_cdc_service() const {
+        return _cdc;
+    }
+
+    view_update_handlers_list& get_view_update_handlers_list() {
+        return *_view_update_handlers_list;
+    }
+
+// XXX continue here
+    response_id_type get_next_response_id() {
+        auto next = _next_response_id++;
+        if (next == 0) { // 0 is reserved for unique_response_handler
+            next = _next_response_id++;
+        }
+        return next;
+    }
+    void init_messaging_service(shared_ptr<migration_manager>);
+    future<> uninit_messaging_service();
+
+// XXX continue here
 public:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
@@ -685,9 +718,9 @@ private:
     // How many endpoints need to respond favourably for the protocol to progress to the next step.
     size_t _required_participants;
     // A deadline when the entire CAS operation timeout expires, derived from write_request_timeout_in_ms
-    storage_proxy::clock_type::time_point _timeout;
+    storage_proxy_base::clock_type::time_point _timeout;
     // A deadline when the CAS operation gives up due to contention, derived from cas_contention_timeout_in_ms
-    storage_proxy::clock_type::time_point _cas_timeout;
+    storage_proxy_base::clock_type::time_point _cas_timeout;
     // The key this request is working on.
     dht::decorated_key _key;
     // service permit from admission control
@@ -712,7 +745,7 @@ public:
         service_permit permit_arg,
         dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
         db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
-        storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg)
+        storage_proxy_base::clock_type::time_point timeout_arg, storage_proxy_base::clock_type::time_point cas_timeout_arg)
 
         : _proxy(proxy_arg)
         , _schema(std::move(schema_arg))

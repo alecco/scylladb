@@ -1326,7 +1326,7 @@ endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_v
     return replica_ids;
 }
 
-query::max_result_size storage_proxy::get_max_result_size(const query::partition_slice& slice) const {
+query::max_result_size storage_proxy_base::get_max_result_size(const query::partition_slice& slice) const {
     // Unpaged and reverse queries.
     if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.options.contains<query::partition_slice::option::reversed>()) {
         return _db.local().get_unlimited_query_max_result_size();
@@ -1335,11 +1335,11 @@ query::max_result_size storage_proxy::get_max_result_size(const query::partition
     }
 }
 
-bool storage_proxy::need_throttle_writes() const {
+bool storage_proxy_base::need_throttle_writes() const {
     return get_global_stats().background_write_bytes > _background_write_throttle_threahsold || get_global_stats().queued_write_bytes > 6*1024*1024;
 }
 
-void storage_proxy::unthrottle() {
+void storage_proxy_base::unthrottle() {
    while(!need_throttle_writes() && !_throttled_writes.empty()) {
        auto id = _throttled_writes.front();
        _throttled_writes.pop_front();
@@ -1786,6 +1786,27 @@ inline std::ostream& operator<<(std::ostream& os, const hint_wrapper& h) {
 }
 
 using namespace std::literals::chrono_literals;
+
+storage_proxy::~storage_proxy_base() {}
+storage_proxy::storage_proxy_base(distributed<database>& db, storage_proxy_base::config cfg,
+        scheduling_group_key stats_key, const locator::shared_token_metadata& stm)
+    : _db(db)
+    , _shared_token_metadata(stm)
+    , _read_smp_service_group(cfg.read_smp_service_group)
+    , _write_smp_service_group(cfg.write_smp_service_group)
+    , _write_ack_smp_service_group(cfg.write_ack_smp_service_group)
+    , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
+    , _stats_key(stats_key)
+    , _background_write_throttle_threahsold(cfg.available_memory / 10)
+    , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate} {
+    namespace sm = seastar::metrics;
+    _metrics.add_group(storage_proxy_stats::COORDINATOR_STATS_CATEGORY, {
+        sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
+                       sm::description("number of currently throttled write requests")),
+    });
+
+    slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
+}
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
