@@ -46,6 +46,7 @@
 namespace service {
 
 class storage_proxy;
+class storage_proxy_local;
 class query_state;
 class client_state;
 
@@ -64,6 +65,7 @@ class result_message;
 namespace cql3 {
 
 class query_processor;
+class query_processor_local;
 
 class metadata;
 seastar::shared_ptr<const metadata> make_empty_metadata();

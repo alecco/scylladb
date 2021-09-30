@@ -155,6 +155,12 @@ struct storage_proxy_coordinator_query_result {
 
 class cas_request;
 
+class storage_proxy_local : public seastar::async_sharded_service<storage_proxy> {
+public:
+    storage_proxy_local(distributed<database>& db);
+    ~storage_proxy_local();
+};
+
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
 public:
     enum class error : uint8_t {
