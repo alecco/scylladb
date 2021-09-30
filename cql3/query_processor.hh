@@ -108,20 +108,10 @@ class cql_config;
 class query_options;
 class cql_statement;
 
-class query_processor {
-public:
-    class migration_subscriber;
-    struct memory_config {
-        size_t prepared_statment_cache_size = 0;
-        size_t authorized_prepared_cache_size = 0;
-    };
-
-private:
-    std::unique_ptr<migration_subscriber> _migration_subscriber;
-    service::storage_proxy& _proxy;
+class query_processor_base {
+protected:
     database& _db;
-    service::migration_notifier& _mnotifier;
-    service::migration_manager& _mm;
+    service::storage_proxy_base& _proxy;
     const cql_config& _cql_config;
 
     struct stats {
@@ -146,19 +136,20 @@ private:
 public:
     static const sstring CQL_VERSION;
 
-    static prepared_cache_key_type compute_id(
-            std::string_view query_string,
-            std::string_view keyspace);
-
-    static prepared_cache_key_type compute_thrift_id(
-            const std::string_view& query_string,
-            const sstring& keyspace);
+    struct memory_config {
+        size_t prepared_statment_cache_size = 0;
+        size_t authorized_prepared_cache_size = 0;
+    };
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
+    query_processor_base(database& db, memory_config mcfg, cql_config& cql_cfg);
 
-    ~query_processor();
+    ~query_processor_base();
+
+    service::storage_proxy_base& proxy() {
+        return _proxy;
+    }
 
     database& db() {
         return _db;
@@ -168,50 +159,11 @@ public:
         return _cql_config;
     }
 
-    service::storage_proxy& proxy() {
-        return _proxy;
-    }
-
-    const service::migration_manager& get_migration_manager() const noexcept { return _mm; }
-    service::migration_manager& get_migration_manager() noexcept { return _mm; }
-
     cql_stats& get_cql_stats() {
         return _cql_stats;
     }
 
-    statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
-        if (user) {
-            auto vp = _authorized_prepared_cache.find(*user, key);
-            if (vp) {
-                try {
-                    return vp->get()->checked_weak_from_this();
-                } catch (seastar::checked_ptr_is_null_exception&) {
-                    // If the prepared statement got invalidated - remove the corresponding authorized_prepared_statements_cache entry as well.
-                    _authorized_prepared_cache.remove(*user, key);
-                }
-            }
-        }
-        return statements::prepared_statement::checked_weak_ptr();
-    }
-
-    statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
-        return _prepared_cache.find(key);
-    }
-
-    future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_prepared(
-            statements::prepared_statement::checked_weak_ptr statement,
-            cql3::prepared_cache_key_type cache_key,
-            service::query_state& query_state,
-            const query_options& options,
-            bool needs_authorization);
-
-    /// Execute a client statement that was not prepared.
-    future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_direct(
-            const std::string_view& query_string,
-            service::query_state& query_state,
-            query_options& options);
+public:
 
     // NOTICE: Internal queries should be used with care, as they are expected
     // to be used for local tables (e.g. from the `system` keyspace).
@@ -292,6 +244,83 @@ public:
             service::query_state& query_state,
             const std::initializer_list<data_value>& = { },
             bool cache = false);
+};
+
+class query_processor_local : public query_processor_base {
+private:
+    service::storage_proxy_local& _proxy;
+public:
+    // XXX fill in here
+    query_processor_local(service::storage_proxy_local& proxy, database& db,
+            query_processor_base::memory_config mcfg, cql_config& cql_cfg);
+    ~query_processor_local();
+};
+
+class query_processor : public query_processor_base {
+public:
+    class migration_subscriber;
+
+private:
+    std::unique_ptr<migration_subscriber> _migration_subscriber;
+    service::storage_proxy& _proxy;
+    service::migration_notifier& _mnotifier;
+    service::migration_manager& _mm;
+
+public:
+
+    static prepared_cache_key_type compute_id(
+            std::string_view query_string,
+            std::string_view keyspace);
+
+    static prepared_cache_key_type compute_thrift_id(
+            const std::string_view& query_string,
+            const sstring& keyspace);
+
+    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor_base::memory_config mcfg, cql_config& cql_cfg);
+
+    ~query_processor();
+
+    service::storage_proxy& proxy() {
+        return _proxy;
+    }
+
+    const service::migration_manager& get_migration_manager() const noexcept { return _mm; }
+    service::migration_manager& get_migration_manager() noexcept { return _mm; }
+
+    // XXX continue factoring out here vv
+    statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
+        if (user) {
+            auto vp = _authorized_prepared_cache.find(*user, key);
+            if (vp) {
+                try {
+                    return vp->get()->checked_weak_from_this();
+                } catch (seastar::checked_ptr_is_null_exception&) {
+                    // If the prepared statement got invalidated - remove the corresponding authorized_prepared_statements_cache entry as well.
+                    _authorized_prepared_cache.remove(*user, key);
+                }
+            }
+        }
+        return statements::prepared_statement::checked_weak_ptr();
+    }
+
+    statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
+        return _prepared_cache.find(key);
+    }
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_prepared(
+            statements::prepared_statement::checked_weak_ptr statement,
+            cql3::prepared_cache_key_type cache_key,
+            service::query_state& query_state,
+            const query_options& options,
+            bool needs_authorization);
+
+    /// Execute a client statement that was not prepared.
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_direct(
+            const std::string_view& query_string,
+            service::query_state& query_state,
+            query_options& options);
 
     future<::shared_ptr<untyped_result_set>> execute_with_params(
             statements::prepared_statement::checked_weak_ptr p,

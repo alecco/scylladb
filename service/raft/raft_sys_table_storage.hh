@@ -33,7 +33,7 @@
 
 namespace cql3 {
 
-class query_processor;
+class query_processor_local;
 
 namespace statements {
 
@@ -53,7 +53,7 @@ class raft_sys_table_storage : public raft::persistence {
     // Prepared statement instance used for construction of batch statements on
     // `store_log_entries` calls.
     shared_ptr<cql3::statements::modification_statement> _store_entry_stmt;
-    cql3::query_processor& _qp;
+    cql3::query_processor_local& _qp;
     service::query_state _dummy_query_state;
     // The future of the currently executing (or already finished) write operation.
     //
@@ -64,7 +64,7 @@ class raft_sys_table_storage : public raft::persistence {
     future<> _pending_op_fut;
 
 public:
-    explicit raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid);
+    explicit raft_sys_table_storage(cql3::query_processor_local& qp, raft::group_id gid);
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;

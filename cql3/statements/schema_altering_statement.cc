@@ -105,7 +105,7 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
 }
 
 future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+schema_altering_statement::execute(query_processor_base& qp, service::query_state& state, const query_options& options) const {
     bool internal = state.get_client_state().is_internal();
     if (internal) {
         auto replication_type = locator::replication_strategy_type::everywhere_topology;

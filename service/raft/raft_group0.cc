@@ -40,7 +40,7 @@ namespace service {
 raft_group0::raft_group0(raft_group_registry& raft_gr,
         netw::messaging_service& ms,
         gms::gossiper& gs,
-        cql3::query_processor& qp,
+        cql3::query_processor_local& qp,
         service::migration_manager& mm)
     : _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm)
 {

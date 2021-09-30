@@ -38,7 +38,7 @@
 
 namespace service {
 
-raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid)
+raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor_local& qp, raft::group_id gid)
     : _group_id(std::move(gid))
     , _qp(qp)
     , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())

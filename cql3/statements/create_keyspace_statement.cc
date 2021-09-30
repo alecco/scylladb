@@ -204,7 +204,7 @@ std::optional<sstring> check_restricted_replication_strategy(
 }
 
 future<::shared_ptr<messages::result_message>>
-create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+create_keyspace_statement::execute(query_processor_base& qp, service::query_state& state, const query_options& options) const {
     std::optional<sstring> warning = check_restricted_replication_strategy(qp.proxy(), keyspace(), *_attrs);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {

@@ -1787,6 +1787,12 @@ inline std::ostream& operator<<(std::ostream& os, const hint_wrapper& h) {
 
 using namespace std::literals::chrono_literals;
 
+storage_proxy_local::~storage_proxy_local() {}
+storage_proxy_local::storage_proxy_local(distributed<database>& db,
+        storage_proxy_base::config cfg, scheduling_group_key stats_key,
+        const locator::shared_token_metadata& stm) {
+}
+
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
         scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms)

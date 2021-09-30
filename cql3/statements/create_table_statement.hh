@@ -59,6 +59,7 @@
 
 namespace cql3 {
 
+class query_processor_base;
 class query_processor;
 class cf_prop_defs;
 
@@ -110,7 +111,7 @@ public:
     virtual future<> grant_permissions_to_creator(const service::client_state&) const override;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
+    execute(query_processor_base& qp, service::query_state& state, const query_options& options) const override;
 
     schema_ptr get_cf_meta_data(const database&) const;
 

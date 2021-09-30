@@ -291,7 +291,7 @@ static thread_local inheriting_concrete_execution_stage<
         const query_options&> select_stage{"cql3_select", select_statement_executor::get()};
 
 future<shared_ptr<cql_transport::messages::result_message>>
-select_statement::execute(query_processor& qp,
+select_statement::execute(query_processor_base& qp,
                              service::query_state& state,
                              const query_options& options) const
 {

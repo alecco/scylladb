@@ -50,7 +50,7 @@ future<> create_service_level_statement::check_access(service::storage_proxy& sp
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-create_service_level_statement::execute(query_processor& qp,
+create_service_level_statement::execute(query_processor_base& qp,
         service::query_state &state,
         const query_options &) const {
     qos::service_level_options slo = _slo.replace_defaults(qos::service_level_options{});

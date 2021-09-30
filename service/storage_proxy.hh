@@ -155,6 +155,28 @@ struct storage_proxy_coordinator_query_result {
 
 class cas_request;
 
+class storage_proxy_base {
+public:
+    struct config {
+        size_t available_memory;
+        smp_service_group read_smp_service_group = default_smp_service_group();
+        smp_service_group write_smp_service_group = default_smp_service_group();
+        // Write acknowledgments might not be received on the correct shard, and
+        // they need a separate smp_service_group to prevent an ABBA deadlock
+        // with writes.
+        smp_service_group write_ack_smp_service_group = default_smp_service_group();
+    };
+};
+
+class storage_proxy_local : public seastar::async_sharded_service<storage_proxy>,
+    public storage_proxy_base {
+public:
+    storage_proxy_local(distributed<database>& db, storage_proxy_base::config cfg,
+            scheduling_group_key stats_key, const locator::shared_token_metadata& stm);
+    ~storage_proxy_local();
+    future<> stop();
+};
+
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
 public:
     enum class error : uint8_t {
@@ -163,17 +185,10 @@ public:
         FAILURE,
     };
     using clock_type = lowres_clock;
-    struct config {
+    struct config : public storage_proxy_base::config {
         db::hints::host_filter hinted_handoff_enabled = {};
         db::hints::directory_initializer hints_directory_initializer;
-        size_t available_memory;
-        smp_service_group read_smp_service_group = default_smp_service_group();
-        smp_service_group write_smp_service_group = default_smp_service_group();
         smp_service_group hints_write_smp_service_group = default_smp_service_group();
-        // Write acknowledgments might not be received on the correct shard, and
-        // they need a separate smp_service_group to prevent an ABBA deadlock
-        // with writes.
-        smp_service_group write_ack_smp_service_group = default_smp_service_group();
     };
 private:
 

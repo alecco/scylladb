@@ -48,7 +48,7 @@ future<> detach_service_level_statement::check_access(service::storage_proxy& sp
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-detach_service_level_statement::execute(query_processor& qp,
+detach_service_level_statement::execute(query_processor_base& qp,
         service::query_state &state,
         const query_options &) const {
     return state.get_client_state().get_auth_service()->underlying_role_manager().remove_attribute(_role_name, "service_level").then([] {

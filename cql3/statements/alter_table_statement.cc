@@ -417,7 +417,7 @@ cql3::statements::alter_table_statement::prepare(database& db, cql_stats& stats)
 }
 
 future<::shared_ptr<messages::result_message>>
-alter_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+alter_table_statement::execute(query_processor_base& qp, service::query_state& state, const query_options& options) const {
     std::optional<sstring> warning = check_restricted_table_properties(qp.proxy(), keyspace(), column_family(), *_properties);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {

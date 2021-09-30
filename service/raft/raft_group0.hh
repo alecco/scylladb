@@ -23,7 +23,7 @@
 #include "service/raft/discovery.hh"
 #include "service/raft/messaging.hh"
 
-namespace cql3 { class query_processor; }
+namespace cql3 { class query_processor_local; }
 
 namespace gms { class gossiper; }
 
@@ -38,7 +38,7 @@ public:
     raft_group_registry& _raft_gr;
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
-    cql3::query_processor& _qp;
+    cql3::query_processor_local& _qp;
     service::migration_manager& _mm;
     // Status of leader discovery. Initially there is no group 0,
     // and the variant contains no state. During initial cluster
@@ -56,7 +56,7 @@ public:
     raft_group0(service::raft_group_registry& raft_gr,
         netw::messaging_service& ms,
         gms::gossiper& gs,
-        cql3::query_processor& qp,
+        cql3::query_processor_local& qp,
         migration_manager& mm);
 
     future<> abort() {

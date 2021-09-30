@@ -62,11 +62,11 @@ logging::logger log("query_processor");
 logging::logger prep_cache_log("prepared_statements_cache");
 logging::logger authorized_prepared_statements_cache_log("authorized_prepared_statements_cache");
 
-const sstring query_processor::CQL_VERSION = "3.3.1";
+const sstring query_processor_base::CQL_VERSION = "3.3.1";
 
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
-class query_processor::internal_state {
+class query_processor_base::internal_state {
     service::query_state _qs;
 public:
     internal_state() : _qs(service::client_state::for_internal_calls(), empty_service_permit()) {
@@ -85,12 +85,9 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
-        : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
-        , _proxy(proxy)
-        , _db(db)
-        , _mnotifier(mn)
-        , _mm(mm)
+query_processor_base::query_processor_base(database& db,
+        query_processor_base::memory_config mcfg, cql_config& cql_cfg)
+        : _db(db)
         , _cql_config(cql_cfg)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
@@ -98,6 +95,27 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                                               std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry)),
                                      std::chrono::milliseconds(_db.get_config().permissions_update_interval_in_ms()),
                                      mcfg.authorized_prepared_cache_size, authorized_prepared_statements_cache_log) {
+    // XXX metrics
+}
+
+query_processor_base::~query_processor_base() {
+}
+
+query_processor_local::query_processor_local(service::storage_proxy_local& proxy,
+        database& db, memory_config mcfg, cql_config& cql_cfg)
+        : query_processor_base(db, mcfg, cql_cfg)
+        , _proxy(proxy) {
+}
+
+query_processor_local::~query_processor_local() {
+}
+
+query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor_base::memory_config mcfg, cql_config& cql_cfg)
+        : query_processor_base(db, mcfg, cql_cfg)
+        , _migration_subscriber{std::make_unique<migration_subscriber>(this)}
+        , _proxy(proxy)
+        , _mnotifier(mn)
+        , _mm(mm) {
     namespace sm = seastar::metrics;
     namespace stm = statements;
     using clevel = db::consistency_level;
@@ -608,7 +626,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
 }
 
 std::unique_ptr<raw::parsed_statement>
-query_processor::parse_statement(const sstring_view& query) {
+query_processor_base::parse_statement(const sstring_view& query) {
     try {
         auto statement = util::do_with_parser(query,  std::mem_fn(&cql3_parser::CqlParser::query));
         if (!statement) {
@@ -658,7 +676,7 @@ query_options query_processor::make_internal_options(
     return query_options(cl, bound_values);
 }
 
-statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
+statements::prepared_statement::checked_weak_ptr query_processor_base::prepare_internal(const sstring& query_string) {
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db, _cql_stats);
@@ -797,7 +815,7 @@ query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state
 }
 
 future<::shared_ptr<untyped_result_set>>
-query_processor::execute_internal(
+query_processor_base::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
         const std::initializer_list<data_value>& values,
@@ -806,7 +824,7 @@ query_processor::execute_internal(
 }
 
 future<::shared_ptr<untyped_result_set>>
-query_processor::execute_internal(
+query_processor_base::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
         service::query_state& query_state,
@@ -955,7 +973,7 @@ bool query_processor::migration_subscriber::should_invalidate(
     return statement->depends_on_keyspace(ks_name) && (!cf_name || statement->depends_on_column_family(*cf_name));
 }
 
-future<> query_processor::query_internal(
+future<> query_processor_base::query_internal(
         const sstring& query_string,
         db::consistency_level cl,
         const std::initializer_list<data_value>& values,
@@ -964,7 +982,7 @@ future<> query_processor::query_internal(
     return for_each_cql_result(create_paged_state(query_string, cl, values, page_size), std::move(f));
 }
 
-future<> query_processor::query_internal(
+future<> query_processor_base::query_internal(
         const sstring& query_string,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
     return query_internal(query_string, db::consistency_level::ONE, {}, 1000, std::move(f));

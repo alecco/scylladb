@@ -51,6 +51,7 @@
 
 namespace cql3 {
 
+class query_processor_base;
 class query_processor;
 
 namespace statements {
@@ -90,7 +91,7 @@ protected:
     virtual future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const = 0;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
+    execute(query_processor_base& qp, service::query_state& state, const query_options& options) const override;
 };
 
 }

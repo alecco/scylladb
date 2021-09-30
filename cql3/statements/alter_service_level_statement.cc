@@ -50,7 +50,7 @@ future<> alter_service_level_statement::check_access(service::storage_proxy& sp,
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-alter_service_level_statement::execute(query_processor& qp,
+alter_service_level_statement::execute(query_processor_base& qp,
         service::query_state &state,
         const query_options &) const {
     qos::service_level& sl = state.get_service_level_controller().get_service_level(_service_level);

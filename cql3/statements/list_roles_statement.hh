@@ -51,6 +51,7 @@
 
 namespace cql3 {
 
+class query_processor_base;
 class query_processor;
 
 namespace statements {
@@ -69,7 +70,7 @@ public:
     virtual future<> check_access(service::storage_proxy& proxy, const service::client_state&) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(query_processor&, service::query_state&, const query_options&) const override;
+    execute(query_processor_base&, service::query_state&, const query_options&) const override;
 };
 
 }

@@ -46,6 +46,7 @@
 namespace service {
 
 class storage_proxy;
+class storage_proxy_local;
 class query_state;
 class client_state;
 
@@ -63,7 +64,7 @@ class result_message;
 
 namespace cql3 {
 
-class query_processor;
+class query_processor_base;
 
 class metadata;
 seastar::shared_ptr<const metadata> make_empty_metadata();
@@ -107,7 +108,7 @@ public:
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
-        execute(query_processor& qp, service::query_state& state, const query_options& options) const = 0;
+        execute(query_processor_base& qp, service::query_state& state, const query_options& options) const = 0;
 
     virtual bool depends_on_keyspace(const seastar::sstring& ks_name) const = 0;
 
