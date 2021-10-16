@@ -682,7 +682,16 @@ future<std::vector<mutation>> migration_manager::prepare_new_column_family_annou
 
         auto ksm = keyspace.metadata();
         return seastar::async([this, cfm, timestamp, ksm] {
+            // XXX  create here a mutation on this list
+            // insert extra record into different table with version (at caller)
             auto mutations = db::schema_tables::make_create_table_mutations(ksm, cfm, timestamp);
+            // XXX there's a single listener in CDC log, doesn't perform side effects
+            // does checks, throws, only side effects is adding mutations to the vector
+            // this would be a problem,
+            // except if in the future other listeners might do actual side effects
+            // (maybe listener API should be changed, it should be documented it doesn't have side effects)
+            // (not me!)
+            // (Kamil: wonder if these checks should be moved somewhere else)
             get_notifier().before_create_column_family(*cfm, mutations, timestamp);
             return mutations;
         }).then([this, ksm](std::vector<mutation> mutations) {

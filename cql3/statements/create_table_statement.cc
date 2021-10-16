@@ -118,6 +118,11 @@ future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::
                 co_await group0.read_barrier();
 
                 std::vector<mutation> m = co_await mm.prepare_new_column_family_announcement(std::move(schema));
+                // XXX m.append(new mutation)
+                // to get this mutation  ??? mutation_builder??
+                // XXX 2: store timestamp
+                // XXX 2: use canonical_mutation
+
                 // todo: add schema version into command, to apply
                 // only on condition the version is the same.
                 // qqq: what happens if there is a command in between?
