@@ -103,6 +103,8 @@ public:
 
     virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
 
+    future<mutation> create_schema_timeuuid(const schema_ptr& schema, cql3::query_processor& qp) const;
+
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
