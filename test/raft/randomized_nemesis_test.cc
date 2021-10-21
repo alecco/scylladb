@@ -1284,12 +1284,16 @@ public:
 
     // Starts a server on node `id`.
     // Assumes node with `id` exists (i.e. an earlier `new_node` call returned `id`) and that no server is running on node `id`.
-    future<> start_server(raft::server_id id) {
-        return with_gate(_gate, [this, id] () -> future<> {
+    future<> start_server(raft::server_id id, std::optional<raft::server::configuration> overwrite_cfg = std::nullopt) {
+        return with_gate(_gate, [this, id, overwrite_cfg = std::move(overwrite_cfg)] () -> future<> {
             auto& n = _routes.at(id);
             assert(n._persistence);
             assert(n._fd);
             assert(!n._server);
+
+            if (overwrite_cfg) {
+                n._cfg = std::move(*overwrite_cfg);
+            }
 
             lw_shared_ptr<raft_server<M>*> this_srv_addr = make_lw_shared<raft_server<M>*>(nullptr);
             auto srv = raft_server<M>::create(id, n._persistence, n._fd, n._cfg,
