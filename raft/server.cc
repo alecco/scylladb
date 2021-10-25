@@ -859,7 +859,7 @@ void server_impl::abort_snapshot_transfers() {
 }
 
 future<> server_impl::abort() {
-    logger.trace("abort() called");
+    logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
 
