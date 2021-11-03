@@ -2111,7 +2111,13 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             }}
         }, 200'000);
 
-        auto leader_id = co_await env.new_server(true);
+        auto seed = tests::random::get_int<int32_t>();
+        std::mt19937 random_engine{seed};
+        raft::server::configuration srv_cfg{
+            .enable_forwarding = std::bernoulli_distribution{0.5}(random_engine)
+        };
+
+        auto leader_id = co_await env.new_server(true, srv_cfg);
 
         // Wait for the server to elect itself as a leader.
         assert(co_await wait_for_leader<AppendReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
@@ -2120,7 +2126,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         size_t no_servers = 5;
         std::unordered_set<raft::server_id> servers{leader_id};
         for (size_t i = 1; i < no_servers; ++i) {
-            servers.insert(co_await env.new_server(false));
+            servers.insert(co_await env.new_server(false, srv_cfg));
         }
 
         assert(std::holds_alternative<std::monostate>(
@@ -2130,7 +2136,6 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         auto threads = operation::make_thread_set(servers.size() + 1);
         auto nemesis_thread = some(threads);
 
-        auto seed = tests::random::get_int<int32_t>();
 
         // TODO: make it dynamic based on the current configuration
         std::unordered_set<raft::server_id>& known = servers;
