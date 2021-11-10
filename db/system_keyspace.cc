@@ -262,6 +262,26 @@ schema_ptr raft_snapshots() {
     return schema;
 }
 
+
+// XXX
+schema_ptr raft_schema() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, RAFT_SCHEMA);
+        return schema_builder(NAME, RAFT_SCHEMA, std::optional(id))
+            .with_column("schema_id", timeuuid_type, column_kind::partition_key)
+            .with_column("id", uuid_type, column_kind::clustering_key)
+            .with_column("schema", bytes_type) // serialized schema
+
+            .set_comment("Persisted schema changes")
+            .with_version(generate_schema_version(id))     // XXX redundant?
+            // XXX ? .with_version(generate_schema_version(id))
+            .set_wait_for_sync_to_commitlog(true) // XXX ?
+            .with_null_sharder()   // XXX only on shard 0?
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr built_indexes() {
     static thread_local auto built_indexes = [] {
         schema_builder builder(make_shared_schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
@@ -1980,6 +2000,7 @@ std::vector<schema_ptr> all_tables(const db::config& cfg) {
     });
     if (cfg.check_experimental(db::experimental_features_t::RAFT)) {
         r.insert(r.end(), {raft(), raft_snapshots()});
+        r.insert(r.end(), {raft(), raft_schema()});
     }
     // legacy schema
     r.insert(r.end(), {
