@@ -62,6 +62,7 @@
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "db/config.hh"
+#include "db/system_keyspace.hh"
 
 namespace cql3 {
 
@@ -105,6 +106,13 @@ std::vector<column_definition> create_table_statement::get_columns() const
     return column_defs;
 }
 
+future<mutation> create_table_statement::create_schema_timeuuid() const {
+    // XXX system keyspace
+    // "SELECT snapshot_id FROM system.{} WHERE group_id = ? LIMIT 1", db::system_keyspace::RAFT
+    static const auto load_timeuuid_cql = format("SELECT schema_timeuuid FROM system.{} WHERE group_id = ? LIMIT 1", db::system_keyspace::RAFT_SCHEMA);
+
+}
+
 future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(query_processor& qp) const {
     auto schema = get_cf_meta_data(qp.db());
     auto& mm = qp.get_migration_manager();
@@ -118,7 +126,10 @@ future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::
                 co_await group0.read_barrier();
 
                 std::vector<mutation> m = co_await mm.prepare_new_column_family_announcement(std::move(schema));
-                // XXX m.append(new mutation)
+                auto m_schema_uuid = create_schema_timeuuid();
+
+                m.push_back(m_schema_uuid.get());  // XXX get?
+
                 // to get this mutation  ??? mutation_builder??
                 // XXX 2: store timestamp
                 // XXX 2: use canonical_mutation
