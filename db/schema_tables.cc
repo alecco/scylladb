@@ -332,6 +332,8 @@ schema_ptr scylla_tables(schema_features features) {
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("version", uuid_type)
+            .with_column("current_timeuuid", timeuuid_type, column_kind::static_column)
+            .with_column("previous_timeuuid", list_type_impl::get_instance(timeuuid_type, false), column_kind::static_column)
             .set_gc_grace_seconds(schema_gc_grace);
         // 0 - false, false
         // 1 - true, false
