@@ -1,0 +1,26 @@
+CREATE TABLE t1 (pk INT PRIMARY KEY, c TEXT);
+{
+	"message" : "exceptions::invalid_request_exception (Invalid restrictions on clustering columns since the UPDATE statement modifies only static columns)",
+	"status" : "error"
+}
+-- SELECT * FROM system_schema.scylla_tables;
+CREATE TABLE t2 (pk INT PRIMARY KEY, c TEXT);
+{
+	"message" : "exceptions::invalid_request_exception (Invalid restrictions on clustering columns since the UPDATE statement modifies only static columns)",
+	"status" : "error"
+}
+DROP TABLE t1;
+{
+	"message" : "exceptions::invalid_request_exception (unconfigured table t1)",
+	"status" : "error"
+}
+-- SELECT * FROM system_schema.scylla_tables;
+CREATE TABLE t1 (pk INT PRIMARY KEY, c INT);
+{
+	"message" : "exceptions::invalid_request_exception (Invalid restrictions on clustering columns since the UPDATE statement modifies only static columns)",
+	"status" : "error"
+}
+SELECT * FROM system_schema.scylla_tables;
+{
+	"rows" : null
+}

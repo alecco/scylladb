@@ -47,6 +47,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/adjacent_find.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
 
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
@@ -110,19 +111,17 @@ std::vector<column_definition> create_table_statement::get_columns() const
     return column_defs;
 }
 
-mutation make_scylla_tables_mutation_timeuuid(schema_ptr table, api::timestamp_type& timestamp) {
+mutation make_scylla_tables_mutation_timeuuid(schema_ptr table, api::timestamp_type& timestamp,
+        utils::UUID& tuuid) {
 
-    auto timestamp_us = std::chrono::microseconds{timestamp};
-    utils::UUID tuuid = utils::UUID_gen::get_random_time_UUID_from_micros(timestamp_us);
     auto dv_ts = data_value{tuuid}.serialize_nonnull();
 
-    schema_ptr s = db::schema_tables::tables();
+    schema_ptr s = db::schema_tables::scylla_tables();
     auto pkey = partition_key::from_singular(*s, "system");
     mutation m(db::schema_tables::scylla_tables(), pkey);
 
-    // current (latest)
     auto& column_def_cur = *s->get_column_definition("current_timeuuid");
-    m.set_static_cell(column_def_cur, atomic_cell::make_live(*timeuuid_type, timestamp, dv_ts));
+    m.set_static_cell(column_def_cur, atomic_cell::make_live(*column_def_cur.type, timestamp, dv_ts));
 
     // list of previous
     collection_mutation_description list_values;
@@ -142,40 +141,43 @@ mutation make_scylla_tables_mutation_timeuuid(schema_ptr table, api::timestamp_t
 //    select old, create new one incremental)
 //    if empty, we are creating first on Scylla history, take current timestamp
 
-future<mutation> create_table_statement::create_schema_timeuuid(const schema_ptr& schema, cql3::query_processor& qp) const {
-    static const auto load_timeuuid_cql = format("SELECT current_timeuuid FROM system.{}", db::system_keyspace::LOCAL);
-    ::shared_ptr<cql3::untyped_result_set> prev_timeuuid_rs = co_await qp.execute_internal(load_timeuuid_cql);
+future<mutation> create_table_statement::create_schema_timeuuid(const schema_ptr& schema, query_processor& qp) const {
+    using namespace std::chrono_literals;
 
-#if 0
-    if (prev_timeuuid_rs->empty() || !prev_timeuuid_rs->one().has("current_timeuuid")) {
-        co_return co_await make_ready_future<mutation>(); // XXX
+    api::timestamp_type timestamp = api::new_timestamp();
+    auto timestamp_us = std::chrono::microseconds{timestamp};
+    utils::UUID tuuid = utils::UUID_gen::get_random_time_UUID_from_micros(timestamp_us);
+
+    static const auto load_timeuuid_cql = format("SELECT current_timeuuid, previous_timeuuid "
+            "FROM system_schema.{} WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
+    ::shared_ptr<untyped_result_set> prev_timeuuid_rs = co_await qp.execute_internal(load_timeuuid_cql,
+            {schema->ks_name()});
+
+fmt::print("\n\nXXX 1 {}.{}   prev timeuuid? {}, has current_timeuuid? {}\n\n", schema->ks_name(), schema->cf_name(), prev_timeuuid_rs->empty()? "empty" : "row", !prev_timeuuid_rs->empty()? prev_timeuuid_rs->one().has("current_timeuuid") : false); // XXX
+        // XXX check ours is higher than prev
+    if (!prev_timeuuid_rs->empty() && prev_timeuuid_rs->one().has("current_timeuuid")) {
+fmt::print("\nXXX 2c\n\n"); // XXX
+        // There should be only one row since timeuuid columns are static
+        const auto& timeuuid_row = prev_timeuuid_rs->one();
+        utils::UUID prev_timeuuid = timeuuid_row.get_as<utils::UUID>("current_timeuuid");
+        if (timestamp <= prev_timeuuid.timestamp()) {
+            mylogger.warn("schema mutated within same microsecond {}.{} {}", schema->ks_name(),
+                    schema->cf_name(), timestamp);
+            timestamp += 1;
+        }
+fmt::print("\nXXX 3 {} > {} ? {}\n", (int64_t) timestamp, prev_timeuuid.timestamp(), timestamp > prev_timeuuid.timestamp()); // XXX
     }
-    // There should be only one row since timeuuid columns are static
-    const auto& timeuuid_row = prev_timeuuid_rs->one();
-    utils::UUID current_timeuuid = timeuuid_row.get_as<utils::UUID>("current_timeuuid");
 
-    // XXX compare timeuuids, create new incremental
-
-    // utils::UUID_gen::micros_timestamp(ballot));
-    // or
-    // utils::UUID_gen::micros_timestamp(value_cast<utils::UUID>(result[0][3]));
-    auto x = utils::UUID_gen::micros_timestamp(current_timeuuid); // XXX generated
-#endif
-
-    // XXX auto key = partition_key::from_exploded(*schema, {to_bytes("system")});
-
-    // XXX need proper unique timestamp, compare with prev
-
-    api::timestamp_type timestamp = api::new_timestamp();   // XXX timestamp_type
-
-#if 0
     // Store new schema timestamp
-    static const auto store_timeuuid_cql = format("UPDATE system.{} SET current_timeuuid = ?", db::system_keyspace::LOCAL);
-    ::shared_ptr<cql3::untyped_result_set> timeuuid_rs = co_await qp.execute_internal(store_timeuuid_cql, {timestamp});
+    static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
+            "SET current_timeuuid = ? WHERE keyspace_name = ? AND table_name = ?",
+            db::schema_tables::SCYLLA_TABLES);
+    ::shared_ptr<untyped_result_set> store_timeuuid_rs = co_await qp.execute_internal(store_timeuuid_cql,
+            {tuuid, schema->ks_name(), schema->cf_name()});
+fmt::print("\n\nXXX 4 {}.{}   store timeuuid? {}\n\n", schema->ks_name(), schema->cf_name(), store_timeuuid_rs->empty()? "empty" : "row"); // XXX
     // XXX check it was successful
-#endif
 
-    co_return make_scylla_tables_mutation_timeuuid(schema, timestamp);
+    co_return make_scylla_tables_mutation_timeuuid(schema, timestamp, tuuid);
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(query_processor& qp) const {
@@ -190,15 +192,11 @@ future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::
 
                 co_await group0.read_barrier();
 
-                // XXX before because it needs schema
-                auto m_schema_uuid = create_schema_timeuuid(schema, qp);
+                // XXX before because it needs schema and it's moved
+                auto m_schema_uuid = co_await create_schema_timeuuid(schema, qp);
 
                 std::vector<mutation> m = co_await mm.prepare_new_column_family_announcement(std::move(schema));
-                m.push_back(m_schema_uuid.get());
-
-                // to get this mutation  ??? mutation_builder??
-                // XXX 2: store timestamp
-                // XXX 2: use canonical_mutation
+                m.push_back(m_schema_uuid);
 
                 // todo: add schema version into command, to apply
                 // only on condition the version is the same.
