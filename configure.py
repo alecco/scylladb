@@ -561,6 +561,7 @@ raft_tests = set([
     'test/raft/fsm_test',
     'test/raft/etcd_test',
     'test/raft/raft_sys_table_storage_test',
+    'test/raft/schema_test',
     'test/raft/raft_address_map_test',
     'test/raft/discovery_test',
 ])
@@ -1279,6 +1280,7 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/raft/helpers.cc',
                                      'test/lib/log.cc',
                                      'service/raft/discovery.cc'] + scylla_raft_dependencies
+deps['test/raft/schema_test'] = ['test/raft/schema_test.cc'] + scylla_core + scylla_tests_generic_dependencies
 
 deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
 
