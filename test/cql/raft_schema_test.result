@@ -1,0 +1,19 @@
+CREATE TABLE t1 (pk INT PRIMARY KEY, c TEXT);
+{
+	"status" : "ok"
+}
+ALTER TABLE t1 ADD c2 TEXT;
+{
+	"status" : "ok"
+}
+SELECT * FROM system_schema.scylla_tables;
+{
+	"rows" : 
+	[
+		{
+			"current_timeuuid" : "\"065663b2-4a05-11ec-e17e-3f04c7225a68\"",
+			"keyspace_name" : "\"ks\"",
+			"table_name" : "\"t1\""
+		}
+	]
+}
