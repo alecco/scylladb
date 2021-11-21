@@ -222,6 +222,8 @@ def run_scylla_cmd(pid, dir):
         # and other modules dependent on it: e.g. service levels
         '--authenticator', 'PasswordAuthenticator',
         '--strict-allow-filtering', 'true',
+        '--experimental-features', 'raft',
+        '--logger-log-level', 'raft=trace',
         ], {})
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
