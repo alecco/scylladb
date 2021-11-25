@@ -4,7 +4,9 @@ import sys
 import os
 import shutil
 
-import run   # run.py in this directory
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from pylib import run   # run.py in this directory
 
 def find_cassandra():
     # By default, we assume 'cassandra' is in the user's path. A specific
