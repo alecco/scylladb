@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
+import os
 import sys
 
-# Use the run.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
-import run
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from pylib import run
 
 print('Scylla is: ' + run.scylla + '.')
 

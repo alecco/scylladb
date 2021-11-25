@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
 import sys
+import os
 
-import run   # run.py in this directory
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from pylib import run   # run.py in this directory
 
 print('Scylla is: ' + run.scylla + '.')
 
