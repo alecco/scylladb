@@ -1,3 +1,0 @@
-CREATE TABLE t1 (pk INT PRIMARY KEY, c TEXT);
-CREATE TABLE t2 (pk INT PRIMARY KEY, c TEXT);
-SELECT * FROM system_schema.scylla_tables;
