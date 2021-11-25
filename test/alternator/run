@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # Use the run.py library from ../cql-pytest:
 import sys
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
-import run
-
 import os
+
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from pylib import run
+
 import requests
 import time
 import cassandra.cluster
