@@ -62,10 +62,14 @@ SEASTAR_TEST_CASE(test_create_table_updates_timestampuuid) {
             auto val_timeuuid = timeuuid_type->deserialize(*row[0]);
             BOOST_REQUIRE(!val_timeuuid.is_null());
 
+//            BOOST_REQUIRE(row[1].has_value());
 // XXX check timeuuid list also
-            auto val_listtimeuuid = timeuuid_list_type->deserialize(*row[0]);
-fmt::print("\n\n\n timeuuid list is not null? {}\n\n\n", !val_listtimeuuid.is_null());
-            BOOST_REQUIRE(!val_listtimeuuid.is_null());
+fmt::print("\n\n\n timeuuid list has value? {}\n\n\n", row[1].has_value());
+//             auto val_listtimeuuid = timeuuid_list_type->deserialize(*row[1]);
+// fmt::print("\n\n\n timeuuid list is null? {}\n\n\n", val_listtimeuuid.is_null());
+// auto& column_info_v = rows->rs().result_set().get_metadata().get_names();
+// fmt::print("\n\n\n result column names size {}\n\n\n", column_info_v.size());
+//             BOOST_REQUIRE(!val_listtimeuuid.is_null());
 
             co_return value_cast<utils::UUID>(val_timeuuid);
         };
