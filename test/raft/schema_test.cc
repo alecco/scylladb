@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_create_table_updates_timestampuuid) {
 
 //            BOOST_REQUIRE(row[1].has_value());
 // XXX check timeuuid list also
-fmt::print("\n\n\n timeuuid list has value? {}\n\n\n", row[1].has_value());
+fmt::print("\n TTT timeuuid list has value? {}\n", row[1].has_value());
 //             auto val_listtimeuuid = timeuuid_list_type->deserialize(*row[1]);
 // fmt::print("\n\n\n timeuuid list is null? {}\n\n\n", val_listtimeuuid.is_null());
 // auto& column_info_v = rows->rs().result_set().get_metadata().get_names();
@@ -76,7 +76,7 @@ fmt::print("\n\n\n timeuuid list has value? {}\n\n\n", row[1].has_value());
 
         utils::UUID timeuuid_1 = co_await get_timeuuid("t1");
         utils::UUID timeuuid_2 = co_await get_timeuuid("t2");
-fmt::print("\n\n\n{}\n{}\n\n\n", timeuuid_1.timestamp(), timeuuid_2.timestamp());
+fmt::print("\n TTT timestamps:\n1: {}\n2: {}\n", timeuuid_1.timestamp(), timeuuid_2.timestamp());
         BOOST_REQUIRE(timeuuid_1.timestamp() < timeuuid_2.timestamp());
 
     }, raft_cql_test_config());

@@ -41,6 +41,7 @@
 
 
 #include <inttypes.h>
+#include <iterator>
 #include <regex>
 #include <chrono>
 
@@ -148,16 +149,8 @@ future<mutation> create_table_statement::create_schema_timeuuid(const schema_ptr
     ::shared_ptr<untyped_result_set> prev_timeuuid_rs = co_await qp.execute_internal(load_timeuuid_cql,
             {"system"});
 
-fmt::print("\n\n\n\n\n YYY 1 \n\n");
-fmt::print("\n YYY 2 \n");
-    std::stringstream prev_list_ss;
-    prev_list_ss << "[";
-fmt::print("\n YYY 3 {}\n", !prev_timeuuid_rs->empty());
-if (!prev_timeuuid_rs->empty()) {
-fmt::print("\n YYY 4 \n");
-    const auto& row = prev_timeuuid_rs->one();
-fmt::print("\n YYY 5 {}\n");
-}
+fmt::print("\n\n XXX 1 {}\n\n", tuuid);
+    std::vector<utils::UUID> prev_timeuuids;
     if (!prev_timeuuid_rs->empty() && prev_timeuuid_rs->one().has("current_timeuuid")) {
         // There should be only one row since timeuuid columns are static
         const auto& row = prev_timeuuid_rs->one();
@@ -167,47 +160,48 @@ fmt::print("\n YYY 5 {}\n");
                     schema->cf_name(), timestamp);
             timestamp += 1;
         }
-        // auto timeuuid_list_type = list_type_impl::get_instance(timeuuid_type, false);
-fmt::print("\n\n\n\n\n XXX row columns \n");
-#if 0
-for (auto& c: row.get_columns()) {
-fmt::print("{}", c->name->to_string());
-}
-fmt::print("\n\n\n\n\n XXX has(previous_timeuuid) {} \n\n\n\n",
-        row.has("previous_timeuuid")
-        );
-#endif
-// XXX row is untyped_result_set
-// XXX check if null
-        // auto prev_timeuuid_list = row.get_as<timeuuid_list_type>("previous_timeuuid");
-        // auto val_listtimeuuid = timeuuid_list_type->deserialize(*row[1]);
-        // for (auto& pt: 
-        // prev_list_ss << "', '";
 
+        if (row.has("previous_timeuuid")) {
+            prev_timeuuids = row.get_list<utils::UUID>("previous_timeuuid");
+fmt::print("\n XXX prev timeuuid {} ----------------------------\n", prev_timeuuids);
+        }
     }
-fmt::print("\n YYY 6 \n");
 
     // Store new schema timestamp
-#if 0
+#if 1
     static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
             "SET current_timeuuid = ?, previous_timeuuid = ? "
             "WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
 #else
+# if 1
+    static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
+            "SET current_timeuuid = ?, previous_timeuuid = [e201c3c4-4ea2-11ec-177a-d191913fa636, e201c3c4-4ea2-11ec-177a-d191913fa636] "
+            "WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
+# else
     static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
             "SET current_timeuuid = ?, previous_timeuuid = [] "
             "WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
+# endif
 #endif
     mylogger.trace("Updating schema timeuuid to {}", timestamp);
+
+    std::ostringstream prev_list_ss;  // XXX Should this be moved closer to the CQL?
+    prev_list_ss << "[";
+#if 0
+    for (auto& pt: prev_timeuuids) { 
+        prev_list_ss << pt << "', '";
+    }
+#else
+    // std::copy(prev_timeuuids.begin(), prev_timeuuids.end(), std::ostream_iterator<utils::UUID>(prev_list_ss, ", "));
+#endif
 prev_list_ss << "]";
-fmt::print("\n YYY 7 prev list {}\n", prev_list_ss.str());
-fmt::print("\n YYY 8 store {}\n", store_timeuuid_cql);
+fmt::print("\n YYY 7 prev list {} -----------------------------\n", prev_list_ss.str());
+// fmt::print("\n YYY 8 store {}\n", store_timeuuid_cql);
     // XXX: should we protect this from exceptions and check result?
     ::shared_ptr<untyped_result_set> store_timeuuid_rs = co_await qp.execute_internal(store_timeuuid_cql,
             {tuuid,
-#if 0
-            prev_list_ss.str(),
-#endif
-            "system"});
+            "NULL", // XXX prev_list_ss.str(),
+            "'system'"});
 fmt::print("\n YYY 8 \n");
 
     co_return make_scylla_tables_mutation_timeuuid(schema, timestamp, tuuid);
