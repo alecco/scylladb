@@ -76,7 +76,8 @@ fmt::print("\n TTT timeuuid list has value? {}\n", row[1].has_value());
 
         utils::UUID timeuuid_1 = co_await get_timeuuid("t1");
         utils::UUID timeuuid_2 = co_await get_timeuuid("t2");
-fmt::print("\n TTT timestamps:\n1: {}\n2: {}\n", timeuuid_1.timestamp(), timeuuid_2.timestamp());
+        utils::UUID timeuuid_3 = co_await get_timeuuid("t3");
+fmt::print("\n TTT timestamps:\n1: {}\n2: {}\n3: {}\n", timeuuid_1.timestamp(), timeuuid_2.timestamp(), timeuuid_3.timestamp());
         BOOST_REQUIRE(timeuuid_1.timestamp() < timeuuid_2.timestamp());
 
     }, raft_cql_test_config());

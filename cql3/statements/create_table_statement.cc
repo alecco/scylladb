@@ -142,69 +142,69 @@ future<mutation> create_table_statement::create_schema_timeuuid(const schema_ptr
 
     api::timestamp_type timestamp = api::new_timestamp();
     auto timestamp_us = std::chrono::microseconds{timestamp};
-    utils::UUID tuuid = utils::UUID_gen::get_random_time_UUID_from_micros(timestamp_us);
+    utils::UUID new_tuuid = utils::UUID_gen::get_random_time_UUID_from_micros(timestamp_us);
 
     static const auto load_timeuuid_cql = format("SELECT current_timeuuid, previous_timeuuid "
             "FROM system_schema.{} WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
     ::shared_ptr<untyped_result_set> prev_timeuuid_rs = co_await qp.execute_internal(load_timeuuid_cql,
             {"system"});
 
-fmt::print("\n\n XXX 1 {}\n\n", tuuid);
-    std::vector<utils::UUID> prev_timeuuids;
+fmt::print("\n\n XXX 1 {}\n\n", new_tuuid);
+    utils::UUID cur_tuuid;
+list_type_impl::native_type arg_types;
+// std::vector<timeuuid_native_type> vt;
     if (!prev_timeuuid_rs->empty() && prev_timeuuid_rs->one().has("current_timeuuid")) {
         // There should be only one row since timeuuid columns are static
         const auto& row = prev_timeuuid_rs->one();
-        utils::UUID prev_timeuuid = row.get_as<utils::UUID>("current_timeuuid");
-        if (timestamp <= prev_timeuuid.timestamp()) {
+        cur_tuuid = row.get_as<utils::UUID>("current_timeuuid");
+        if (timestamp <= cur_tuuid.timestamp()) {
             mylogger.info("schema mutated within same microsecond {}.{} {}", schema->ks_name(),
                     schema->cf_name(), timestamp);
             timestamp += 1;
         }
 
+fmt::print("\n XXX prev timeuuid list? {} ----------------------------\n", row.has("previous_timeuuid"));
         if (row.has("previous_timeuuid")) {
-            prev_timeuuids = row.get_list<utils::UUID>("previous_timeuuid");
-fmt::print("\n XXX prev timeuuid {} ----------------------------\n", prev_timeuuids);
+            auto prev_tuuids = row.get_list<timeuuid_native_type>("previous_timeuuid");
+fmt::print("\n XXX prev timeuuids... \n");
+            for (const auto& tu: prev_tuuids) {
+fmt::print("  {}\n", tu.uuid);
+// XXX                 arg_types.emplace_back(data_value{tu}.serialize_nonnull());
+                // XXX should this be timeuuid
+                arg_types.emplace_back(tu);
+            }
+// fmt::print("\n XXX prev timeuuid {} ----------------------------\n", prev_tuuids);
         }
     }
 
+//     prev_tuuids.push_back(cur_tuuid);
+    arg_types.emplace_back(new_tuuid); // XXX
+auto timeuuid_list_type = list_type_impl::get_instance(timeuuid_type, false);
+    // auto x = make_list_value(timeuuid_list_type, list_type_impl::native_type(prev_tuuids));
+    // auto x = make_list_value(timeuuid_list_type, {cur_tuuid});
+auto x = make_list_value(timeuuid_list_type, std::move(arg_types));
+// auto x = make_list_value(timeuuid_list_type, std::move(vt));
+
     // Store new schema timestamp
-#if 1
     static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
             "SET current_timeuuid = ?, previous_timeuuid = ? "
             "WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
-#else
-# if 1
-    static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
-            "SET current_timeuuid = ?, previous_timeuuid = [e201c3c4-4ea2-11ec-177a-d191913fa636, e201c3c4-4ea2-11ec-177a-d191913fa636] "
-            "WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
-# else
-    static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
-            "SET current_timeuuid = ?, previous_timeuuid = [] "
-            "WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
-# endif
-#endif
     mylogger.trace("Updating schema timeuuid to {}", timestamp);
 
-    std::ostringstream prev_list_ss;  // XXX Should this be moved closer to the CQL?
-    prev_list_ss << "[";
-#if 0
-    for (auto& pt: prev_timeuuids) { 
-        prev_list_ss << pt << "', '";
-    }
-#else
-    // std::copy(prev_timeuuids.begin(), prev_timeuuids.end(), std::ostream_iterator<utils::UUID>(prev_list_ss, ", "));
-#endif
-prev_list_ss << "]";
-fmt::print("\n YYY 7 prev list {} -----------------------------\n", prev_list_ss.str());
-// fmt::print("\n YYY 8 store {}\n", store_timeuuid_cql);
+// XXX buil list of UUIDs
+
     // XXX: should we protect this from exceptions and check result?
     ::shared_ptr<untyped_result_set> store_timeuuid_rs = co_await qp.execute_internal(store_timeuuid_cql,
-            {tuuid,
-            "NULL", // XXX prev_list_ss.str(),
-            "'system'"});
+            {new_tuuid,
+#if 0
+            data_value::make_null(timeuuid_list_type),
+#else
+            x,
+#endif
+            "system"});
 fmt::print("\n YYY 8 \n");
 
-    co_return make_scylla_tables_mutation_timeuuid(schema, timestamp, tuuid);
+    co_return make_scylla_tables_mutation_timeuuid(schema, timestamp, new_tuuid);
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(query_processor& qp) const {
