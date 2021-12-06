@@ -45,6 +45,7 @@
 #include "schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/raft/schema_raft_state_machine.hh"
 
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"
@@ -66,6 +67,8 @@
 #include "serializer_impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/uuid.dist.impl.hh"
+#include "idl/schema_raft_state_machine.dist.hh"
+#include "idl/schema_raft_state_machine.dist.impl.hh"
 
 
 namespace service {
@@ -928,22 +931,25 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
-future<> migration_manager::announce_with_raft(std::vector<mutation> schema) {
+future<utils::UUID> migration_manager::announce_with_raft(std::vector<mutation> schema, utils::UUID observed_schema_state_id) {
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-    auto func = [&adjusted_schema] (migration_manager& mm) -> future<> {
-        raft::command cmd;
-        ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
-        // todo: add schema version into command, to apply
-        // only on condition the version is the same.
-        // qqq: what happens if there is a command in between?
-        // there is a new schema version, apply skipped, but
-        // we don't get a proper error.
-        co_return co_await mm._raft_gr.group0().add_entry(cmd, raft::wait_type::applied);
-        // TODO: return "retry" error if apply is a no-op - check
-        // new schema version
+
+    auto new_schema_state_id = generate_schema_state_id(observed_schema_state_id);
+
+    schema_raft_command schema_cmd {
+        .mutations{adjusted_schema.begin(), adjusted_schema.end()},
+        .prev_state_id{observed_schema_state_id},
+        .new_state_id{new_schema_state_id},
+        .creator_addr{utils::fb_utilities::get_broadcast_address()},
     };
-    co_return co_await container().invoke_on(0, func);
+    raft::command cmd;
+    ser::serialize(cmd, schema_cmd);
+    co_await container().invoke_on(0, [cmd = std::move(cmd)] (migration_manager& mm) {
+        return mm._raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
+    });
+
+    co_return new_schema_state_id;
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema) {
@@ -967,15 +973,27 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
 }
 
 // Returns a future on the local application of the schema
-future<> migration_manager::announce(std::vector<mutation> schema) {
+future<> migration_manager::announce(cql3::query_processor& qp, std::vector<mutation> schema, utils::UUID observed_schema_state_id) {
     if (_raft_gr.is_enabled()) {
-        return announce_with_raft(std::move(schema));
+
+        auto new_schema_state_id = co_await announce_with_raft(std::move(schema), observed_schema_state_id);
+
+        if (!(co_await was_schema_change_applied(qp, new_schema_state_id))) {
+            // TODO: use different error type?
+            // TODO: automatically retry?
+            throw std::runtime_error("Failed to apply schema change due to concurrent modification");
+        }
+    } else {
+        co_await announce_without_raft(std::move(schema));
     }
-    return announce_without_raft(std::move(schema));
 }
 
 future<> migration_manager::announce_unconditionally(std::vector<mutation> schema) {
-    return announce(std::move(schema));
+    if (_raft_gr.is_enabled()) {
+        co_await announce_with_raft(std::move(schema), utils::UUID{});
+    } else {
+        co_await announce_without_raft(std::move(schema));
+    }
 }
 
 future<> migration_manager::schema_read_barrier() {

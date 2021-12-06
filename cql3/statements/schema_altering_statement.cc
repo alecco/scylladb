@@ -105,10 +105,14 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
 
     co_await mm.schema_read_barrier();
 
+    // Note: we must fetch the schema ID before we read the schema state.
+    auto schema_state_id = co_await mm.get_schema_state_id(qp);
+
+    // This uses the current schema state for validation and creating the mutations.
     auto [ret, m] = co_await prepare_schema_mutations(qp);
 
     if (!m.empty()) {
-        co_await mm.announce(std::move(m));
+        co_await mm.announce(qp, std::move(m), schema_state_id);
     }
 
     ce = std::move(ret);

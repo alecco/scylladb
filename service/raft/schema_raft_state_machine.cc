@@ -27,11 +27,13 @@
 #include "frozen_schema.hh"
 #include "serialization_visitors.hh"
 #include "serializer.hh"
-#include "idl/frozen_schema.dist.hh"
-#include "idl/uuid.dist.hh"
 #include "serializer_impl.hh"
-#include "idl/frozen_schema.dist.impl.hh"
+#include "idl/uuid.dist.hh"
 #include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/frozen_schema.dist.impl.hh"
+#include "idl/schema_raft_state_machine.dist.hh"
+#include "idl/schema_raft_state_machine.dist.impl.hh"
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/query_processor.hh"
@@ -40,6 +42,15 @@
 namespace service {
 
 static logging::logger slogger("schema_raft_sm");
+
+static future<> update_schema_state_id(cql3::query_processor& qp, utils::UUID new_state_id) {
+    // SCHEMA_RAFT_HISTORY table exists since raft feature is enabled (or `apply` wouldn't be called)
+    co_await qp.execute_internal(
+        format(
+            "INSERT INTO system.{} (key, schema_id) VALUES ('history', ?)",
+            db::system_keyspace::v3::SCHEMA_RAFT_HISTORY),
+        {new_state_id});
+}
 
 future<utils::UUID> migration_manager::get_schema_state_id(cql3::query_processor& qp) {
     if (!_raft_gr.is_enabled()) {
@@ -86,11 +97,28 @@ future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> comman
     slogger.trace("apply() is called");
     for (auto&& c : command) {
         auto is = ser::as_input_stream(c);
-        std::vector<canonical_mutation> mutations =
-                            ser::deserialize(is, boost::type<std::vector<canonical_mutation>>());
+        auto cmd = ser::deserialize(is, boost::type<schema_raft_command>{});
 
-        slogger.trace("merging schema mutations");
-        co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(gms::inet_address{}), std::move(mutations));
+        slogger.trace("schema raft cmd prev state ID {} new state ID {}", cmd.prev_state_id, cmd.new_state_id);
+
+        auto schema_state_id = co_await _mm.get_schema_state_id(_qp);
+        if (cmd.prev_state_id != utils::UUID{} && cmd.prev_state_id != schema_state_id) {
+            // This command used obsolete state. Make it a no-op.
+            slogger.trace("schema raft cmd prev state id {} different than current state id {}", cmd.prev_state_id, schema_state_id);
+            co_return;
+        } else if (cmd.prev_state_id == utils::UUID{}) {
+            slogger.trace("unconditional schema modification {}", cmd.new_state_id);
+        }
+
+        // We assume that `cmd.mutations` were constructed using schema state which was observed *after* `cmd.prev_state_id` was obtained.
+        // It is now important that we apply the mutations *before* we update the schema state ID.
+
+        // TODO: ensure that either all schema mutations are applied and the state ID is updated, or none of this happens.
+        // We need to use a write-ahead-entry which contains all this information and make sure it's replayed during restarts?
+
+        co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(cmd.mutations));
+
+        co_await update_schema_state_id(_qp, cmd.new_state_id);
     }
 }
 

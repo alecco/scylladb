@@ -192,7 +192,7 @@ public:
      * @param schema The schema mutation to be applied
      */
     // Returns a future on the local application of the schema
-    future<> announce(std::vector<mutation> schema);
+    future<> announce(cql3::query_processor& qp, std::vector<mutation> schema, utils::UUID observed_schema_state_id);
 
     future<> announce_unconditionally(std::vector<mutation> schema);
 
@@ -214,7 +214,7 @@ private:
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 
-    future<> announce_with_raft(std::vector<mutation> schema);
+    future<utils::UUID> announce_with_raft(std::vector<mutation> schema, utils::UUID observed_schema_state_id);
     future<> announce_without_raft(std::vector<mutation> schema);
 
 public:
