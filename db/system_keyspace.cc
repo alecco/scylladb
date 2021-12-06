@@ -958,6 +958,24 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
     return cdc_local;
 }
 
+schema_ptr system_keyspace::v3::schema_raft_history() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, SCHEMA_RAFT_HISTORY);
+        return schema_builder(NAME, SCHEMA_RAFT_HISTORY, id)
+            // this is a single-partition table with key 'history'
+            .with_column("key", utf8_type, column_kind::partition_key)
+            // schema time ID, descending order
+            .with_column("schema_id", reversed_type_impl::get_instance(timeuuid_type), column_kind::clustering_key)
+
+            .set_comment("History of Raft group 0 schema changes")
+            .with_version(generate_schema_version(id))
+            .set_wait_for_sync_to_commitlog(true)
+            .with_null_sharder()
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::legacy::hints() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, HINTS), NAME, HINTS,
@@ -2516,7 +2534,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
     });
     if (cfg.check_experimental(db::experimental_features_t::RAFT)) {
-        r.insert(r.end(), {raft(), raft_snapshots(), raft_config()});
+        r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), v3::schema_raft_history()});
     }
     // legacy schema
     r.insert(r.end(), {

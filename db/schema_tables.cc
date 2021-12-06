@@ -2552,7 +2552,8 @@ static const std::unordered_set<sstring>& system_ks_null_shard_tables() {
         SCYLLA_TABLE_SCHEMA_HISTORY,
         db::system_keyspace::RAFT,
         db::system_keyspace::RAFT_SNAPSHOTS,
-        db::system_keyspace::RAFT_CONFIG
+        db::system_keyspace::RAFT_CONFIG,
+        db::system_keyspace::v3::SCHEMA_RAFT_HISTORY
     };
     return tables;
 }

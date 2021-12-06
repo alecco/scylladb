@@ -167,6 +167,7 @@ public:
         static constexpr auto BUILT_VIEWS = "built_views";
         static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
         static constexpr auto CDC_LOCAL = "cdc_local";
+        static constexpr auto SCHEMA_RAFT_HISTORY = "schema_raft_history";
         static schema_ptr batches();
         static schema_ptr built_indexes();
         static schema_ptr local();
@@ -184,6 +185,7 @@ public:
         static schema_ptr built_views();
         static schema_ptr scylla_views_builds_in_progress();
         static schema_ptr cdc_local();
+        static schema_ptr schema_raft_history();
     };
 
     struct legacy {
@@ -208,7 +210,7 @@ public:
         static schema_ptr batchlog();
     };
 
-    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL };
+    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL, v3::SCHEMA_RAFT_HISTORY };
 
     static bool is_extra_durable(const sstring& name);
 
