@@ -25,6 +25,10 @@
 #include "canonical_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace service {
 class migration_manager;
 
@@ -64,8 +68,9 @@ struct schema_raft_command {
 // NOTE: schema raft server is always instantiated on shard 0.
 class schema_raft_state_machine : public raft_state_machine {
     migration_manager& _mm;
+    cql3::query_processor& _qp;
 public:
-    schema_raft_state_machine(migration_manager& mm) : _mm(mm) {}
+    schema_raft_state_machine(migration_manager& mm, cql3::query_processor& qp) : _mm(mm), _qp(qp) {}
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
