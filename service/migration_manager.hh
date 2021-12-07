@@ -58,7 +58,10 @@
 
 class canonical_mutation;
 class frozen_mutation;
-namespace cql3 { namespace functions { class user_function; class user_aggregate; }}
+namespace cql3 {
+namespace functions { class user_function; class user_aggregate; }
+class query_processor;
+}
 namespace netw { class messaging_service; }
 
 namespace gms {
@@ -181,6 +184,9 @@ public:
     // used to check if raft is enabled on the cluster
     bool is_raft_enabled() { return _raft_gr.is_enabled(); }
 
+    future<utils::UUID> get_schema_state_id(cql3::query_processor& qp);
+    future<bool> was_schema_change_applied(cql3::query_processor& qp, utils::UUID state_id);
+
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
@@ -221,6 +227,8 @@ public:
     // Intended to be used in the write path, which relies on synchronized schema.
     future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
 };
+
+utils::UUID generate_schema_state_id(utils::UUID prev_state_id);
 
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);
 

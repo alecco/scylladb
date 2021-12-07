@@ -33,10 +33,54 @@
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "service/migration_manager.hh"
+#include "db/system_keyspace.hh"
+#include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 
 namespace service {
 
 static logging::logger slogger("schema_raft_sm");
+
+future<utils::UUID> migration_manager::get_schema_state_id(cql3::query_processor& qp) {
+    if (!_raft_gr.is_enabled()) {
+        co_return utils::UUID{};
+    }
+
+    auto rs = co_await qp.execute_internal(
+        format(
+            "SELECT schema_id FROM system.{} WHERE key = 'history' LIMIT 1",
+            db::system_keyspace::v3::SCHEMA_RAFT_HISTORY));
+    assert(rs);
+    if (rs->empty()) {
+        co_return utils::UUID{};
+    }
+    co_return rs->one().get_as<utils::UUID>("schema_id");
+}
+
+future<bool> migration_manager::was_schema_change_applied(cql3::query_processor& qp, utils::UUID state_id) {
+    if (!_raft_gr.is_enabled()) {
+        co_return true;
+    }
+
+    auto rs = co_await qp.execute_internal(
+        format(
+            "SELECT schema_id FROM system.{} WHERE key = 'history' AND schema_id = ?",
+            db::system_keyspace::v3::SCHEMA_RAFT_HISTORY),
+        {state_id});
+    assert(rs);
+    co_return !rs->empty();
+}
+
+utils::UUID generate_schema_state_id(utils::UUID prev_state_id) {
+    auto ts = api::new_timestamp();
+    if (prev_state_id != utils::UUID{}) {
+        auto lower_bound = utils::UUID_gen::micros_timestamp(prev_state_id);
+        if (ts <= lower_bound) {
+            ts = lower_bound + 1;
+        }
+    }
+    return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
+}
 
 future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> command) {
     slogger.trace("apply() is called");
