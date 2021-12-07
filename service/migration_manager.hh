@@ -188,6 +188,8 @@ public:
     // Returns a future on the local application of the schema
     future<> announce(std::vector<mutation> schema);
 
+    future<> announce_unconditionally(std::vector<mutation> schema);
+
     future<> passive_announce(utils::UUID version);
 
     future<> stop();

@@ -622,7 +622,7 @@ std::vector<mutation> migration_manager::prepare_keyspace_update_announcement(lw
 }
 
 future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm) {
-    return announce(prepare_keyspace_update_announcement(std::move(ksm)));
+    return announce_unconditionally(prepare_keyspace_update_announcement(std::move(ksm)));
 }
 
 future<>migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm)
@@ -640,7 +640,7 @@ std::vector<mutation> migration_manager::prepare_new_keyspace_announcement(lw_sh
 }
 
 future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp) {
-    return announce(prepare_new_keyspace_announcement(std::move(ksm), timestamp));
+    return announce_unconditionally(prepare_new_keyspace_announcement(std::move(ksm), timestamp));
 }
 
 future<> migration_manager::announce_new_column_family(schema_ptr cfm)
@@ -662,7 +662,7 @@ future<std::vector<mutation>> migration_manager::include_keyspace(
 }
 
 future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp) {
-    co_await announce(co_await prepare_new_column_family_announcement(std::move(cfm), timestamp));
+    co_await announce_unconditionally(co_await prepare_new_column_family_announcement(std::move(cfm), timestamp));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp) {
@@ -726,7 +726,7 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
 }
 
 future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::optional<api::timestamp_type> ts_opt) {
-    co_return co_await announce(co_await prepare_column_family_update_announcement(std::move(cfm), from_thrift, {}, ts_opt));
+    co_return co_await announce_unconditionally(co_await prepare_column_family_update_announcement(std::move(cfm), from_thrift, {}, ts_opt));
 }
 
 future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type) {
@@ -785,7 +785,7 @@ std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(cons
 }
 
 future<> migration_manager::announce_keyspace_drop(const sstring& ks_name) {
-    return announce(prepare_keyspace_drop_announcement(ks_name));
+    return announce_unconditionally(prepare_keyspace_drop_announcement(ks_name));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,
@@ -841,7 +841,7 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
 future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
                                                         const sstring& cf_name,
                                                         drop_views drop_views) {
-    co_return co_await announce(co_await prepare_column_family_drop_announcement(ks_name, cf_name, drop_views));
+    co_return co_await announce_unconditionally(co_await prepare_column_family_drop_announcement(ks_name, cf_name, drop_views));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_type_drop_announcement(user_type dropped_type) {
@@ -872,7 +872,7 @@ future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(v
 }
 
 future<> migration_manager::announce_new_view(view_ptr view) {
-    co_return co_await announce(co_await prepare_new_view_announcement(std::move(view)));
+    co_return co_await announce_unconditionally(co_await prepare_new_view_announcement(std::move(view)));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_view_update_announcement(view_ptr view) {
@@ -899,7 +899,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
 }
 
 future<> migration_manager::announce_view_update(view_ptr view) {
-    co_return co_await announce(co_await prepare_view_update_announcement(std::move(view)));
+    co_return co_await announce_unconditionally(co_await prepare_view_update_announcement(std::move(view)));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name) {
@@ -969,6 +969,10 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
 
         co_return co_await std::move(f);
     }
+}
+
+future<> migration_manager::announce_unconditionally(std::vector<mutation> schema) {
+    return announce(std::move(schema));
 }
 
 future<> migration_manager::schema_read_barrier() {
