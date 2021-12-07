@@ -653,11 +653,6 @@ future<std::vector<mutation>> migration_manager::prepare_new_column_family_annou
     return prepare_new_column_family_announcement(std::move(cfm), api::new_timestamp());
 }
 
-future<> migration_manager::include_keyspace_and_announce(
-        const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
-    co_return co_await announce(co_await include_keyspace(keyspace, std::move(mutations)));
-}
-
 future<std::vector<mutation>> migration_manager::include_keyspace(
         const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
