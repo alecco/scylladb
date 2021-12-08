@@ -66,6 +66,7 @@ future<> schema_raft_state_machine::transfer_snapshot(gms::inet_address from, ra
     // Note that this may bring newer state than the schema state machine raft's
     // log, so some raft entries may be double applied, but since the state
     // machine idempotent it is not a problem.
+    slogger.trace("transfer snapshot from {} index {} snp id {}", from, snp.idx, snp.id);
     return _mm.submit_migration_task(from, false);
 }
 
