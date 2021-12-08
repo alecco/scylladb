@@ -182,6 +182,7 @@ struct serializer {};
 
 struct schema_pull_options {
     bool remote_supports_canonical_mutation_retval = true;
+    bool raft_snapshot_transfer = false;
 };
 
 class messaging_service : public seastar::async_sharded_service<messaging_service>, public peering_sharded_service<messaging_service> {

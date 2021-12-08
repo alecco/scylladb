@@ -38,6 +38,8 @@
 #include "db/system_keyspace.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "service/storage_proxy.hh"
+#include "database.hh"
 
 namespace service {
 
@@ -93,6 +95,27 @@ utils::UUID generate_schema_state_id(utils::UUID prev_state_id) {
     return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
 }
 
+future<canonical_mutation> get_raft_schema_history(storage_proxy& sp) {
+    // TODO: consider not querying the entire table, but only a recent suffix, or perform a paged query...
+    auto rs = co_await db::system_keyspace::query_mutations(sp.container(),
+            db::system_keyspace::NAME, db::system_keyspace::v3::SCHEMA_RAFT_HISTORY);
+    auto s = sp.get_db().local().find_schema(db::system_keyspace::NAME, db::system_keyspace::v3::SCHEMA_RAFT_HISTORY);
+    assert(rs);
+    auto& ps = rs->partitions();
+    for (auto& p: ps) {
+        auto mut = p.mut().unfreeze(s);
+        auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+        if (partition_key == "history") {
+            co_return mut;
+        }
+        slogger.warn("get_raft_schema_history: unexpected partition in schema raft history table: {}", partition_key);
+    }
+
+    on_internal_error(slogger, "schema raft history table missing 'history' partition");
+    // TODO: throw or return optional?
+    // but the history table should have at least one entry - schema changes performed at boot...
+}
+
 future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> command) {
     slogger.trace("apply() is called");
     for (auto&& c : command) {
@@ -135,8 +158,29 @@ future<> schema_raft_state_machine::load_snapshot(raft::snapshot_id id) {
 }
 
 future<> schema_raft_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) {
+    // TODO: ensure that transfer snapshot doesn't race with apply; use a lock?
     slogger.trace("transfer snapshot from {} index {} snp id {}", from, snp.idx, snp.id);
-    return _mm.submit_migration_task(from, false);
+    netw::messaging_service::msg_addr addr{from, 0};
+    // TODO: abusing `send_migration_request` seems like a hack
+    // TODO: move this code to migration manager?
+    // TODO we should probably include history table in regular pulls (outside Raft snapshot transfer) as well...
+    // (if we want those regular pulls to stay)
+    auto [_, cm] = co_await _mm.get_messaging().send_migration_request(addr, netw::schema_pull_options { .raft_snapshot_transfer = true });
+    assert(cm);
+    auto s = _qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::v3::SCHEMA_RAFT_HISTORY);
+
+    auto it = std::find_if(cm->begin(), cm->end(), [history_table_id = s->id()]
+            (canonical_mutation& m) { return m.column_family_id() == history_table_id; });
+    assert(it != cm->end()); // TODO on_internal_error
+    auto history_mut = it->to_mutation(s);
+    cm->erase(it);
+
+    // TODO write-ahead entry for atomicity?
+
+    co_await _mm.merge_schema_from(addr, std::move(*cm));
+
+    slogger.trace("history mutation: {}", history_mut); // TODO remove
+    co_await _qp.proxy().mutate_locally({std::move(history_mut)}, nullptr);
 }
 
 future<> schema_raft_state_machine::abort() {
