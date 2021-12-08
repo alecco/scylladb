@@ -70,7 +70,11 @@ raft_server_for_group raft_group0::create_server_for_group(raft::group_id gid,
     auto storage = std::make_unique<raft_sys_table_storage>(_qp, gid, my_addr.id);
     auto& persistence_ref = *storage;
     auto server = raft::create_server(my_addr.id, std::move(rpc), std::move(state_machine),
-            std::move(storage), _raft_gr.failure_detector(), raft::server::configuration());
+            std::move(storage), _raft_gr.failure_detector(), raft::server::configuration{
+                .snapshot_threshold = 5,
+                .snapshot_trailing = 1,
+                .max_log_size = 10,
+            });
 
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
