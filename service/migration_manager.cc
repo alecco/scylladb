@@ -141,26 +141,22 @@ void migration_manager::init_messaging_service()
         });
         return netw::messaging_service::no_wait();
     });
-    _messaging.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
-        using frozen_mutations = std::vector<frozen_mutation>;
-        using canonical_mutations = std::vector<canonical_mutation>;
+    _messaging.register_migration_request(std::bind_front(
+            [] (migration_manager& self, const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options)
+                -> future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> {
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
 
-        auto features = _feat.cluster_schema_features();
-        auto& proxy = get_storage_proxy();
-        return db::schema_tables::convert_schema_to_mutations(proxy, features).then([&proxy, cm_retval_supported] (std::vector<canonical_mutation>&& cm) {
-            const auto& db = proxy.local().get_db().local();
-            if (cm_retval_supported) {
-                return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(frozen_mutations{}, std::move(cm)));
-            }
-            auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db] (const canonical_mutation& cm) {
-                return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
-            }));
-            return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(std::move(fm), std::move(cm)));
-        }).finally([p = get_local_shared_storage_proxy()] {
-            // keep local proxy alive
-        });
-    });
+        auto features = self._feat.cluster_schema_features();
+        auto p = get_local_shared_storage_proxy(); // keep local proxy alive
+        auto cm = co_await db::schema_tables::convert_schema_to_mutations(get_storage_proxy(), features);
+        if (cm_retval_supported) {
+            co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
+        }
+        auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db = p->get_db().local()] (const canonical_mutation& cm) {
+            return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
+        }));
+        co_return rpc::tuple(std::move(fm), std::move(cm));
+    }, std::ref(*this)));
     _messaging.register_schema_check([] {
         return make_ready_future<utils::UUID>(service::get_local_storage_proxy().get_db().local().get_version());
     });
