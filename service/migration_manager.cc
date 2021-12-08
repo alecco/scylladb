@@ -161,6 +161,13 @@ void migration_manager::init_messaging_service()
         auto features = self._feat.cluster_schema_features();
         auto p = get_local_shared_storage_proxy(); // keep local proxy alive
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(get_storage_proxy(), features);
+        if (self._raft_gr.is_enabled() && options->raft_snapshot_transfer) {
+            // if `raft_snapshot_transfer` is `true`, the sender must also understand canonical mutations
+            // (`raft_snapshot_transfer` was added more recently).
+            assert(cm_retval_supported);
+            // Note: this mutation is not like the others
+            cm.push_back(co_await get_raft_schema_history(*p));
+        }
         if (cm_retval_supported) {
             co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
         }

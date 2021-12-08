@@ -75,6 +75,8 @@ class versioned_value;
 
 namespace service {
 
+class storage_proxy;
+
 template<typename M>
 concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
 
@@ -100,6 +102,8 @@ public:
 
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
+
+    netw::messaging_service& get_messaging() { return _messaging; }
 
     future<> submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node = true);
 
@@ -248,6 +252,8 @@ private:
 };
 
 utils::UUID generate_schema_state_id(utils::UUID prev_state_id);
+
+future<canonical_mutation> get_raft_schema_history(storage_proxy&);
 
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);
 

@@ -23,6 +23,8 @@ namespace netw {
 
 struct schema_pull_options {
     bool remote_supports_canonical_mutation_retval;
+    // TODO: version mark? Is it safe to add this field?
+    bool raft_snapshot_transfer;
 };
 
 } // namespace netw
