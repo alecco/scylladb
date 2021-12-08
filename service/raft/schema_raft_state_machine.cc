@@ -63,6 +63,7 @@ future<> schema_raft_state_machine::load_snapshot(raft::snapshot_id id) {
 }
 
 future<> schema_raft_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) {
+    slogger.trace("transfer snapshot from {} index {} snp id {}", from, snp.idx, snp.id);
     return _mm.submit_migration_task(from, false);
 }
 
