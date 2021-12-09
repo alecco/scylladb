@@ -214,6 +214,9 @@ private:
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 
+    future<> announce_with_raft(std::vector<mutation> schema);
+    future<> announce_without_raft(std::vector<mutation> schema);
+
 public:
     future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);
 
