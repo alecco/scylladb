@@ -19,7 +19,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
-from abc import ABC, abstractmethod
 import argparse
 import asyncio
 import colorama
@@ -41,8 +40,12 @@ import time
 import xml.etree.ElementTree as ET
 import yaml
 
+from abc import ABC, abstractmethod
 from scripts import coverage
 from test.pylib.artefact_registry import ArtefactRegistry
+from test.pylib.pool import Pool
+from test.pylib.host_registry import HostRegistry
+from test.pylib.scylla_server import ScyllaServer
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -82,6 +85,7 @@ class TestSuite(ABC):
     # All existing test suites, one suite per path/mode.
     suites = dict()
     artefacts = ArtefactRegistry()
+    hosts = HostRegistry()
     _next_id = 0
 
     def __init__(self, path, cfg, options, mode):
@@ -312,6 +316,50 @@ class CqlTestSuite(TestSuite):
         return "*_test.cql"
 
 
+class PythonTestSuite(TestSuite):
+    """A collection of Python pytests against a single Scylla instance"""
+
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
+        self.scylla_exe = os.path.join("build", self.mode, "scylla")
+        if self.mode == "coverage":
+            self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
+        else:
+            self.scylla_env = dict()
+        self.scylla_env['SCYLLA'] = self.scylla_exe
+
+        async def start_server():
+            server = ScyllaServer(exe=self.scylla_exe, tmpdir=self.options.tmpdir, hosts=self.hosts)
+
+            async def stop_server():
+                if server.is_running:
+                    await server.stop()
+
+            async def uninstall_server():
+                await server.uninstall()
+
+            # Suite artefacts are removed when
+            # the entire suite ends successfully. If it
+            # fails, we'd like to keep the data dir. This
+            # is why uninstall_server is not an exit artefact.
+            self.artefacts.add_suite_artefact(self, stop_server)
+            self.artefacts.add_suite_artefact(self, uninstall_server)
+            self.artefacts.add_exit_artefact(stop_server)
+
+            await server.start()
+            return server
+
+        self.servers = Pool(4, start_server)
+
+    async def add_test(self, shortname):
+        test = PythonTest(self.next_id, shortname, self)
+        self.tests.append(test)
+
+    @property
+    def pattern(self):
+        return "test_*.py"
+
+
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
 
@@ -523,6 +571,31 @@ class RunTest(Test):
     async def run(self, options):
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
         self.success = await run_test(self, options, gentle_kill=True, env=self.suite.scylla_env)
+        logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
+        return self
+
+
+class PythonTest(Test):
+    """Run a pytest collection of cases against a standalone Scylla"""
+
+    def __init__(self, test_no, shortname, suite):
+        super().__init__(test_no, shortname, suite)
+        self.path = "pytest"
+        self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.args = ["-o", "junit_family=xunit2",
+                     "--host={}".format("0.0.0.0"),
+                     "--junit-xml={}".format(self.xmlout),
+                     os.path.join(suite.path, shortname + ".py")]
+
+    def print_summary(self):
+        print("Output of {} {}:".format(self.path, " ".join(self.args)))
+        print(read_log(self.log_filename))
+
+    async def run(self, options):
+        # This test can and should be killed gently, with SIGTERM, not with SIGKILL
+        async with self.suite.servers.instance() as server:
+            if server is None:
+                self.success = await run_test(self, options, gentle_kill=True, env=self.env)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
 
