@@ -1006,29 +1006,36 @@ public:
 
             co_await t._query_state.get_client_state().has_schema_access(t._db.local(), cf_def.keyspace, cf_def.name, auth::permission::ALTER);
 
-            auto& cf = t._db.local().find_column_family(cf_def.keyspace, cf_def.name);
-            auto schema = cf.schema();
+            auto func = [&] (database& db) -> future<std::string> {
+                auto& mm = t._query_processor.local().get_migration_manager();
 
-            if (schema->is_cql3_table()) {
-                throw make_exception<InvalidRequestException>("Cannot modify CQL3 table {} as it may break the schema. You should use cqlsh to modify CQL3 tables instead.", cf_def.name);
-            }
+                co_await mm.schema_read_barrier();
 
-            if (schema->is_view()) {
-                throw make_exception<InvalidRequestException>("Cannot modify Materialized View table {} as it may break the schema. "
-                                                              "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
-            }
+                auto& cf = db.find_column_family(cf_def.keyspace, cf_def.name);
+                auto schema = cf.schema();
 
-            if (!cf.views().empty()) {
-                throw make_exception<InvalidRequestException>("Cannot modify table with Materialized Views {} as it may break the schema. "
-                                                              "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
-            }
+                if (schema->is_cql3_table()) {
+                    throw make_exception<InvalidRequestException>("Cannot modify CQL3 table {} as it may break the schema. You should use cqlsh to modify CQL3 tables instead.", cf_def.name);
+                }
 
-            auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
-            if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
-                fail(unimplemented::cause::MIXED_CF);
-            }
-            co_await t._query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, std::nullopt);
-            co_return std::string(t._db.local().get_version().to_sstring());
+                if (schema->is_view()) {
+                    throw make_exception<InvalidRequestException>("Cannot modify Materialized View table {} as it may break the schema. "
+                                                                "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
+                }
+
+                if (!cf.views().empty()) {
+                    throw make_exception<InvalidRequestException>("Cannot modify table with Materialized Views {} as it may break the schema. "
+                                                                "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
+                }
+
+                auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
+                if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
+                    fail(unimplemented::cause::MIXED_CF);
+                }
+                co_await mm.announce(co_await mm.prepare_column_family_update_announcement(std::move(s), true, std::vector<view_ptr>(), std::nullopt));
+                co_return std::string(db.get_version().to_sstring());
+            };
+            co_return co_await t._db.invoke_on(0, func);
         });
     }
 
