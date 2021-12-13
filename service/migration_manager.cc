@@ -333,6 +333,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 }
 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<canonical_mutation>& canonical_mutations) {
+// XXX here
     mlogger.debug("Applying schema mutations from {}", src);
     auto& proxy = service::get_storage_proxy();
     const auto& db = proxy.local().get_db().local();

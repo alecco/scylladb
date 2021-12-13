@@ -22,6 +22,7 @@
 
 #include "raft/raft.hh"
 #include "utils/UUID_gen.hh"
+#include "db/schema_tables.hh"
 
 namespace service {
 
@@ -31,8 +32,12 @@ class migration_manager;
 // NOTE: schema raft server is always instantiated on shard 0.
 class schema_raft_state_machine : public raft::state_machine {
     migration_manager& _mm;
+    schema_ptr _scylla_tables_schema;
+    // XXX here put state of prev expected (timestamp)
+    // and schema ptr?
 public:
-    schema_raft_state_machine(migration_manager& mm) : _mm(mm) {}
+    schema_raft_state_machine(migration_manager& mm) : _mm(mm),
+        _scylla_tables_schema(db::schema_tables::scylla_tables()) {};
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;

@@ -175,16 +175,6 @@ future<mutation> create_table_statement::create_schema_timeuuid(const schema_ptr
     auto timeuuid_list_type = list_type_impl::get_instance(timeuuid_type, false);
     auto list_dv = make_list_value(timeuuid_list_type, std::move(arg_types));
 
-    // Store new schema timestamp
-    static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
-            "SET current_timeuuid = ?, previous_timeuuid = ? "
-            "WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
-    mylogger.trace("Updating schema timeuuid to {}", timestamp);
-
-    // XXX: should we protect this from exceptions and check result?
-    ::shared_ptr<untyped_result_set> store_timeuuid_rs = co_await qp.execute_internal(store_timeuuid_cql,
-            {new_tuuid, list_dv, "system"});
-
     co_return make_scylla_tables_mutation_timeuuid(schema, timestamp, new_tuuid, prev_tuuids);
 }
 

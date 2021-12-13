@@ -40,11 +40,32 @@ future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> comman
     fmt::print("schema_raft_state_machine::apply\n");
     for (auto&& c : command) {
         auto is = ser::as_input_stream(c);
-        std::vector<canonical_mutation> mutations =
+        std::vector<canonical_mutation> canonical_mutations =
                             ser::deserialize(is, boost::type<std::vector<canonical_mutation>>());
 
-        fmt::print("schema_raft_state_machine::apply merging\n");
-        co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(gms::inet_address{}), std::move(mutations));
+// XXX here check prev timestamp  and if not make it no-op and report failure up
+// so caller retries
+// don't modify scylla_tables nor 
+fmt::print("\n'nschema_raft_state_machine::apply merging\n");
+
+// XXX if OK, store in scylla_tables timestamp, etc
+
+        const auto& cm = canonical_mutations.back();
+        auto m = cm.to_mutation(_scylla_tables_schema);
+#if 0
+        // Store new schema timestamp
+        static const auto store_timeuuid_cql = format("UPDATE system_schema.{} "
+                "SET current_timeuuid = ?, previous_timeuuid = ? "
+                "WHERE keyspace_name = ?", db::schema_tables::SCYLLA_TABLES);
+        mylogger.trace("Updating schema timeuuid to {}", timestamp);
+
+        // XXX: should we protect this from exceptions and check result?
+        ::shared_ptr<untyped_result_set> store_timeuuid_rs = co_await qp.execute_internal(store_timeuuid_cql,
+                {new_tuuid, list_dv, "system"});
+#endif
+
+// XXX shouldn't we also store some marker of this schema change failed in Raft?
+        co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(gms::inet_address{}), std::move(canonical_mutations));
     }
 }
 
