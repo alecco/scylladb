@@ -112,7 +112,7 @@ view_ptr alter_view_statement::prepare_view(database& db) const {
     return view_ptr(builder.build());
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> alter_view_statement::prepare_schema_mutations(query_processor& qp) const {
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> alter_view_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     auto m = co_await qp.get_migration_manager().prepare_view_update_announcement(prepare_view(qp.db()));
 
     using namespace cql_transport;

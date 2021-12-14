@@ -325,7 +325,7 @@ schema_ptr create_index_statement::build_index_schema(query_processor& qp) const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_index_statement::prepare_schema_mutations(query_processor& qp) const {
+create_index_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     using namespace cql_transport;
     auto schema = build_index_schema(qp);
 

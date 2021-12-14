@@ -70,7 +70,7 @@ public:
     // Functions we need to override to subclass schema_altering_statement
     virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
     virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
-    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 

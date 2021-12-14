@@ -75,7 +75,7 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(database&
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_function_statement::prepare_schema_mutations(query_processor& qp) const {
+create_function_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 

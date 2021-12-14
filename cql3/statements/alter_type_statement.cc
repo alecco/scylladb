@@ -133,7 +133,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-alter_type_statement::prepare_schema_mutations(query_processor& qp) const {
+alter_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     try {
         auto m = co_await prepare_announcement_mutations(qp.db(), qp.get_migration_manager());
 

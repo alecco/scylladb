@@ -150,7 +150,7 @@ const sstring& drop_type_statement::keyspace() const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_type_statement::prepare_schema_mutations(query_processor& qp) const {
+drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     validate_while_executing(qp.proxy());
 
     database& db = qp.db();

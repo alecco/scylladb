@@ -78,7 +78,7 @@ void drop_view_statement::validate(service::storage_proxy&, const service::clien
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_view_statement::prepare_schema_mutations(query_processor& qp) const {
+drop_view_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
