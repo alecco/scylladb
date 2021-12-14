@@ -96,7 +96,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         auto old_ksm = proxy.get_db().local().find_keyspace(_name).metadata();
         const auto& tm = *proxy.get_token_metadata_ptr();
 
-        auto m = qp.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm));
+        auto m = qp.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm), ts);
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(

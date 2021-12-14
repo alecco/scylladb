@@ -623,17 +623,17 @@ public void notifyDropAggregate(UDAggregate udf)
 }
 #endif
 
-std::vector<mutation> migration_manager::prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm) {
+std::vector<mutation> migration_manager::prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts) {
     auto& proxy = get_local_storage_proxy();
     auto& db = proxy.get_db().local();
 
     db.validate_keyspace_update(*ksm);
     mlogger.info("Update Keyspace: {}", ksm);
-    return db::schema_tables::make_create_keyspace_mutations(ksm, api::new_timestamp());
+    return db::schema_tables::make_create_keyspace_mutations(ksm, ts);
 }
 
 future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm) {
-    return announce(prepare_keyspace_update_announcement(std::move(ksm)));
+    return announce(prepare_keyspace_update_announcement(std::move(ksm), api::new_timestamp()));
 }
 
 future<>migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm)
