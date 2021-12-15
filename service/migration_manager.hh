@@ -166,7 +166,7 @@ public:
     future<> announce_column_family_drop(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
     future<std::vector<mutation>> prepare_column_family_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type, drop_views drop_views = drop_views::no);
 
-    future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type);
+    future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type, api::timestamp_type);
 
     future<> announce_new_view(view_ptr view);
     future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view, api::timestamp_type);

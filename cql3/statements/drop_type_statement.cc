@@ -166,7 +166,7 @@ drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestam
 
     // Can happen with if_exists
     if (to_drop != all_types.end()) {
-        m = co_await qp.get_migration_manager().prepare_type_drop_announcement(to_drop->second);
+        m = co_await qp.get_migration_manager().prepare_type_drop_announcement(to_drop->second, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
