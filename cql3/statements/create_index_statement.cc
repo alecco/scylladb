@@ -333,7 +333,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, api::times
     std::vector<mutation> m;
 
     if (schema) {
-        m = co_await qp.get_migration_manager().prepare_column_family_update_announcement(std::move(schema), false, {}, std::nullopt);
+        m = co_await qp.get_migration_manager().prepare_column_family_update_announcement(std::move(schema), false, {}, ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
