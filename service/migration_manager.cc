@@ -797,7 +797,7 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name) {
 }
 
 future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,
-                    const sstring& cf_name, drop_views drop_views) {
+                    const sstring& cf_name, api::timestamp_type ts, drop_views drop_views) {
     try {
         auto& db = get_local_storage_proxy().get_db().local();
         auto& old_cfm = db.find_column_family(ks_name, cf_name);
@@ -823,15 +823,14 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
         std::vector<mutation> drop_si_mutations;
         if (!schema->all_indices().empty()) {
             auto builder = schema_builder(schema).without_indexes();
-            drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), api::new_timestamp(), false);
+            drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), ts, false);
         }
-        auto ts = api::new_timestamp();
         auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);
         mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
         for (auto& v : views) {
             if (!old_cfm.get_index_manager().is_index(v)) {
                 mlogger.info("Drop view '{}.{}' of table '{}'", v->ks_name(), v->cf_name(), schema->cf_name());
-                auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, api::new_timestamp());
+                auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, ts);
                 mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
             }
         }
@@ -849,7 +848,7 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
 future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
                                                         const sstring& cf_name,
                                                         drop_views drop_views) {
-    co_return co_await announce(co_await prepare_column_family_drop_announcement(ks_name, cf_name, drop_views));
+    co_return co_await announce(co_await prepare_column_family_drop_announcement(ks_name, cf_name, api::new_timestamp(), drop_views));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_type_drop_announcement(user_type dropped_type) {
