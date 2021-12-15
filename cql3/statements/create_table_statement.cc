@@ -110,7 +110,7 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, api::times
     std::vector<mutation> m;
 
     try {
-        m = co_await qp.get_migration_manager().prepare_new_column_family_announcement(get_cf_meta_data(qp.db()));
+        m = co_await qp.get_migration_manager().prepare_new_column_family_announcement(get_cf_meta_data(qp.db()), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
