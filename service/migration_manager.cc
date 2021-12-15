@@ -773,10 +773,10 @@ future<std::vector<mutation>> migration_manager::prepare_new_aggregate_announcem
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate) {
+future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, api::new_timestamp());
+    auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
