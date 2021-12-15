@@ -706,7 +706,6 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
     cfm.validate();
 #endif
     try {
-        auto ts = ts_opt.value_or(api::new_timestamp());
         auto& db = get_local_storage_proxy().get_db().local();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
 #if 0
