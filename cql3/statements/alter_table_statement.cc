@@ -417,7 +417,7 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp, api::timest
   database& db = qp.db();
   auto& mm = qp.get_migration_manager();
   auto [cfm, view_updates] = prepare_schema_update(db);
-  auto m = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, std::move(view_updates), std::nullopt);
+  auto m = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, std::move(view_updates), ts);
 
   using namespace cql_transport;
   auto ret = ::make_shared<event::schema_change>(
