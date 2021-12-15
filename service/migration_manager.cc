@@ -905,7 +905,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
     }
 }
 
-future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name) {
+future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts) {
     auto& db = get_local_storage_proxy().get_db().local();
     try {
         auto& view = db.find_column_family(ks_name, cf_name).schema();
@@ -917,7 +917,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
-        auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), api::new_timestamp());
+        auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
         return include_keyspace(*keyspace, std::move(mutations));
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(format("Cannot drop non existing materialized view '{}' in keyspace '{}'.",

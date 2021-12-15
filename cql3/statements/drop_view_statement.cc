@@ -83,7 +83,7 @@ drop_view_statement::prepare_schema_mutations(query_processor& qp, api::timestam
     std::vector<mutation> m;
 
     try {
-        m = co_await qp.get_migration_manager().prepare_view_drop_announcement(keyspace(), column_family());
+        m = co_await qp.get_migration_manager().prepare_view_drop_announcement(keyspace(), column_family(), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

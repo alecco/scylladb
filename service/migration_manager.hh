@@ -173,7 +173,7 @@ public:
 
     future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name);
+    future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type);
 
     // the function need to be called if a user wants to access most up-to-date schema state
     future<> schema_read_barrier();
