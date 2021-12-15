@@ -759,10 +759,10 @@ future<std::vector<mutation>> migration_manager::prepare_new_function_announceme
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func) {
+future<std::vector<mutation>> migration_manager::prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func, api::timestamp_type ts) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(func->name().keyspace);
-    auto mutations = db::schema_tables::make_drop_function_mutations(func, api::new_timestamp());
+    auto mutations = db::schema_tables::make_drop_function_mutations(func, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 

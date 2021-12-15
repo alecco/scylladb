@@ -51,7 +51,7 @@ drop_function_statement::prepare_schema_mutations(query_processor& qp, api::time
         if (auto aggregate = functions::functions::used_by_user_aggregate(user_func->name()); bool(aggregate)) {
             throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
         }
-        m = co_await qp.get_migration_manager().prepare_function_drop_announcement(user_func);
+        m = co_await qp.get_migration_manager().prepare_function_drop_announcement(user_func, ts);
         ret = create_schema_change(*func, false);
     }
 
