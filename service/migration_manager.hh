@@ -169,7 +169,7 @@ public:
     future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type);
 
     future<> announce_new_view(view_ptr view);
-    future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view);
+    future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view, api::timestamp_type);
 
     future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view, api::timestamp_type);
 
