@@ -147,7 +147,7 @@ public:
     future<> announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp);
     future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp);
 
-    future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type);
+    future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type, api::timestamp_type);
 
     future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func);
 
@@ -157,7 +157,7 @@ public:
 
     future<std::vector<mutation>> prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate);
 
-    future<std::vector<mutation>> prepare_update_type_announcement(user_type updated_type);
+    future<std::vector<mutation>> prepare_update_type_announcement(user_type updated_type, api::timestamp_type);
 
     future<> announce_keyspace_drop(const sstring& ks_name);
     std::vector<mutation> prepare_keyspace_drop_announcement(const sstring& ks_name);
@@ -172,7 +172,7 @@ public:
     future<> announce_new_view(view_ptr view);
     future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view);
 
-    future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view);
+    future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view, api::timestamp_type);
 
     future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name);
 
@@ -204,7 +204,7 @@ private:
     future<> uninit_messaging_service();
 
     future<std::vector<mutation>> include_keyspace(const keyspace_metadata& keyspace, std::vector<mutation> mutations);
-    future<std::vector<mutation>> do_prepare_new_type_announcement(user_type new_type);
+    future<std::vector<mutation>> do_prepare_new_type_announcement(user_type new_type, api::timestamp_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 

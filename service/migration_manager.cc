@@ -740,21 +740,21 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
     co_return co_await announce(co_await prepare_column_family_update_announcement(std::move(cfm), from_thrift, {}, ts_opt));
 }
 
-future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type) {
+future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type, api::timestamp_type ts) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(new_type->_keyspace);
-    auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp());
+    auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_new_type_announcement(user_type new_type) {
+future<std::vector<mutation>> migration_manager::prepare_new_type_announcement(user_type new_type, api::timestamp_type ts) {
     mlogger.info("Prepare Create new User Type: {}", new_type->get_name_as_string());
-    return do_prepare_new_type_announcement(std::move(new_type));
+    return do_prepare_new_type_announcement(std::move(new_type), ts);
 }
 
-future<std::vector<mutation>> migration_manager::prepare_update_type_announcement(user_type updated_type) {
+future<std::vector<mutation>> migration_manager::prepare_update_type_announcement(user_type updated_type, api::timestamp_type ts) {
     mlogger.info("Prepare Update User Type: {}", updated_type->get_name_as_string());
-    return do_prepare_new_type_announcement(updated_type);
+    return do_prepare_new_type_announcement(updated_type, ts);
 }
 
 future<std::vector<mutation>> migration_manager::prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func) {
@@ -886,7 +886,7 @@ future<> migration_manager::announce_new_view(view_ptr view) {
     co_return co_await announce(co_await prepare_new_view_announcement(std::move(view)));
 }
 
-future<std::vector<mutation>> migration_manager::prepare_view_update_announcement(view_ptr view) {
+future<std::vector<mutation>> migration_manager::prepare_view_update_announcement(view_ptr view, api::timestamp_type ts) {
 #if 0
     view.metadata.validate();
 #endif
@@ -901,7 +901,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
         oldCfm.validateCompatility(cfm);
 #endif
         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
-        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), api::new_timestamp(), true);
+        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, true);
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const std::out_of_range& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
