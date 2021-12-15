@@ -109,7 +109,7 @@ drop_index_statement::prepare_schema_mutations(query_processor& qp, api::timesta
     auto cfm = make_drop_idex_schema(qp);
 
     if (cfm) {
-        m = co_await qp.get_migration_manager().prepare_column_family_update_announcement(cfm, false, {}, std::nullopt);
+        m = co_await qp.get_migration_manager().prepare_column_family_update_announcement(cfm, false, {}, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
