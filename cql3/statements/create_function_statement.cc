@@ -82,7 +82,7 @@ create_function_statement::prepare_schema_mutations(query_processor& qp, api::ti
     auto func = dynamic_pointer_cast<functions::user_function>(validate_while_executing(qp.proxy()));
 
     if (func) {
-        m = co_await qp.get_migration_manager().prepare_new_function_announcement(func);
+        m = co_await qp.get_migration_manager().prepare_new_function_announcement(func, ts);
         ret = create_schema_change(*func, true);
     }
 

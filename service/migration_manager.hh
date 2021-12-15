@@ -149,7 +149,7 @@ public:
 
     future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func);
+    future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func, api::timestamp_type);
 
     future<std::vector<mutation>> prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type);
 
