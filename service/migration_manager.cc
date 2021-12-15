@@ -780,18 +780,18 @@ future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announce
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(const sstring& ks_name) {
+std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(const sstring& ks_name, api::timestamp_type ts) {
     auto& db = get_local_storage_proxy().get_db().local();
     if (!db.has_keyspace(ks_name)) {
         throw exceptions::configuration_exception(format("Cannot drop non existing keyspace '{}'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
-    return db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
+    return db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), ts);
 }
 
 future<> migration_manager::announce_keyspace_drop(const sstring& ks_name) {
-    return announce(prepare_keyspace_drop_announcement(ks_name));
+    return announce(prepare_keyspace_drop_announcement(ks_name, api::new_timestamp()));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,

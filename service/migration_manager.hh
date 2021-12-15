@@ -159,7 +159,7 @@ public:
     future<std::vector<mutation>> prepare_update_type_announcement(user_type updated_type, api::timestamp_type);
 
     future<> announce_keyspace_drop(const sstring& ks_name);
-    std::vector<mutation> prepare_keyspace_drop_announcement(const sstring& ks_name);
+    std::vector<mutation> prepare_keyspace_drop_announcement(const sstring& ks_name, api::timestamp_type);
 
     class drop_views_tag;
     using drop_views = bool_class<drop_views_tag>;
