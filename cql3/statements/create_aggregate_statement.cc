@@ -75,7 +75,7 @@ create_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::t
 
     auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(validate_while_executing(qp.proxy()));
     if (aggregate) {
-        m = co_await qp.get_migration_manager().prepare_new_aggregate_announcement(aggregate);
+        m = co_await qp.get_migration_manager().prepare_new_aggregate_announcement(aggregate, ts);
         ret = create_schema_change(*aggregate, true);
     }
 
