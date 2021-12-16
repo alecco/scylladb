@@ -965,10 +965,19 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
     try {
         using namespace std::placeholders;
         auto live_members = _gossiper.get_live_members() | boost::adaptors::filtered([this] (const gms::inet_address& endpoint) {
+fmt::print("XXX 1\n"); // XXX
             // only push schema to nodes with known and equal versions
+#if 0
             return endpoint != utils::fb_utilities::get_broadcast_address() &&
                 _messaging.knows_version(endpoint) &&
                 _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
+#else
+bool a = endpoint != utils::fb_utilities::get_broadcast_address();
+bool b = _messaging.knows_version(endpoint);
+bool c = _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
+fmt::print("XXX 2  a {} b {} c {}\n", a, b, c); // XXX
+return a && b && c;
+#endif
         });
         co_await parallel_for_each(live_members.begin(), live_members.end(),
             std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, _1, schema));
