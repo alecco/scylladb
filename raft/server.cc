@@ -487,7 +487,7 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
             logger.trace("[{}] adding server {}", id(), addr.id);
             auto [it, inserted] = cfg.insert(addr);
             if (!inserted) {
-                logger.warn("[{}] the server {} already exists in configuration of {}", id(), addr.id);
+                logger.warn("[{}] the server {} already exists in configuration of {}", id(), addr.id, id());
             }
         }
         for (auto& to_remove: del) {

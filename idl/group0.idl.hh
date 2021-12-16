@@ -27,6 +27,7 @@ struct group0_info {
 };
 
 struct group0_peer_exchange {
+    // XXX this?
     std::variant<std::monostate, service::group0_info, std::vector<raft::server_address>> info;
 };
 

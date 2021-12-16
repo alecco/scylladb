@@ -298,6 +298,24 @@ future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list pee
         } else if constexpr (std::is_same_v<T, raft::group_id>) {
             // Even if in follower state, return own address: the
             // incoming RPC will then be bounced to the leader.
+            // XXX K: need to extend the object (variant) returned
+            // detect here more than one node is joining at the time
+            // return special case requesting other node sending this req to retry after sleep
+            // (monostate
+            // condition 
+            // check with Asias how to detect node not in normal node
+            //  there is a way to get state from gossip
+            //
+            // get current server for this group id, check current config,
+            // verify all nodes in config are in normal mode
+            // if at least 1 is not in normal, return monostate
+            //
+            // final version of check will be tricky (e.g. some nodes might be dowwn)
+            // but if more than 1 joining/boot, let booting node finish (sleep)
+            // (gossip has many states)
+            if (there is a node in raft config which is not in normal node according to gossip) {
+                co_return group0_peer_exchange{std::monostate{}};
+            }
             co_return group0_peer_exchange{group0_info{
                 .group0_id = std::get<raft::group_id>(_group0),
                 .addr = _raft_gr.address_map().get_server_address(_raft_gr.group0().id())

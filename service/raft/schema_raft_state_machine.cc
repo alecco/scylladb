@@ -127,6 +127,7 @@ future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> comman
         auto schema_state_id = co_await _mm.get_schema_state_id(_qp);
         if (cmd.prev_state_id != utils::UUID{} && cmd.prev_state_id != schema_state_id) {
             // This command used obsolete state. Make it a no-op.
+slogger.error("schema raft cmd prev state id {} different than current state id {}", cmd.prev_state_id, schema_state_id); // XXX
             slogger.trace("schema raft cmd prev state id {} different than current state id {}", cmd.prev_state_id, schema_state_id);
             co_return;
         } else if (cmd.prev_state_id == utils::UUID{}) {

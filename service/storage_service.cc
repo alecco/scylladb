@@ -395,7 +395,7 @@ void storage_service::join_token_ring(int delay) {
         ss._joined = true;
     }).get();
 
-    _group0->join_group0().get();
+    _group0->join_group0().get();  // XXX this is safe
 
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
