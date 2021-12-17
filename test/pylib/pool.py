@@ -1,0 +1,50 @@
+import asyncio
+
+
+class Pool:
+    """Asynchronous object pool.
+    You need a pool of up to N objects, but objects should be created
+    on demand, so that if you use less, you don't create anything upfront.
+    If there is no object in the pool and all N objects are in use, you want
+    to wait until one of the object is returned to the pool. Expects a
+    builder async function to build a new object.
+
+    Usage example:
+    async def start_server():
+        return Server()
+    pool = Pool(4, start_server)
+    ...
+    async with pool.instance() as server:
+        await run_test(test, server)
+    """
+
+    def __init__(self, size, build):
+        assert(size >= 0 and callable(build))
+        self.pool = asyncio.Queue(size)
+        self.build = build
+        self.total = 0
+
+    async def get(self):
+        if self.pool.empty() and self.total < self.pool.maxsize:
+            try:
+                await self.pool.put(await self.build())
+            finally:
+                self.total += 1
+
+        return await self.pool.get()
+
+    async def put(self, obj):
+        await self.pool.put(obj)
+
+    def instance(self):
+        class Instance:
+            def __init__(self, pool):
+                self.pool = pool
+
+            async def __aenter__(self):
+                return await self.pool.get()
+
+            async def __aexit__(self, exc_type, exc, obj):
+                return await self.pool.put(obj)
+
+        return Instance(self)
