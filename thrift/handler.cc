@@ -869,6 +869,19 @@ public:
         });
     }
 
+    static future<std::string> execute_schema_command(distributed<service::migration_manager>& dmm, distributed<database>& db, std::function<future<std::vector<mutation>>(service::migration_manager&, database&)> ddl) {
+        auto func = [ddl, &dmm] (database& db) -> future<std::string> {
+            auto& mm = dmm.local();
+
+            co_await mm.schema_read_barrier();
+
+            co_await mm.announce(co_await ddl(mm, db));
+
+            co_return std::string(db.get_version().to_sstring());
+        };
+        co_return co_await db.invoke_on(0, func);
+    }
+
     void system_add_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
         service_permit permit = obtain_permit();
         with_cob(std::move(cob), std::move(exn_cob), [this, def = cf_def] () -> future<std::string> {
@@ -877,11 +890,7 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), cf_def.keyspace, auth::permission::CREATE);
 
-            auto func = [&] (database& db) -> future<std::string> {
-                auto& mm = t._query_processor.local().get_migration_manager();
-
-                co_await mm.schema_read_barrier();
-
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&cf_def] (service::migration_manager& mm, database& db) -> future<std::vector<mutation>> {
                 if (!db.has_keyspace(cf_def.keyspace)) {
                     throw NotFoundException();
                 }
@@ -890,10 +899,8 @@ public:
                 }
 
                 auto s = schema_from_thrift(cf_def, cf_def.keyspace);
-                co_await mm.announce(co_await mm.prepare_new_column_family_announcement(std::move(s)));
-                co_return std::string(db.get_version().to_sstring());
-            };
-            co_return co_await t._db.invoke_on(0, func);
+                co_return co_await mm.prepare_new_column_family_announcement(std::move(s));
+            });
         });
     }
     void system_drop_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
@@ -902,11 +909,9 @@ public:
             auto& t = *this;
             auto column_family = cfm;
             co_await t._query_state.get_client_state().has_column_family_access(t._db.local(), t.current_keyspace(), column_family, auth::permission::DROP);
-            auto func = [&column_family, &current_keyspace = t.current_keyspace(), &t] (database& db) -> future<std::string> {
-                auto& mm = t._query_processor.local().get_migration_manager();
 
-                co_await mm.schema_read_barrier();
-
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db,
+                       [&column_family, &current_keyspace = t.current_keyspace()] (service::migration_manager& mm, database& db) -> future<std::vector<mutation>> {
                 auto& cf = db.find_column_family(current_keyspace, column_family);
                 if (cf.schema()->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
@@ -915,10 +920,8 @@ public:
                     throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views {}", column_family);
                 }
 
-                co_await mm.announce(co_await mm.prepare_column_family_drop_announcement(current_keyspace, column_family));
-                co_return std::string(db.get_version().to_sstring());
-            };
-            co_return co_await t._db.invoke_on(0, func);
+                co_return co_await mm.prepare_column_family_drop_announcement(current_keyspace, column_family);
+            });
         });
     }
 
@@ -929,18 +932,10 @@ public:
             auto ks_def = def;
 
             co_await t._query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE);
-            auto func = [&] (database& db) -> future<std::string> {
-                auto& mm = t._query_processor.local().get_migration_manager();
 
-                auto ksm = keyspace_from_thrift(ks_def);
-
-                co_await mm.schema_read_barrier();
-
-                co_await mm.announce(mm.prepare_new_keyspace_announcement(std::move(ksm)));
-                co_return std::string(db.get_version().to_sstring());
-            };
-
-            co_return co_await t._db.invoke_on(0, func);
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&ks_def] (service::migration_manager& mm, database& db) -> future<std::vector<mutation>> {
+                co_return mm.prepare_new_keyspace_announcement(keyspace_from_thrift(ks_def));
+            });
         });
     }
 
@@ -952,20 +947,14 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), keyspace, auth::permission::DROP);
 
-            auto func = [&] (database& db) -> future<std::string> {
-                auto& mm = t._query_processor.local().get_migration_manager();
-
-                co_await mm.schema_read_barrier();
-
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&keyspace] (service::migration_manager& mm, database& db) -> future<std::vector<mutation>> {
                 thrift_validation::validate_keyspace_not_system(keyspace);
                 if (!db.has_keyspace(keyspace)) {
                     throw NotFoundException();
                 }
 
-                co_await mm.announce(mm.prepare_keyspace_drop_announcement(keyspace));
-                co_return std::string(db.get_version().to_sstring());
-            };
-            co_return co_await t._db.invoke_on(0, func);
+                co_return mm.prepare_keyspace_drop_announcement(keyspace);
+            });
         });
     }
 
@@ -978,11 +967,7 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), ks_def.name, auth::permission::ALTER);
 
-            auto func = [&] (database& db) -> future<std::string> {
-                auto& mm = t._query_processor.local().get_migration_manager();
-
-                co_await mm.schema_read_barrier();
-
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&ks_def] (service::migration_manager& mm, database& db) -> future<std::vector<mutation>> {
                 if (db.has_keyspace(ks_def.name)) {
                     throw NotFoundException();
                 }
@@ -991,10 +976,8 @@ public:
                 }
 
                 auto ksm = keyspace_from_thrift(ks_def);
-                co_await mm.announce(mm.prepare_keyspace_update_announcement(std::move(ksm)));
-                co_return std::string(db.get_version().to_sstring());
-            };
-            co_return co_await t._db.invoke_on(0, func);
+                co_return mm.prepare_keyspace_update_announcement(std::move(ksm));
+            });
         });
     }
 
@@ -1006,11 +989,7 @@ public:
 
             co_await t._query_state.get_client_state().has_schema_access(t._db.local(), cf_def.keyspace, cf_def.name, auth::permission::ALTER);
 
-            auto func = [&] (database& db) -> future<std::string> {
-                auto& mm = t._query_processor.local().get_migration_manager();
-
-                co_await mm.schema_read_barrier();
-
+            co_return co_await execute_schema_command(t._query_processor.local().get_migration_manager().container(), _db, [&cf_def] (service::migration_manager& mm, database& db) -> future<std::vector<mutation>> {
                 auto& cf = db.find_column_family(cf_def.keyspace, cf_def.name);
                 auto schema = cf.schema();
 
@@ -1032,10 +1011,8 @@ public:
                 if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
                     fail(unimplemented::cause::MIXED_CF);
                 }
-                co_await mm.announce(co_await mm.prepare_column_family_update_announcement(std::move(s), true, std::vector<view_ptr>(), std::nullopt));
-                co_return std::string(db.get_version().to_sstring());
-            };
-            co_return co_await t._db.invoke_on(0, func);
+                co_return co_await mm.prepare_column_family_update_announcement(std::move(s), true, std::vector<view_ptr>(), std::nullopt);
+            });
         });
     }
 
