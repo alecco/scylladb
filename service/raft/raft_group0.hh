@@ -35,7 +35,7 @@ class raft_group0 {
 public:
     seastar::gate _shutdown_gate;
     seastar::abort_source& _abort_source;
-    raft_group_registry& _raft_gr;
+    raft_group_registry& _raft_gr;   // XXX get config from this group0()
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
     cql3::query_processor& _qp;
@@ -83,6 +83,9 @@ public:
 
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
+
+    // Return the currently known raft configuration
+    raft::configuration get_raft_config();
 };
 
 } // end of namespace service

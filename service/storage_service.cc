@@ -396,6 +396,22 @@ void storage_service::join_token_ring(int delay) {
     }).get();
 
     _group0->join_group0().get();  // XXX this is safe
+    bootstrap_wait();
+    // XXX call helper function
+    // [ ] get configuration
+    // [ ] find lower ids
+    //      std::unique_ptr<service::raft_group0> _group0;
+    //             raft_group_registry& _raft_gr;   // XXX get config from this group0()
+    while (true) {
+        // get server
+        raft::configuration cfg = _group0->get_raft_config();
+        for (auto &sa: cfg.current) {
+            // sleep + read barrier + try again (getting new config)
+            // sa.id;
+            // k: server address currently 2 parts {ip address; raft uuid}
+            // server_address.info deserialize, get IP
+        }
+    }
 
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
@@ -594,6 +610,8 @@ void storage_service::join_token_ring(int delay) {
     set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id);
 
     set_mode(mode::NORMAL, "node is now in normal status", true);
+
+    // XXX here issue modify config to become voter node in Raft
 
     if (get_token_metadata().sorted_tokens().empty()) {
         auto err = format("join_token_ring: Sorted token in token_metadata is empty");

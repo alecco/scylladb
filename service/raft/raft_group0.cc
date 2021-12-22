@@ -184,6 +184,8 @@ future<> raft_group0::join_group0() {
         co_return;
     }
     auto my_addr = co_await load_or_create_my_addr();
+    // Join as non-voter, enable voting after bootstrap
+    my_addr.can_vote = false;
     raft::group_id group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
     if (group0_id != raft::group_id{}) {
         rslog.trace("{} is starting group 0 with id {}", my_addr.id, group0_id);
@@ -194,7 +196,7 @@ future<> raft_group0::join_group0() {
     raft::server* server = nullptr;
     rslog.trace("{} found no local group 0. Discovering...", my_addr.id);
     while (true) {
-        auto g0_info = co_await discover_group0(my_addr);
+        auto g0_info = co_await discover_group0(my_addr);  // XXX discover
         rslog.trace("server {} found group 0 with id {}, leader {}", my_addr.id,
             g0_info.group0_id, g0_info.addr.id);
         if (server && group0_id != g0_info.group0_id) {
@@ -240,6 +242,10 @@ future<> raft_group0::join_group0() {
 
     _group0 = group0_id;
     rslog.info("{} joined group 0 with id {}", my_addr.id, group0_id);
+}
+
+raft::configuration raft_group0::get_raft_config() {
+    return _raft_gr.group0().get_configuration();
 }
 
 future<> raft_group0::leave_group0(std::optional<gms::inet_address> node) {
