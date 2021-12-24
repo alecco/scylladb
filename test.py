@@ -93,6 +93,7 @@ class TestSuite(ABC):
 
         self.run_first_tests = set(cfg.get("run_first", []))
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
+        self.skip_case_cache = set(cfg.get("skip_case_cache", []))
         # Skip tests disabled in suite.yaml
         self.disabled_tests = set(self.cfg.get("disable", []))
         # Skip tests disabled in specific mode.
@@ -223,14 +224,23 @@ class UnitTestSuite(TestSuite):
 class BoostTestSuite(UnitTestSuite):
     """TestSuite for boost unit tests"""
 
+    # A cache of individual test cases, for which we have called
+    # --list_content. Static to share across all modes.
+    _case_cache = dict()
+
     def __init__(self, path, cfg, options, mode):
         super().__init__(path, cfg, options, mode)
-        self._cases_cache = {'name': None, 'cases': []}
 
     def create_test(self, shortname, suite, args):
         options = suite.options
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
-            if self._cases_cache['name'] != shortname:
+            fqname = None
+            if shortname in self.skip_case_cache:
+                # Still useful to cache in specific mode in case --repeat is given
+                fqname = os.path.join(self.mode, self.name, shortname)
+            else:
+                fqname = os.path.join(self.name, shortname)
+            if fqname not in self._case_cache:
                 exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
                 cases = subprocess.run([exe, '--list_content'],
                                        stdout=subprocess.PIPE,
@@ -239,10 +249,9 @@ class BoostTestSuite(UnitTestSuite):
                                                 **{"ASAN_OPTIONS": "halt_on_error=0"}),
                                        check=True, universal_newlines=True).stderr
                 case_list = [case[:-1] for case in cases.splitlines() if case.endswith('*')]
-                self._cases_cache['name'] = shortname
-                self._cases_cache['cases'] = case_list
+                self._case_cache[fqname] = case_list
 
-            case_list = self._cases_cache['cases']
+            case_list = self._case_cache[fqname]
             if len(case_list) == 1:
                 test = BoostTest(self.next_id, shortname, suite, args, None)
                 self.tests.append(test)
@@ -736,7 +745,11 @@ def find_tests(options):
 
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
-            for mode in options.modes:
+            modes = options.modes
+            # First go over and dev mode tests to speed up case cache
+            # population.
+            modes.sort(key=lambda x: (x not in ['release', 'dev'], x))
+            for mode in modes:
                 suite = TestSuite.opt_create(f, options, mode)
                 suite.add_test_list()
 
@@ -750,6 +763,7 @@ def find_tests(options):
 
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
                  TestSuite.test_count(), options.repeat, options.jobs)
+    print("Found {} tests.".format(TestSuite.test_count()))
 
 
 async def run_all_tests(signaled, options):
