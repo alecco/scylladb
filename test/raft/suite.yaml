@@ -1,1 +1,4 @@
 type: boost
+skip_case_cache:
+    # Different list of cases in debug and release
+    - many_test
