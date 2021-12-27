@@ -87,6 +87,7 @@ raft_server_for_group raft_group0::create_server_for_group(raft::group_id gid,
 future<group0_info>
 raft_group0::discover_group0(raft::server_address my_addr) {
     std::vector<raft::server_address> seeds;
+rslog.trace("XXX seeds [{}] ", _gossiper.get_seeds().size());
     seeds.reserve(_gossiper.get_seeds().size());
     for (auto& seed : _gossiper.get_seeds()) {
         if (seed == _gossiper.get_broadcast_address()) {
@@ -179,9 +180,15 @@ future<> raft_group0::join_group0() {
     if (!_raft_gr.is_enabled()) {
         co_return;
     }
+
     auto my_addr = co_await load_or_create_my_addr();
+    // Join as non-voter, enable voting after bootstrap
+    // XXX what if first node?
+    my_addr.can_vote = false;
+// XXX maybe seeds can vote?
     raft::group_id group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
     if (group0_id != raft::group_id{}) {
+        // Node created the group id but crashed and did not join
         rslog.trace("{} is starting group 0 with id {}", my_addr.id, group0_id);
         co_await _raft_gr.start_server_for_group(create_server_for_group(group0_id, my_addr));
         _group0 = group0_id;
@@ -190,6 +197,7 @@ future<> raft_group0::join_group0() {
     raft::server* server = nullptr;
     rslog.trace("{} found no local group 0. Discovering...", my_addr.id);
     while (true) {
+rslog.trace("XXX loop 1");
         auto g0_info = co_await discover_group0(my_addr);
         rslog.trace("server {} found group 0 with id {}, leader {}", my_addr.id,
             g0_info.group0_id, g0_info.addr.id);
@@ -200,18 +208,25 @@ future<> raft_group0::join_group0() {
         }
         group0_id = g0_info.group0_id;
         if (server == nullptr) {
+rslog.trace("XXX loop 2 (server == nullptr)");
             // This is the first time the discovery is run.
             raft::configuration initial_configuration;
             if (g0_info.addr.id == my_addr.id) {
-                // We should start a new group.
+                // We should start a new group making us the sole voting member.
+                my_addr.can_vote = true;
                 initial_configuration.current.emplace(my_addr);
+                // XXX here make can vote for us
+rslog.trace("XXX loop 2 a (start a new group)");
             }
+else rslog.trace("XXX loop 2 b (no new group)");
             auto grp = create_server_for_group(group0_id, my_addr);
             server = grp.server.get();
             co_await grp.persistence.bootstrap(std::move(initial_configuration));
             co_await _raft_gr.start_server_for_group(std::move(grp));
         }
-        if (server->get_configuration().can_vote(my_addr.id)) {
+rslog.trace("XXX 3 {} ... can vote? {}", my_addr.id, server->get_configuration().contains(my_addr.id));
+        if (server->get_configuration().contains(my_addr.id)) {
+rslog.trace("XXX loop 4  RETURN");
             // True if we started a new group or completed a configuration change
             // initiated earlier.
             break;
@@ -222,15 +237,20 @@ future<> raft_group0::join_group0() {
         auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
         netw::msg_addr peer(raft_addr_to_inet_addr(g0_info.addr));
         try {
+rslog.trace("XXX loop 5");
             co_await _ms.send_group0_modify_config(peer, timeout, group0_id, add_set, {});
+rslog.trace("XXX loop 5  a");
             break;
         } catch (std::runtime_error& e) {
+rslog.trace("XXX loop 5  b");
             // Retry
             rslog.error("failed to modify config at peer {}: {}", g0_info.addr.id, e);
         }
+rslog.trace("XXX loop 6");
         // Try again after a pause
         co_await seastar::sleep_abortable(std::chrono::milliseconds{1000}, _abort_source);
     }
+rslog.trace("XXX loop 7");
     co_await db::system_keyspace::set_raft_group0_id(group0_id.id);
     // Allow peer_exchange() RPC to access group 0 only after group0_id is persisted.
 

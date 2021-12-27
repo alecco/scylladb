@@ -579,6 +579,9 @@ void storage_service::join_token_ring(int delay) {
 
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
+    // XXX here issue modify config to become voter node in Raft
+    // modify config
+
     if (get_token_metadata().sorted_tokens().empty()) {
         auto err = format("join_token_ring: Sorted token in token_metadata is empty");
         slogger.error("{}", err);
