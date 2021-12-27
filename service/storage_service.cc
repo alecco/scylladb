@@ -582,6 +582,7 @@ void storage_service::join_token_ring(int delay) {
     // start participating in the ring.
     set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id);
 
+    _group0->become_voter().get();
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
     if (get_token_metadata().sorted_tokens().empty()) {
