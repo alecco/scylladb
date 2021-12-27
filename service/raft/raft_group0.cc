@@ -56,6 +56,8 @@ seastar::future<raft::server_address> raft_group0::load_or_create_my_addr() {
         co_await db::system_keyspace::set_raft_server_id(my_addr.id.id);
     }
     my_addr.info = inet_addr_to_raft_addr(_gossiper.get_broadcast_address());
+    // Default join as non-voter (except first node creating group0)
+    my_addr.can_vote = false;
     co_return my_addr;
 }
 
@@ -190,6 +192,7 @@ future<> raft_group0::join_group0() {
     raft::server* server = nullptr;
     rslog.trace("{} found no local group 0. Discovering...", my_addr.id);
     while (true) {
+rslog.trace("XXX loop 1  can_vote {}", my_addr.can_vote);
         auto g0_info = co_await discover_group0(my_addr);
         rslog.trace("server {} found group 0 with id {}, leader {}", my_addr.id,
             g0_info.group0_id, g0_info.addr.id);
@@ -203,19 +206,25 @@ future<> raft_group0::join_group0() {
             // This is the first time the discovery is run.
             raft::configuration initial_configuration;
             if (g0_info.addr.id == my_addr.id) {
-                // We should start a new group.
+                // We should start a new group with this node as voter.
+                rslog.trace("server {} creating configuration as voter", my_addr.id);
+rslog.trace("XXX join_group0 leader can_vote");
+                my_addr.can_vote = true;
                 initial_configuration.current.emplace(my_addr);
             }
+else rslog.trace("XXX join_group0 not first");
             auto grp = create_server_for_group(group0_id, my_addr);
             server = grp.server.get();
             co_await grp.persistence.bootstrap(std::move(initial_configuration));
             co_await _raft_gr.start_server_for_group(std::move(grp));
         }
+rslog.trace("XXX loop 2  can_vote {}", my_addr.can_vote);
         if (server->get_configuration().contains(my_addr.id)) {
             // True if we started a new group or completed a configuration change
             // initiated earlier.
             break;
         }
+rslog.trace("XXX loop 3  can_vote {}", my_addr.can_vote);
         std::vector<raft::server_address> add_set;
         add_set.push_back(my_addr);
         auto pause_shutdown = _shutdown_gate.hold();
@@ -228,9 +237,11 @@ future<> raft_group0::join_group0() {
             // Retry
             rslog.error("failed to modify config at peer {}: {}", g0_info.addr.id, e);
         }
+rslog.trace("XXX loop 4  can_vote {}", my_addr.can_vote);
         // Try again after a pause
         co_await seastar::sleep_abortable(std::chrono::milliseconds{1000}, _abort_source);
     }
+rslog.trace("XXX loop 5  can_vote {}", my_addr.can_vote);
     co_await db::system_keyspace::set_raft_group0_id(group0_id.id);
     // Allow peer_exchange() RPC to access group 0 only after group0_id is persisted.
 
@@ -238,6 +249,24 @@ future<> raft_group0::join_group0() {
     rslog.info("{} joined group 0 with id {}", my_addr.id, group0_id);
 }
 
+future<> raft_group0::vote_group0() {
+    auto my_addr = co_await load_or_create_my_addr();
+rslog.trace("XXX vote_group0 can_vote {}, has group_id {}, group_id {}", my_addr.can_vote, std::holds_alternative<raft::group_id>(_group0), std::get<raft::group_id>(_group0));
+    if (std::holds_alternative<raft::group_id>(_group0)) {
+        if (!_raft_gr.get_server(std::get<raft::group_id>(_group0)).get_configuration().can_vote(my_addr.id)) {
+            std::vector<raft::server_address> add_set;
+            my_addr.can_vote = true;
+            add_set.push_back(my_addr);
+            auto pause_shutdown = _shutdown_gate.hold();
+rslog.trace("XXX vote_group0 marking voter");
+rslog.trace("XXX vote_group0 making voter");
+            // co_return
+            co_await _raft_gr.group0().modify_config(add_set, {});
+rslog.trace("XXX vote_group0 END can_vote {}", _raft_gr.get_server(std::get<raft::group_id>(_group0)).get_configuration().can_vote(my_addr.id));
+            co_return;
+        }
+    }
+}
 future<> raft_group0::leave_group0(std::optional<gms::inet_address> node) {
     if (!_raft_gr.is_enabled()) {
         co_return;
