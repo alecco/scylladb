@@ -482,10 +482,14 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
         // Wait for a new slot to become available
         auto cfg = get_configuration().current;
         for (auto& addr : add) {
-            logger.trace("[{}] adding server {}", id(), addr.id);
-            auto [it, inserted] = cfg.insert(addr);
-            if (!inserted) {
-                logger.warn("[{}] the server {} already exists in configuration", id(), addr.id);
+            logger.trace("[{}] adding server {} as {}", id(), addr.id,
+                    addr.can_vote? "voter" : "non-voter");
+            auto it = cfg.find(addr);
+            if (it == cfg.end() || it->can_vote != addr.can_vote) {
+                cfg.insert(addr);
+            } else {
+                logger.warn("[{}] the server {} already exists in configuration as {}",
+                        id(), addr.id, addr.can_vote? "voter" : "non-voter");
             }
         }
         for (auto& to_remove: del) {
