@@ -70,6 +70,9 @@ struct server_address {
     server_id id;
     bool can_vote = true;
     server_info info;
+    bool same(const server_address& rhs) const {
+        return id == rhs.id && can_vote == rhs.can_vote;
+    }
     bool operator==(const server_address& rhs) const {
         return id == rhs.id;
     }
