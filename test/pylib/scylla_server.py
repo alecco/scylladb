@@ -1,9 +1,11 @@
-import logging 
+import asyncio
+import logging
 import os
 import pathlib
+import re
 import shutil
+import time
 import uuid
-import asyncio
 
 SCYLLA_CONF_TEMPLATE = """cluster_name: {cluster_name}
 developer_mode: true
@@ -35,7 +37,6 @@ class ScyllaServer:
         self.exe = os.path.abspath(exe)
         self.tmpdir = tmpdir
         self.hosts = hosts
-        self._is_running = False
         self.cfg = {
             "cluster_name": None,
             "host": None,
@@ -45,15 +46,7 @@ class ScyllaServer:
             "ring_delay_ms": 0,
             "smp": 2,
         }
-#       log_file_name    string
-#       config_file_name string
-#       cmd            *exec.cmd
-#       log_file        *os.file
-#
-#
-#    def mode_name():
-#        return "single"
-#
+
     async def start(self):
         await self.install()
 
@@ -65,7 +58,12 @@ class ScyllaServer:
 
     @property
     def is_running(self):
-        return self._is_running;
+        return self.cmd is not None;
+
+
+    @property
+    def host(self):
+        return self.cfg["host"]
 
     def find_scylla_executable(self):
         if not os.access(self.exe, os.X_OK):
@@ -86,10 +84,12 @@ class ScyllaServer:
 
         self.log_file_name = os.path.join(self.tmpdir, self.cfg["host"]+".log")
 
-        # SCYLLA_CONF env variable would be better called SCYLLA_CONF_DIR 
+        # SCYLLA_CONF env variable would be better called SCYLLA_CONF_DIR
         # variable, the configuration file name is assumed to be scylla.yaml
         self.config_file_name = os.path.join(self.cfg["workdir"], "scylla.yaml")
 
+        # Cleanup any remains of the previously running server in this path
+        shutil.rmtree(self.cfg["workdir"])
         pathlib.Path(self.cfg["workdir"]).mkdir(parents=True, exist_ok=True)
         # Create a configuration file. Unfortunately, Scylla can't start without
         # one. Since we have to create a configuration file, let's avoid
@@ -102,40 +102,22 @@ class ScyllaServer:
 
         self.log_file = open(self.log_file_name, "wb")
 
-#
-#        var log_file *os.File
-#        if log_file, err = os.open_file(self.log_file_name,
-#                os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644); err != nil
-#
-#                return err
-#
-#        # Open another file descriptor to ensure its position is not advanced
-#        # by writes
-#        if self.log_file, err = os.Open(self.log_file_name); err != nil
-#                return err
-#
-#        cmd := exec.Command(self.exe, fmt.Sprintf("--smp=%d", self.cfg.SMP), "--experimental-features=raft", "--default-log-level=trace")
-#        cmd.Dir = self.cfg.Dir
-#        cmd.Env = append(cmd.Env, fmt.Sprintf("SCYLLA_CONF=%s", self.cfg.Dir))
-#        cmd.Stdout = log_file
-#        cmd.Stderr = log_file
-#
-#        self.cmd = cmd
-#
-#
-#    def find_log_file_pattern(file, pattern):
-#        pattern_r_e = regexp.must_compile(pattern)
-#        scanner = bufio.new_scanner(file)
-#        for scanner.Scan():
-#            if pattern_r_e.Match(scanner.Bytes()):
-#                return true
-#
-#        return false
-#
-#
-    async def do_start(self):
-#        START_TIMEOUT = 300 * time.Second
+    def find_log_file_pattern(self, fil, pattern):
+        pattern_r_e = re.compile(pattern)
+        while True:
+            line = fil.readline()
+            if not line:
+                return False 
+            elif pattern_r_e.match(line):
+                return True
 
+
+    async def do_start(self):
+        START_TIMEOUT = 300 # seconds
+
+        print("do_start()")
+
+        # "--experimental-features=raft", "--default-log-level=trace"
         args = ['-c', str(self.cfg["smp"]), self.exe, "--smp={}".format(self.cfg["smp"])]
         self.cmd = await asyncio.create_subprocess_exec(
             "taskset",
@@ -147,22 +129,41 @@ class ScyllaServer:
             preexec_fn=os.setsid,
         )
 
-#        start = time.Now()
-#        for _ = range time.Tick(time.Millisecond * 10):
-#            if find_log_file_pattern(self.log_file, "Scylla.*initialization completed")
-#                    break
-#
-#            if time.Now().Sub(start) > START_TIMEOUT
-#                    return merry.Errorf("failed to start self %s on lane %s, check server log at %s",
-#                            self.cfg.URI, lane.id, palette.Path(self.log_file_name))
-#
+        self.start_time = time.time()
+
+        with open(self.log_file_name, 'r') as log_file:
+            while time.time() < self.start_time + START_TIMEOUT:
+               print("checking the log file...")
+               if self.find_log_file_pattern(log_file, ".*Scylla.*initialization completed"):
+                   return
+               # Sleep 10 milliseconds and retry
+               await asyncio.sleep(0.05)
+
+        raise RuntimeError("failed to start server {}, check server log at {}".format(
+            self.host, self.log_file_name))
+
 
     async def stop(self):
         logging.info("Stopping server at host %s pid ?", self.cfg["host"])
-        logging.info("Stopped server at host %s", self.cfg["host"])
-        if self.cmd:
+        if not self.cmd:
+            return
+
+        try:
+            logging.info("Stopping server %d", self.cmd.pid)
             self.cmd.kill()
+        except ProcessLookupError:
+            pass
+        else:
+#        # 3 seconds is enough for a good database to die gracefully:
+#        # send SIGKILL if SIGTERM doesn't reach its target
+#        timer := time.after_func(3*time.Second, func()
+#                syscall.Kill(self.cmd.Process.Pid, syscall.SIGKILL)
+#        )
+#        timer.Stop()
+#        self.cmd.Process.Wait()
             await self.cmd.wait()
+        finally:
+            logging.info("Stopped server %d", self.cmd.pid)
             self.cmd = None
 
     async def uninstall(self):
@@ -175,36 +176,3 @@ class ScyllaServer:
 
         await self.hosts.release_host(self.cfg["host"])
         self.cfg["host"] = None
-
-#
-#class ScyllaServerUninstallArtefact:
-#
-#    def __init__(server, lane):
-#        self.server = server 
-#        self.lane = lane
-#
-#
-#    def remove():
-#        os.remove_all(a.server.cfg.Dir)
-#        os.Remove(a.server.log_file_name)
-#
-#
-#class ScyllaServerStopArtefact:
-#
-#    def __init__(server, lane):
-#        self.cmd = cmd
-#        self.lane = lane
-#
-#    def remove():
-#        logging.info("Stopping server %d", a.cmd.Process.Pid)
-#        self.cmd.Process.Kill()
-#        # 3 seconds is enough for a good database to die gracefully:
-#        # send SIGKILL if SIGTERM doesn't reach its target
-#        timer := time.after_func(3*time.Second, func()
-#                syscall.Kill(self.cmd.Process.Pid, syscall.SIGKILL)
-#        )
-#        timer.Stop()
-#        self.cmd.Process.Wait()
-#        logging.info("Stopped server %d", a.cmd.Process.Pid)
-#
-#
