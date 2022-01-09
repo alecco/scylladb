@@ -349,7 +349,7 @@ class PythonTestSuite(TestSuite):
             await server.start()
             return server
 
-        self.servers = Pool(4, start_server)
+        self.servers = Pool(1, start_server)
 
     async def add_test(self, shortname):
         test = PythonTest(self.next_id, shortname, self)
@@ -583,7 +583,6 @@ class PythonTest(Test):
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["-o", "junit_family=xunit2",
-                     "--host={}".format("0.0.0.0"),
                      "--junit-xml={}".format(self.xmlout),
                      os.path.join(suite.path, shortname + ".py")]
 
@@ -594,8 +593,8 @@ class PythonTest(Test):
     async def run(self, options):
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
         async with self.suite.servers.instance() as server:
-            if server is None:
-                self.success = await run_test(self, options, gentle_kill=True, env=self.env)
+            self.args.append("--host={}".format(server.host))
+            self.success = await run_test(self, options)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
 
@@ -797,7 +796,7 @@ def parse_cmd_line():
             nr_cpus = multiprocessing.cpu_count()
         else:
             nr_cpus = int(subprocess.check_output(
-                ['taskset', '-c', args.cpus, 'python', '-c',
+                ['taskset', '-c', args.cpus, 'python3', '-c',
                  'import os; print(len(os.sched_getaffinity(0)))']))
 
         cpus_per_test_job = 1
