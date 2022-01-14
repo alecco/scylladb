@@ -22,10 +22,13 @@
 # require the same fixture, it can be set up only once - while still allowing
 # the user to run individual tests and automatically set up the fixtures they need.
 
-import pytest
-import boto3
-import requests
+from cassandra.auth import PlainTextAuthProvider
+from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
+from cassandra.policies import RoundRobinPolicy
 from util import create_test_table, is_aws
+import boto3
+import pytest
+import requests
 
 # When tests are run with HTTPS, the server often won't have its SSL
 # certificate signed by a known authority. So we will disable certificate
@@ -55,8 +58,10 @@ def pytest_addoption(parser):
     parser.addoption("--https", action="store_true",
         help="communicate via HTTPS protocol on port 8043 instead of HTTP when"
             " running against a local Scylla installation")
-    parser.addoption("--url", action="store",
-        help="communicate with given URL instead of defaults")
+    parser.addoption("--host", action="store",
+        help="communicate with given host instead of defaults")
+    parser.addoption('--port', action='store', default='9042',
+        help='CQL server port to connect to')
     parser.addoption("--runveryslow", action="store_true",
         help="run tests marked veryslow instead of skipping them")
 
@@ -91,12 +96,29 @@ def dynamodb(request):
         # requires us to specify dummy region and credential parameters,
         # otherwise the user is forced to properly configure ~/.aws even
         # for local runs.
-        if request.config.getoption('url') != None:
-            local_url = request.config.getoption('url')
+        if request.config.getoption('host') != None:
+            local_url = "http://" + request.config.getoption('host') + ":8000"
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
+
+        # Preconfigure authentication to use with alternator
+        # If we're running against Cassandra, quietly fail for now
+        profile = ExecutionProfile(
+            load_balancing_policy=RoundRobinPolicy(),
+            consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+            serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+            request_timeout = 120)
+        cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+            contact_points=[request.config.getoption('host')],
+            port=request.config.getoption('port'),
+            protocol_version=4,
+            auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
+        )
+        cql = cluster.connect()
+        cql.execute("INSERT INTO system_auth.roles (role, salted_hash) VALUES ('alternator', 'secret_pass')")
+
         return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
             config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
@@ -110,8 +132,8 @@ def dynamodbstreams(request):
         # requires us to specify dummy region and credential parameters,
         # otherwise the user is forced to properly configure ~/.aws even
         # for local runs.
-        if request.config.getoption('url') != None:
-            local_url = request.config.getoption('url')
+        if request.config.getoption('host') != None:
+            local_url = "http://" + request.config.getoption('host') + ":8000"
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
