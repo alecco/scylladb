@@ -267,7 +267,7 @@ def keyspace(request, cql):
     rstrategy = marker_rstrategy.args[0] if marker_rstrategy is not None else "SimpleStrategy"
     marker_rf = request.node.get_closest_marker("replication_factor")
     # TODO: pick default RF from number of available nodes
-    rf = marker_rf.args[0] if marker_rf is not None else 1
+    rf = marker_rf.args[0] if marker_rf is not None else 2
     ks = Keyspace(cql, rstrategy, rf, ntables)
     yield ks
     ks.drop()
@@ -275,20 +275,29 @@ def keyspace(request, cql):
 def test_multi_add_one_column(keyspace):
     keyspace.random_table.add_column()
 
+async def insert_rows(table, n):
+    for _ in range(n):
+        await table.insert_next()
+
+def test_xxx(cql):
+    # XXX
+    ret = cql.execute("SELECT data_center FROM system.local")
+    for r in ret:
+        print(f"XXX: {r}", file=sys.stderr)
+    raise Exception("XXX")
 
 @pytest.mark.ntables(1)
 def test_one_add_column_insert_100_drop_column(keyspace):
     col = keyspace.tables[0].add_column()
-    for _ in range(100):
-        keyspace.tables[0].insert_next()
+    insert_rows(keyspace.tables[0], 100)
     keyspace.tables[0].remove_column(col)
+    # XXX check
 
 
 def test_multi_add_column_insert_100_drop_column(keyspace):
     table = keyspace.random_table
     col = table.add_column()
-    for _ in range(100):
-        table.insert_next()
+    insert_rows(table, 100)
     table.remove_column(col)
 
 
