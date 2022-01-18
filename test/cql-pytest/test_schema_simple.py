@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
+import asyncio
 import pytest
 import itertools
 import logging
@@ -56,7 +57,7 @@ import uuid
 logger = logging.getLogger('schema-test')
 
 
-def cql_execute(cql, cql_query, parameters=None, log=True):
+async def cql_execute(cql, cql_query, parameters=None, log=True):
     if log:
         logger.debug(f"Running CQL: {cql_query}")
     print(f"XXX cql_execute(): cql_query={cql_query}, parameters={parameters}", file=sys.stderr)  # XXX
@@ -153,15 +154,15 @@ class Column():
 class Table():
     newid = itertools.count(start=1).__next__
 
-    def __init__(self, cql, keyspace, name=None, cols=None, pks=1):
+    def __init__(self, cql, keyspace_name, name=None, cols=None, pks=1):
         """Set up a new table definition from column definitions.
            If column definitions not specified pick a random number of columns with random types.
            By default first column is Primary Key (pk) or the first pks columns"""
         self.id = Table.newid()
         self.cql = cql
-        self.keyspace = keyspace
+        self.keyspace_name = keyspace_name
         self.name = name if name is not None else f"t_{self.id:04}"
-        self.full_name = keyspace + "." + self.name
+        self.full_name = keyspace_name + "." + self.name
         # TODO: assumes primary key is composed of first self.pks columns
         self.pks = pks
 
@@ -184,21 +185,22 @@ class Table():
         # Track inserted columns with [<seed value>, [value columns]]
         self.inserted = []
 
-    def create(self):
-        cql_execute(self.cql, f"CREATE TABLE {self.full_name} (" + ", ".join(c.cql for c in self.columns) +
+    async def create(self):
+        # XXX no fstring but %s ?
+        await cql_execute(self.cql, f"CREATE TABLE {self.full_name} (" + ", ".join(c.cql for c in self.columns) +
                     ", primary key(" + ",".join(c.name for c in self.columns[:self.pks]) + "))")
 
-    def drop(self):
-        cql_execute(self.cql, f"DROP TABLE {self.full_name}")
+    async def drop(self):
+        await cql_execute(self.cql, f"DROP TABLE {self.full_name}")
 
-    def add_column(self, col=None):
+    async def add_column(self, col=None):
         col = col if col is not None else Column()
-        cql_execute(self.cql, f"ALTER TABLE {self.full_name} ADD {col.cql}")
+        await cql_execute(self.cql, f"ALTER TABLE {self.full_name} ADD {col.cql}")
         self.columns.append(col)
         self.all_col_names = ", ".join([c.name for c in self.columns])
         self.valcol_names = ", ".join([self.columns[i].name for i in range(self.pks, len(self.columns))])
 
-    def remove_column(self, column=None):
+    async def remove_column(self, column=None):
         if column is None:
             pos = random.randint(self.pks + 1, len(self.columns) - 1)
             print(f"XXX remove_column rnd {pos}/{len(self.columns)}")  # XXX
@@ -211,34 +213,42 @@ class Table():
             pos = self.columns.index(column)
         assert pos > self.pks, f"Cannot remove PK column {pos} {col.name}"
         assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {pos} {col.name}"
-        cql_execute(self.cql, f"ALTER TABLE {self.full_name} DROP {col.name}")
+        await cql_execute(self.cql, f"ALTER TABLE {self.full_name} DROP {col.name}")
         del self.columns[pos]
         self.all_col_names = ", ".join([c.name for c in self.columns])
         self.valcol_names = ", ".join([self.columns[i].name for i in range(self.pks, len(self.columns))])
 
-    def insert_next(self):
-        cql_execute(self.cql, f"INSERT INTO {self.full_name} (" + self.all_col_names + ") VALUES (" +
+    async def insert_next(self):
+        # XXX make proper format args duh
+        await cql_execute(self.cql, f"INSERT INTO {self.full_name} (" + self.all_col_names + ") VALUES (" +
                     ", ".join(["%s"] * len(self.columns)) + ")", parameters=[c.nextval for c in self.columns])
-        cql_execute(self.cql, f"INSERT INTO {self.full_name} (" + self.all_col_names + ") VALUES (" +
 
     # TODO: insert random, track existing random values in column
 
 
-class Tables():
-    def __init__(self, cql, keyspace, tables=1, create=True):
-        if type(tables) is int:
-            self.tables = [Table(cql, keyspace) for _ in range(tables)]
-        else:
-            self.tables = tables
-        if create:
-            [t.create() for t in self.tables]
+class Keyspace():
+    newid = itertools.count(start=1).__next__
 
-    def drop_all(self):
+    def __init__(self, cql, replication_strategy, replication_factor, ntables):
+        self.id = Keyspace.newid()
+        self.name = f"ks_{self.id:04}"
+        self.replication_strategy = replication_strategy
+        self.replication_factor = replication_factor
+        self.tables = [Table(cql, self.name) for _ in range(ntables)]
+        self.cql = cql
+        self.create()
+
+    async def create(self):
+        await cql_execute(self.cql, f"CREATE KEYSPACE {self.name} WITH REPLICATION = {{ 'class' : '{self.replication_strategy}', 'replication_factor' : {self.replication_factor} }}")
+        [t.create() for t in self.tables]
+
+    async def drop(self):
         [t.drop() for t in self.tables]
+        await cql_execute(self.cql, f"DROP KEYSPACE {self.name}")
 
-    def drop_random(self):
+    async def drop_random_table(self):
         table = random.choice(self.tables)
-        table.drop()
+        await table.drop()
         return table
 
     @property
@@ -246,45 +256,46 @@ class Tables():
         return random.choice(self.tables)
 
 
-# Create a set of tables per test
+# "keyspace" fixture: Creates and returns a temporary keyspace to be
+# used in a test. The keyspace is created with RF=2
+# and destroyed after each test (not reused).
 @pytest.fixture()
-def table(cql, test_keyspace):
-    table = Table(cql, test_keyspace)
-    table.create()
-    yield table
-    table.drop()
+def keyspace(request, cql):
+    marker_tables = request.node.get_closest_marker("ntables")
+    ntables = marker_tables.args[0] if marker_tables is not None else 10
+    marker_rstrategy = request.node.get_closest_marker("replication_strategy")
+    rstrategy = marker_rstrategy.args[0] if marker_rstrategy is not None else "SimpleStrategy"
+    marker_rf = request.node.get_closest_marker("replication_factor")
+    # TODO: pick default RF from number of available nodes
+    rf = marker_rf.args[0] if marker_rf is not None else 1
+    ks = Keyspace(cql, rstrategy, rf, ntables)
+    yield ks
+    ks.drop()
+
+def test_multi_add_one_column(keyspace):
+    keyspace.random_table.add_column()
 
 
-# Create a set of tables per test
-@pytest.fixture()
-def tables_10(cql, test_keyspace):
-    tables = Tables(cql, test_keyspace, tables=10)
-    yield tables
-    tables.drop_all()
+@pytest.mark.ntables(1)
+def test_one_add_column_insert_100_drop_column(keyspace):
+    col = keyspace.tables[0].add_column()
+    for _ in range(100):
+        keyspace.tables[0].insert_next()
+    keyspace.tables[0].remove_column(col)
 
 
-def test_multi_add_one_column(cql, tables_10):
-    tables_10.random_table.add_column()
-
-
-def test_one_add_column_insert_100_drop_column(cql, table):
+def test_multi_add_column_insert_100_drop_column(keyspace):
+    table = keyspace.random_table
     col = table.add_column()
     for _ in range(100):
         table.insert_next()
     table.remove_column(col)
 
 
-def test_multi_add_column_insert_100_drop_column(cql, tables_10):
-    table = tables_10.random_table
-    col = table.add_column()
-    for _ in range(100):
-        tables_10.random_table.insert_next()
-    table.remove_column(col)
+@pytest.mark.ntables(1)
+def test_one_remove_one_column(keyspace):
+    keyspace.tables[0].remove_column()
 
 
-def test_one_remove_one_column(cql, table):
-    table.remove_column()
-
-
-def test_multi_remove_one_column(cql, tables_10):
-    tables_10.random_table.remove_column()
+def test_multi_remove_one_column(keyspace):
+    keyspace.random_table.remove_column()
