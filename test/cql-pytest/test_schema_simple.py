@@ -236,14 +236,13 @@ class Keyspace():
         self.replication_factor = replication_factor
         self.tables = [Table(cql, self.name) for _ in range(ntables)]
         self.cql = cql
-        self.create()
 
     async def create(self):
         await cql_execute(self.cql, f"CREATE KEYSPACE {self.name} WITH REPLICATION = {{ 'class' : '{self.replication_strategy}', 'replication_factor' : {self.replication_factor} }}")
-        [t.create() for t in self.tables]
+        [await t.create() for t in self.tables]
 
     async def drop(self):
-        [t.drop() for t in self.tables]
+        [await t.drop() for t in self.tables]
         await cql_execute(self.cql, f"DROP KEYSPACE {self.name}")
 
     async def drop_random_table(self):
@@ -260,51 +259,58 @@ class Keyspace():
 # used in a test. The keyspace is created with RF=2
 # and destroyed after each test (not reused).
 @pytest.fixture()
-def keyspace(request, cql):
+async def keyspace(request, cql):
     marker_tables = request.node.get_closest_marker("ntables")
     ntables = marker_tables.args[0] if marker_tables is not None else 10
     marker_rstrategy = request.node.get_closest_marker("replication_strategy")
     rstrategy = marker_rstrategy.args[0] if marker_rstrategy is not None else "SimpleStrategy"
     marker_rf = request.node.get_closest_marker("replication_factor")
     # TODO: pick default RF from number of available nodes
-    rf = marker_rf.args[0] if marker_rf is not None else 2
+    rf = marker_rf.args[0] if marker_rf is not None else 1
     ks = Keyspace(cql, rstrategy, rf, ntables)
+    await ks.create()
     yield ks
-    ks.drop()
-
-def test_multi_add_one_column(keyspace):
-    keyspace.random_table.add_column()
+    await ks.drop()
 
 async def insert_rows(table, n):
     for _ in range(n):
         await table.insert_next()
 
-def test_xxx(cql):
+@pytest.mark.asyncio
+async def test_multi_add_one_column(keyspace):
+    await keyspace.random_table.add_column()
+
+@pytest.mark.asyncio
+async def test_xxx(cql):
     # XXX
     ret = cql.execute("SELECT data_center FROM system.local")
     for r in ret:
         print(f"XXX: {r}", file=sys.stderr)
-    raise Exception("XXX")
+    # XXX Row(data_center='datacenter1')
 
+@pytest.mark.asyncio
 @pytest.mark.ntables(1)
-def test_one_add_column_insert_100_drop_column(keyspace):
-    col = keyspace.tables[0].add_column()
-    insert_rows(keyspace.tables[0], 100)
-    keyspace.tables[0].remove_column(col)
+async def test_one_add_column_insert_100_drop_column(keyspace):
+    col = await keyspace.tables[0].add_column()
+    await insert_rows(keyspace.tables[0], 100)
+    await keyspace.tables[0].remove_column(col)
     # XXX check
 
 
-def test_multi_add_column_insert_100_drop_column(keyspace):
+@pytest.mark.asyncio
+async def test_multi_add_column_insert_100_drop_column(keyspace):
     table = keyspace.random_table
-    col = table.add_column()
-    insert_rows(table, 100)
-    table.remove_column(col)
+    col = await table.add_column()
+    await insert_rows(table, 100)
+    await table.remove_column(col)
 
 
+@pytest.mark.asyncio
 @pytest.mark.ntables(1)
-def test_one_remove_one_column(keyspace):
-    keyspace.tables[0].remove_column()
+async def test_one_remove_one_column(keyspace):
+    await keyspace.tables[0].remove_column()
 
 
-def test_multi_remove_one_column(keyspace):
-    keyspace.random_table.remove_column()
+@pytest.mark.asyncio
+async def test_multi_remove_one_column(keyspace):
+    await keyspace.random_table.remove_column()
