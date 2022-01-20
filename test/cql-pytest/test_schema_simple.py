@@ -23,7 +23,12 @@ import random
 import sys  # XXX
 import uuid
 
+# Range for default initial table value columns
+MAX_INITIAL_VALUE_COLS = 5
+MIN_INITIAL_VALUE_COLS = 3
+
 # TODO:
+#   - CREATE INDEX
 #   - alter tables
 #       - change table properties
 #       - change compaction strategy
@@ -64,7 +69,7 @@ async def cql_execute(cql, cql_query, parameters=None, log=True):
     cql.execute(cql_query, parameters=parameters)
 
 
-class ColumnType():
+class ValueType():
     def nextval(self, seed):
         """Return next value for this type"""
         pass
@@ -74,7 +79,7 @@ class ColumnType():
         pass
 
 
-class IntType(ColumnType):
+class IntType(ValueType):
     def __init__(self):
         self.name = 'int'
 
@@ -85,7 +90,7 @@ class IntType(ColumnType):
         return random.random(a, b)
 
 
-class TextType(ColumnType):
+class TextType(ValueType):
     def __init__(self, length=10):
         self.length = length
         self.name = 'text'
@@ -97,7 +102,7 @@ class TextType(ColumnType):
         return "XXX"  # XXX
 
 
-class FloatType(ColumnType):
+class FloatType(ValueType):
     def __init__(self):
         self.name = 'float'
 
@@ -108,7 +113,7 @@ class FloatType(ColumnType):
         return random.random()
 
 
-class UUIDType(ColumnType):
+class UUIDType(ValueType):
     def __init__(self):
         self.name = 'uuid'
 
@@ -127,7 +132,6 @@ class Column():
         """A column definition.
            If no type given picks a simple type (no collection or user-defined)"""
         self.id = Column.newid()
-        self.next_count = itertools.count(start=1)
         if name is not None:
             self.name = name
         else:
@@ -142,9 +146,8 @@ class Column():
     def cql(self):
         return f"{self.name} {self.ctype.name}"
 
-    @property
-    def nextval(self):
-        return self.ctype.nextval(self.next_count.__next__())
+    def nextval(self, seed):
+        return self.ctype.nextval(seed)
 
     def rndv(self):
         return self.ctype.rndv()
@@ -174,15 +177,22 @@ class Table():
             self.columns = []
             print(f"XXX adding columns for table {self.full_name}", file=sys.stderr)
             # TODO: handle minimum amount of columns in tests
-            for i in range(random.randint(pks + 2, 4)):
+            for i in range(random.randint(pks + MIN_INITIAL_VALUE_COLS, MAX_INITIAL_VALUE_COLS)):
                 # create a column for each PK and at least 1 value column
                 self.columns.append(Column())
             logger.debug(f"XXX Table picked {len(self.columns)} random columns")
 
         self.all_col_names = ", ".join([c.name for c in self.columns])
-        self.valcol_names = ", ".join([self.columns[i].name for i in range(self.pks, len(self.columns))])
+        self.valcol_names = ", ".join([col.name for col in self.columns[:self.pks]])
 
-        # Track inserted columns with [<seed value>, [value columns]]
+        self.next_val_seed_count = itertools.count(start=1)
+        # Index id is independent from column id as columns might be re-indexed later
+        self.next_idx_id_count = itertools.count(start=1)
+
+        # Map of current indexes (idx_id:col_id)
+        self.indexes = {}
+
+        # Track inserted row with [<seed value>, [value columns]]
         self.inserted = []
 
     async def create(self):
@@ -201,27 +211,57 @@ class Table():
         self.valcol_names = ", ".join([self.columns[i].name for i in range(self.pks, len(self.columns))])
 
     async def remove_column(self, column=None):
+        # XXX what about index on the column?
         if column is None:
             pos = random.randint(self.pks + 1, len(self.columns) - 1)
-            print(f"XXX remove_column rnd {pos}/{len(self.columns)}")  # XXX
             col = self.columns[pos]
+            print(f"XXX remove_column rnd {col.name} {pos}/{len(self.columns)}")  # XXX
         elif type(column) is int:
             pos = column
             col = self.columns.index(column)
         else:
             col = column
             pos = self.columns.index(column)
-        assert pos > self.pks, f"Cannot remove PK column {pos} {col.name}"
+        assert pos >= self.pks, f"Cannot remove PK column {pos} {col.name}"
         assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {pos} {col.name}"
         await cql_execute(self.cql, f"ALTER TABLE {self.full_name} DROP {col.name}")
         del self.columns[pos]
         self.all_col_names = ", ".join([c.name for c in self.columns])
-        self.valcol_names = ", ".join([self.columns[i].name for i in range(self.pks, len(self.columns))])
+        self.valcol_names = ", ".join([col.name for col in self.columns[:self.pks]])
 
     async def insert_next(self):
-        # XXX make proper format args duh
-        await cql_execute(self.cql, f"INSERT INTO {self.full_name} (" + self.all_col_names + ") VALUES (" +
-                    ", ".join(["%s"] * len(self.columns)) + ")", parameters=[c.nextval for c in self.columns])
+        seed = self.next_val_seed_count.__next__()
+        await cql_execute(self.cql, f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
+                    "VALUES ({', '.join(['%s'] * len(self.columns)) })",
+                    parameters=[c.nextval(seed) for c in self.columns])
+
+    def idx_name(self, idx_id, col_id):
+        return f"{self.name}_{col_id:04}_{idx_id:04}"
+
+    async def create_index(self, column=None):
+        """Create a secondary index on a value column and return its id"""
+        if column is None:
+            col = self.columns[random.randint(self.pks, len(self.columns) - 1)]
+        elif type(column) is int:
+            assert column < len(self.columns), f"column {column} to index must be present"
+            assert column >= self.pks, f"column {column} to index must be a value column"
+            col = self.columns[column]
+        elif type(column) is Column:
+            assert column in self.columns, f"column {column.name} to index must be present"
+            assert self.columns.index(column) >= self.pks, "column to index must be present"
+
+        idx_id = self.next_idx_id_count.__next__()
+        await cql_execute(self.cql, f"CREATE INDEX {self.idx_name(idx_id, col.id)} ON {self.full_name} ({col.name})")
+        self.indexes[idx_id] = col.id
+        return idx_id
+
+    async def drop_index(self, idx_id=None):
+        if idx_id is None:
+            idx_id, col_id = self.indexes.popitem()  # random enough
+        else:
+            assert idx_id in self.indexes, "index to drop {idx_id} must exist"
+            col_id = self.indexes.pop(idx_id)
+        await cql_execute(self.cql, f"DROP INDEX {self.idx_name(idx_id, col.id)}")
 
     # TODO: insert random, track existing random values in column
 
@@ -280,13 +320,16 @@ async def insert_rows(table, n):
 async def test_multi_add_one_column(keyspace):
     await keyspace.random_table.add_column()
 
-@pytest.mark.asyncio
-async def test_xxx(cql):
-    # XXX
-    ret = cql.execute("SELECT data_center FROM system.local")
-    for r in ret:
-        print(f"XXX: {r}", file=sys.stderr)
-    # XXX Row(data_center='datacenter1')
+#@pytest.mark.ntables(1)
+#@pytest.mark.asyncio
+#async def test_xxx(cql, keyspace):
+#    # XXX
+#    #ret = cql.execute("SELECT data_center FROM system.local")
+#    #ret = cql.execute("DESCRIBE SCHEMA")
+#    #for r in ret:
+#    #    print(f"XXX: {r}", file=sys.stderr)
+#    # XXX Row(data_center='datacenter1')
+#    raise Exception("XXX")
 
 @pytest.mark.asyncio
 @pytest.mark.ntables(1)
@@ -306,11 +349,22 @@ async def test_multi_add_column_insert_100_drop_column(keyspace):
 
 
 @pytest.mark.asyncio
-@pytest.mark.ntables(1)
-async def test_one_remove_one_column(keyspace):
-    await keyspace.tables[0].remove_column()
+async def test_multi_remove_one_column(keyspace):
+    await keyspace.random_table.remove_column()
 
 
 @pytest.mark.asyncio
-async def test_multi_remove_one_column(keyspace):
-    await keyspace.random_table.remove_column()
+async def test_multi_add_remove_index(keyspace):
+    idx_id = await keyspace.random_table.create_index()
+
+
+# https://issues.apache.org/jira/browse/CASSANDRA-10250
+@pytest.mark.asyncio
+@pytest.mark.ntables(20)
+async def test_cassandra_issue_10250(keyspace):
+    # - Create 20 new tables
+    # - Drop 7 columns one at time across 20 tables
+    # - Add 7 columns one at time across 20 tables
+    # - Add one column index on each of the 7 columns on 20 tables
+    # XXX
+    await keyspace.tables[0].remove_column()
