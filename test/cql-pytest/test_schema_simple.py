@@ -169,15 +169,19 @@ class Table():
         # TODO: assumes primary key is composed of first self.pks columns
         self.pks = pks
 
-        if cols is not None:
+        if type(cols) is list:
             self.columns = cols
             assert pks < len(cols) + 1, f"Fewer columns {len(cols)} than needed {pks + 1}"
             logger.error(f"XXX Table got {len(self.columns)} pre-defined columns")
         else:
             self.columns = []
-            print(f"XXX adding columns for table {self.full_name}", file=sys.stderr)
+            if type(cols) is int:
+                ncols = cols
+            else:
+                ncols = random.randint(pks + MIN_INITIAL_VALUE_COLS, MAX_INITIAL_VALUE_COLS)
+            print(f"XXX adding {ncols} columns for table {self.full_name}", file=sys.stderr)
             # TODO: handle minimum amount of columns in tests
-            for i in range(random.randint(pks + MIN_INITIAL_VALUE_COLS, MAX_INITIAL_VALUE_COLS)):
+            for _ in range(ncols):
                 # create a column for each PK and at least 1 value column
                 self.columns.append(Column())
             logger.debug(f"XXX Table picked {len(self.columns)} random columns")
@@ -232,7 +236,7 @@ class Table():
     async def insert_next(self):
         seed = self.next_val_seed_count.__next__()
         await cql_execute(self.cql, f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
-                    "VALUES ({', '.join(['%s'] * len(self.columns)) })",
+                    f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
                     parameters=[c.nextval(seed) for c in self.columns])
 
     def idx_name(self, idx_id, col_id):
@@ -269,12 +273,12 @@ class Table():
 class Keyspace():
     newid = itertools.count(start=1).__next__
 
-    def __init__(self, cql, replication_strategy, replication_factor, ntables):
+    def __init__(self, cql, replication_strategy, replication_factor, ntables, ncols):
         self.id = Keyspace.newid()
         self.name = f"ks_{self.id:04}"
         self.replication_strategy = replication_strategy
         self.replication_factor = replication_factor
-        self.tables = [Table(cql, self.name) for _ in range(ntables)]
+        self.tables = [Table(cql, self.name, cols=ncols) for _ in range(ntables)]
         self.cql = cql
 
     async def create(self):
@@ -302,12 +306,14 @@ class Keyspace():
 async def keyspace(request, cql):
     marker_tables = request.node.get_closest_marker("ntables")
     ntables = marker_tables.args[0] if marker_tables is not None else 10
+    marker_ncols = request.node.get_closest_marker("ncols")
+    ncols = marker_ncols.args[0] if marker_ncols is not None else None
     marker_rstrategy = request.node.get_closest_marker("replication_strategy")
     rstrategy = marker_rstrategy.args[0] if marker_rstrategy is not None else "SimpleStrategy"
     marker_rf = request.node.get_closest_marker("replication_factor")
     # TODO: pick default RF from number of available nodes
     rf = marker_rf.args[0] if marker_rf is not None else 1
-    ks = Keyspace(cql, rstrategy, rf, ntables)
+    ks = Keyspace(cql, rstrategy, rf, ntables, ncols)
     await ks.create()
     yield ks
     await ks.drop()
