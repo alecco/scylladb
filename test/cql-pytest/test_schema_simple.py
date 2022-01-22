@@ -324,6 +324,16 @@ class Keyspace():
     def get_table(self, name):
         return next(t for t in self.tables if t.name == name)
 
+    def new_table(self, name):
+        raise Exception("Not implemented")
+        self.tables.append(Table())
+
+    def drop_table(self, name):
+        raise Exception("Not implemented")
+        pos, t = next((pos, t) for pos, t in enumerate(self.tables) if t.name = name)
+        del self.tables[pos]
+        self.removed_tables.append(t)
+
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in a test. The keyspace is created with RF=2
