@@ -177,7 +177,7 @@ class Table():
         if type(cols) is list:
             self.columns = cols
             assert pks < len(cols) + 1, f"Fewer columns {len(cols)} than needed {pks + 1}"
-            logger.error(f"XXX Table got {len(self.columns)} pre-defined columns")
+            print(f"XXX Table got {len(self.columns)} pre-defined columns", file=sys.stderr)
         else:
             self.columns = []
             if type(cols) is int:
@@ -189,7 +189,9 @@ class Table():
             for _ in range(ncols):
                 # create a column for each PK and at least 1 value column
                 self.columns.append(Column())
-            logger.debug(f"XXX Table picked {len(self.columns)} random columns")
+            print(f"XXX Table picked {len(self.columns)} random columns", file=sys.stderr)
+
+        self.removed_columns = []
 
         self.all_col_names = ", ".join([c.name for c in self.columns])
         self.valcol_names = ", ".join([col.name for col in self.columns[:self.pks]])
