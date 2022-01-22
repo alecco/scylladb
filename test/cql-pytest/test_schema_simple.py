@@ -243,7 +243,8 @@ class Table():
         assert pos >= self.pks, f"Cannot remove PK column {pos} {col.name}"
         assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {pos} {col.name}"
         await cql_execute(self.cql, f"ALTER TABLE {self.full_name} DROP {col.name}")
-        del self.columns[pos]
+        del self.columns[col]
+        self.removed_columns.append(col)
         self.all_col_names = ", ".join([c.name for c in self.columns])
         self.valcol_names = ", ".join([col.name for col in self.columns[:self.pks]])
         return col
