@@ -23,6 +23,11 @@ import random
 import sys  # XXX
 import uuid
 
+
+# XXX ?
+# # All test coroutines will be treated as marked.
+# pytestmark = pytest.mark.asyncio
+
 # Range for default initial table value columns
 MAX_INITIAL_VALUE_COLS = 5
 MIN_INITIAL_VALUE_COLS = 3
@@ -66,7 +71,7 @@ async def cql_execute(cql, cql_query, parameters=None, log=True):
     if log:
         logger.debug(f"Running CQL: {cql_query}")
     print(f"XXX cql_execute(): cql_query={cql_query}, parameters={parameters}", file=sys.stderr)  # XXX
-    cql.execute(cql_query, parameters=parameters)
+    return cql.execute(cql_query, parameters=parameters)
 
 
 class ValueType():
@@ -213,6 +218,7 @@ class Table():
         self.columns.append(col)
         self.all_col_names = ", ".join([c.name for c in self.columns])
         self.valcol_names = ", ".join([self.columns[i].name for i in range(self.pks, len(self.columns))])
+        return col
 
     async def remove_column(self, column=None):
         # XXX what about index on the column?
@@ -223,7 +229,13 @@ class Table():
         elif type(column) is int:
             pos = column
             col = self.columns.index(column)
+        elif type(column) is str:
+            try:
+                pos, col = next((pos, col) for pos, col in enumerate(self.columns) if col.name == column)
+            except StopIteration:
+                raise Exception(f"Column {column} not found in table {self.name}")
         else:
+            assert type(column) is Column, f"can not remove unknown type {type(column)}"
             col = column
             pos = self.columns.index(column)
         assert pos >= self.pks, f"Cannot remove PK column {pos} {col.name}"
@@ -232,22 +244,30 @@ class Table():
         del self.columns[pos]
         self.all_col_names = ", ".join([c.name for c in self.columns])
         self.valcol_names = ", ".join([col.name for col in self.columns[:self.pks]])
+        return col
 
     async def insert_next(self):
         seed = self.next_val_seed_count.__next__()
-        await cql_execute(self.cql, f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
+        return await cql_execute(self.cql, f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
                     f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
                     parameters=[c.nextval(seed) for c in self.columns])
 
     def idx_name(self, idx_id, col_id):
         return f"{self.name}_{col_id:04}_{idx_id:04}"
 
+    # TODO: custom index name (change tracking)
     async def create_index(self, column=None):
         """Create a secondary index on a value column and return its id"""
+        # XXX check if index already exists!
         if column is None:
             col = self.columns[random.randint(self.pks, len(self.columns) - 1)]
+        elif type(column) is str:
+            try:
+                col = next(col for col in self.columns if col.name == column)
+            except StopIteration:
+                raise Exception(f"Column {column} to index not found in table {self.name}")
         elif type(column) is int:
-            assert column < len(self.columns), f"column {column} to index must be present"
+            assert column < len(self.columns), f"column {column} to index not found in table {self.name}"
             assert column >= self.pks, f"column {column} to index must be a value column"
             col = self.columns[column]
         elif type(column) is Column:
@@ -298,6 +318,9 @@ class Keyspace():
     def random_table(self):
         return random.choice(self.tables)
 
+    def get_table(self, name):
+        return next(t for t in self.tables if t.name == name)
+
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in a test. The keyspace is created with RF=2
@@ -322,55 +345,111 @@ async def insert_rows(table, n):
     for _ in range(n):
         await table.insert_next()
 
-@pytest.mark.asyncio
-async def test_multi_add_one_column(keyspace):
-    await keyspace.random_table.add_column()
-
-#@pytest.mark.ntables(1)
-#@pytest.mark.asyncio
-#async def test_xxx(cql, keyspace):
-#    # XXX
-#    #ret = cql.execute("SELECT data_center FROM system.local")
-#    #ret = cql.execute("DESCRIBE SCHEMA")
-#    #for r in ret:
-#    #    print(f"XXX: {r}", file=sys.stderr)
-#    # XXX Row(data_center='datacenter1')
-#    raise Exception("XXX")
-
-@pytest.mark.asyncio
-@pytest.mark.ntables(1)
-async def test_one_add_column_insert_100_drop_column(keyspace):
-    col = await keyspace.tables[0].add_column()
-    await insert_rows(keyspace.tables[0], 100)
-    await keyspace.tables[0].remove_column(col)
-    # XXX check
-
-
-@pytest.mark.asyncio
-async def test_multi_add_column_insert_100_drop_column(keyspace):
-    table = keyspace.random_table
-    col = await table.add_column()
-    await insert_rows(table, 100)
-    await table.remove_column(col)
-
-
-@pytest.mark.asyncio
-async def test_multi_remove_one_column(keyspace):
-    await keyspace.random_table.remove_column()
-
-
-@pytest.mark.asyncio
-async def test_multi_add_remove_index(keyspace):
-    idx_id = await keyspace.random_table.create_index()
+# async def test_multi_add_one_column(keyspace):
+#     await keyspace.random_table.add_column()
+# 
+# #@pytest.mark.ntables(1)
+# #async def test_xxx(cql, keyspace):
+# #    # XXX
+# #    #ret = cql.execute("SELECT data_center FROM system.local")
+# #    #ret = cql.execute("DESCRIBE SCHEMA")
+# #    #for r in ret:
+# #    #    print(f"XXX: {r}", file=sys.stderr)
+# #    # XXX Row(data_center='datacenter1')
+# #    raise Exception("XXX")
+# 
+# @pytest.mark.ntables(1)
+# async def test_one_add_column_insert_100_drop_column(keyspace):
+#     col = await keyspace.tables[0].add_column()
+#     await insert_rows(keyspace.tables[0], 100)
+#     await keyspace.tables[0].remove_column(col)
+#     # XXX check
+# 
+# 
+# async def test_multi_add_column_insert_100_drop_column(keyspace):
+#     table = keyspace.random_table
+#     col = await table.add_column()
+#     await insert_rows(table, 100)
+#     await table.remove_column(col)
+# 
+# 
+# async def test_multi_remove_one_column(keyspace):
+#     await keyspace.random_table.remove_column()
+# 
+# 
+# async def test_multi_add_remove_index(keyspace):
+#     idx_id = await keyspace.random_table.create_index()
 
 
 # https://issues.apache.org/jira/browse/CASSANDRA-10250
-@pytest.mark.asyncio
-@pytest.mark.ntables(20)
-async def test_cassandra_issue_10250(keyspace):
-    # - Create 20 new tables
-    # - Drop 7 columns one at time across 20 tables
-    # - Add 7 columns one at time across 20 tables
-    # - Add one column index on each of the 7 columns on 20 tables
-    # XXX
-    await keyspace.tables[0].remove_column()
+# - Create 20 new tables
+# - Drop 7 columns one at time across 20 tables
+# - Add 7 columns one at time across 20 tables
+# - Add one column index on each of the 7 columns on 20 tables
+@pytest.mark.asyncio  # XXX needed?
+@pytest.mark.ntables(0)
+async def test_cassandra_issue_10250(event_loop, cql, keyspace):
+
+    assert len(keyspace.tables) == 0, "Keyspace not empty"
+    for n in range(20):
+        # alter_me: id uuid, s1 int, ..., s7 int
+        ta = Table(cql, keyspace.name, name=f"alter_me_{n}", cols=[Column(name="id", ctype=UUIDType),
+                    *[Column(name=f"s{i}", ctype=IntType) for i in range(1, 8)]])
+        await ta.create()
+        # index_me: id uuid, c1 int, ..., c7 int
+        ti = Table(cql, keyspace.name, name=f"index_me_{n}", cols=[Column(name="id", ctype=UUIDType),
+                    *[Column(name=f"c{i}", ctype=IntType) for i in range(1, 8)]])
+        await ti.create()
+        keyspace.tables.extend([ta, ti])
+
+    aws = []
+    for n in range(20):
+        tn = Table(cql, keyspace.name, name=f"new_table_{n}", cols=[Column(name="id", ctype=UUIDType),
+                    *[Column(name=f"s{i}", ctype=IntType) for i in range(1, 5)]])
+        aws.append(tn.create())  # XXX is this correct?
+        keyspace.tables.append(tn)
+        for a in range(1, 8):
+            # cmds.append(("alter table alter_me_{0} drop s{1};".format(n, a), ()))
+            aws.append(keyspace.get_table(f"alter_me_{n}").remove_column(f"s{a}"))
+
+            # cmds.append(("alter table alter_me_{0} add c{1} int;".format(n, a), ()))
+            aws.append(keyspace.get_table(f"alter_me_{n}").add_column(Column(name=f"c{a}", ctype=IntType)))
+
+            # cmds.append(("create index ix_index_me_{0}_c{1} on index_me_{0} (c{1});".format(n, a), ())
+            aws.append(keyspace.get_table(f"index_me_{n}").create_index(column=f"c{a}"))
+
+    #results = execute_concurrent(session, cmds, concurrency=100, raise_on_first_error=True)
+    # XXX XXX XXX run in executor? threads? processes?
+    res = await asyncio.gather(*aws)   # XXX is this correct?
+    print(f"XXX res {res}")
+
+    logger.debug("sleeping 20 to make sure things are settled")
+    await asyncio.sleep(20)
+
+    logger.debug(f"verifing schema status")
+    cql.cluster.refresh_schema_metadata()
+
+
+    #print(f"XXX keyspaces keys {cql.cluster.metadata.keyspaces.keys()} ks {keyspace.name}", file=sys.stderr) # XXX remove
+
+    table_meta = cql.cluster.metadata.keyspaces[keyspace.name].tables
+    errors = []
+    for n in range(20):
+        if "new_table_{0}".format(n) not in table_meta:
+            errors.append("table is missing: new_table_{0}".format(n))
+        if 7 != len(table_meta["index_me_{0}".format(n)].indexes):
+            errors.append("index_me_{0} expected indexes ix_index_me_c0->7, got: {1}".format(n, sorted(list(table_meta["index_me_{0}".format(n)].indexes))))
+        altered = table_meta["alter_me_{0}".format(n)]
+        for col in altered.columns:
+            if not col.startswith("c") and col != "id":
+                 errors.append("alter_me_{0} column[{1}] does not start with c and should have been dropped: {2}".format(n, col, sorted(list(altered.columns))))
+        if 8 != len(altered.columns):
+            errors.append("alter_me_{0} expected c1 -> c7, id, got: {1}".format(n, sorted(list(altered.columns))))
+
+    if 0 != len(errors):
+        print("Errors found:\n{0}".format("\n".join(errors)), file=sys.stderr)
+        logger.debug("Errors found:\n{0}".format("\n".join(errors)))
+    else:
+        print("No Errors found, try again", file=sys.stderr)
+        logger.debug("No Errors found, try again")
+    raise Exception("XXX") # XXX keep log
