@@ -230,7 +230,7 @@ class Table():
             print(f"XXX remove_column rnd {col.name} {pos}/{len(self.columns)}")  # XXX
         elif type(column) is int:
             pos = column
-            col = self.columns.index(column)
+            col = self.columns[column]
         elif type(column) is str:
             try:
                 pos, col = next((pos, col) for pos, col in enumerate(self.columns) if col.name == column)
