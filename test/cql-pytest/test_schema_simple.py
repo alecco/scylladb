@@ -432,6 +432,7 @@ def insert_rows(table, n):
 # - Add one column index on each of the 7 columns on 20 tables
 @pytest.mark.ntables(0)
 def test_cassandra_issue_10250(event_loop, thread_pool, cql, keyspace):
+    from cassandra.concurrent import execute_concurrent  # XXX will this clash with asyncio
 
     RANGE = 20
     for n in range(RANGE):
@@ -445,22 +446,33 @@ def test_cassandra_issue_10250(event_loop, thread_pool, cql, keyspace):
         ti.create()
         keyspace.tables.extend([ta, ti])
 
-    to_run = []
-    for n in range(RANGE):
-        tn = Table(cql, keyspace.name, name=f"new_table_{n}", cols=[Column(name="id", ctype=UUIDType),
-                    *[Column(name=f"s{i}", ctype=IntType) for i in range(1, 5)]])
-        to_run.append(tn.create)
-        for a in range(1, 8):
-            # cmds.append(("alter table alter_me_{0} drop s{1};".format(n, a), ()))
-            to_run.append(partial(keyspace.get_table(f"alter_me_{n}").remove_column, f"s{a}"))
+    if False:
+        to_run = []
+        for n in range(RANGE):
+            tn = Table(cql, keyspace.name, name=f"new_table_{n}", cols=[Column(name="id", ctype=UUIDType),
+                        *[Column(name=f"s{i}", ctype=IntType) for i in range(1, 5)]])
+            to_run.append(tn.create)
+            for a in range(1, 8):
+                # cmds.append(("alter table alter_me_{0} drop s{1};".format(n, a), ()))
+                to_run.append(partial(keyspace.get_table(f"alter_me_{n}").remove_column, f"s{a}"))
 
-            # cmds.append(("alter table alter_me_{0} add c{1} int;".format(n, a), ()))
-            to_run.append(partial(keyspace.get_table(f"alter_me_{n}").add_column, Column(name=f"c{a}", ctype=IntType)))
+                # cmds.append(("alter table alter_me_{0} add c{1} int;".format(n, a), ()))
+                to_run.append(partial(keyspace.get_table(f"alter_me_{n}").add_column, Column(name=f"c{a}", ctype=IntType)))
 
-            # cmds.append(("create index ix_index_me_{0}_c{1} on index_me_{0} (c{1});".format(n, a), ())
-            to_run.append(partial(keyspace.get_table(f"index_me_{n}").create_index, column=f"c{a}"))
+                # cmds.append(("create index ix_index_me_{0}_c{1} on index_me_{0} (c{1});".format(n, a), ())
+                to_run.append(partial(keyspace.get_table(f"index_me_{n}").create_index, column=f"c{a}"))
 
-    res = event_loop.run_until_complete(run_blocking_tasks(event_loop, thread_pool, to_run))
+            res = event_loop.run_until_complete(run_blocking_tasks(event_loop, thread_pool, to_run))
+    else:
+        cql.execute(f"use {keyspace.name}")
+        cmds = []
+        for n in range(20):
+            cmds.append(("create table new_table_{0} (id uuid primary key, c1 int, c2 int, c3 int, c4 int);".format(n), ()))
+            for a in range(1, 8):
+                cmds.append(("alter table alter_me_{0} drop s{1};".format(n, a), ()))
+                cmds.append(("alter table alter_me_{0} add c{1} int;".format(n, a), ()))
+                cmds.append(("create index ix_index_me_{0}_c{1} on index_me_{0} (c{1});".format(n, a), ()))
+        res = execute_concurrent(cql, cmds, concurrency=100, raise_on_first_error=True)
 
     logger.debug("sleeping 20 seconds to make sure things are settled")
     time.sleep(20)
