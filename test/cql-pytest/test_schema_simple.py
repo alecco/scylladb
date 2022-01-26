@@ -16,24 +16,24 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 import asyncio
+import concurrent.futures
 import pytest
+from functools import partial
 import itertools
 import logging
 import random
-import sys  # XXX
+import sys
+import threading
+import time
 import uuid
 
-
-# XXX ?
-# # All test coroutines will be treated as marked.
-# pytestmark = pytest.mark.asyncio
 
 # Range for default initial table value columns
 MAX_INITIAL_VALUE_COLS = 5
 MIN_INITIAL_VALUE_COLS = 3
 
 # TODO:
-#   - CREATE INDEX
+#
 #   - alter tables
 #       - change table properties
 #       - change compaction strategy
@@ -46,7 +46,6 @@ MIN_INITIAL_VALUE_COLS = 3
 #   - schema + topology changes
 #
 #   CHECK cols are same
-#
 #
 #  rebase against forced push
 
@@ -66,12 +65,22 @@ MIN_INITIAL_VALUE_COLS = 3
 
 logger = logging.getLogger('schema-test')
 
+@pytest.fixture()
+async def thread_pool():
+    return concurrent.futures.ThreadPoolExecutor()
 
-async def cql_execute(cql, cql_query, parameters=None, log=True):
-    if log:
-        logger.debug(f"Running CQL: {cql_query}")
-    print(f"XXX cql_execute(): cql_query={cql_query}, parameters={parameters}", file=sys.stderr)  # XXX
-    return cql.execute(cql_query, parameters=parameters)
+
+async def run_blocking_tasks(event_loop, executor, to_run):
+    blocking_tasks = [event_loop.run_in_executor(executor, f) for f in to_run]
+    completed, pending = await asyncio.wait(blocking_tasks)
+    return [t.result() for t in completed]
+
+
+def cql_execute(cql, cql_query, parameters=None):
+    logger.debug(f"Running CQL: {cql_query}")
+    #print(f"XXX cql_execute(): cql_query={cql_query}, parameters={parameters}", file=sys.stderr)  # XXX
+    ret = cql.execute(cql_query, parameters=parameters)
+    return ret
 
 
 class ValueType():
@@ -145,7 +154,7 @@ class Column():
             self.ctype = ctype()
         else:
             self.ctype = random.choice([IntType, TextType, FloatType, UUIDType])()
-        print(f"XXX new column {self.name} type {self.ctype.name}", file=sys.stderr)  # XXX
+        # print(f"XXX new column {self.name} type {self.ctype.name}", file=sys.stderr)  # XXX
 
     @property
     def cql(self):
@@ -177,7 +186,7 @@ class Table():
         if type(cols) is list:
             self.columns = cols
             assert pks < len(cols) + 1, f"Fewer columns {len(cols)} than needed {pks + 1}"
-            print(f"XXX Table got {len(self.columns)} pre-defined columns", file=sys.stderr)
+            # XXX print(f"XXX Table got {len(self.columns)} pre-defined columns", file=sys.stderr)
         else:
             self.columns = []
             if type(cols) is int:
@@ -206,52 +215,62 @@ class Table():
         # Track inserted row with [<seed value>, [value columns]]
         self.inserted = []
 
-    async def create(self):
+        self.lock = threading.Lock()
+
+    def create(self):
         # XXX no fstring but %s ?
-        await cql_execute(self.cql, f"CREATE TABLE {self.full_name} (" + ", ".join(c.cql for c in self.columns) +
+        cql_execute(self.cql, f"CREATE TABLE {self.full_name} (" + ", ".join(c.cql for c in self.columns) +
                     ", primary key(" + ",".join(c.name for c in self.columns[:self.pks]) + "))")
 
-    async def drop(self):
-        await cql_execute(self.cql, f"DROP TABLE {self.full_name}")
+    def drop(self):
+        cql_execute(self.cql, f"DROP TABLE {self.full_name}")
 
-    async def add_column(self, col=None):
+    def add_column(self, col=None):
         col = col if col is not None else Column()
-        await cql_execute(self.cql, f"ALTER TABLE {self.full_name} ADD {col.cql}")
-        self.columns.append(col)
-        self.all_col_names = ", ".join([c.name for c in self.columns])
-        self.valcol_names = ", ".join([self.columns[i].name for i in range(self.pks, len(self.columns))])
+        cql_execute(self.cql, f"ALTER TABLE {self.full_name} ADD {col.cql}")
+        with self.lock:
+            self.columns.append(col)
+            self.all_col_names = ", ".join([c.name for c in self.columns])
+            self.valcol_names = ", ".join([self.columns[i].name for i in range(self.pks, len(self.columns))])
         return col
 
-    async def remove_column(self, column=None):
-        # XXX what about index on the column?
-        if column is None:
-            pos = random.randint(self.pks + 1, len(self.columns) - 1)
-            col = self.columns[pos]
-            print(f"XXX remove_column rnd {col.name} {pos}/{len(self.columns)}")  # XXX
-        elif type(column) is int:
-            pos = column
-            col = self.columns[column]
-        elif type(column) is str:
-            try:
-                pos, col = next((pos, col) for pos, col in enumerate(self.columns) if col.name == column)
-            except StopIteration:
-                raise Exception(f"Column {column} not found in table {self.name}")
-        else:
-            assert type(column) is Column, f"can not remove unknown type {type(column)}"
-            col = column
-            pos = self.columns.index(column)
-        assert pos >= self.pks, f"Cannot remove PK column {pos} {col.name}"
-        assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {pos} {col.name}"
-        await cql_execute(self.cql, f"ALTER TABLE {self.full_name} DROP {col.name}")
-        del self.columns[col]
-        self.removed_columns.append(col)
-        self.all_col_names = ", ".join([c.name for c in self.columns])
-        self.valcol_names = ", ".join([col.name for col in self.columns[:self.pks]])
+    def remove_column(self, column=None):
+        with self.lock:
+            if column is None:
+                col = random.choice(self.columns)
+                print(f"XXX remove_column rnd {col.name} {pos}/{len(self.columns)}")  # XXX
+            elif type(column) is int:
+                assert column >= self.pks, f"Cannot remove PK column {pos} {col.name}"
+                col = self.columns[column]
+            elif type(column) is str:
+                try:
+                    col = next(col for col in self.columns if col.name == column)
+                except StopIteration:
+                    raise Exception(f"Column {column} not found in table {self.name}")
+            else:
+                assert type(column) is Column, f"can not remove unknown type {type(column)}"
+                assert column in self.columns, f"column {column.name} not present"
+                col = column
+            assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {pos} {col.name}"
+
+        cql_execute(self.cql, f"ALTER TABLE {self.full_name} DROP {col.name}")
+
+        try:
+            with self.lock:
+                self.columns.remove(col)
+        except Exception as exc:
+            with self.lock:
+                logger.error(f"remove_column UNSUCCESSFUL {exc}: col {col.name} {pos}/{len(self.columns)}")
+        with self.lock:
+            self.removed_columns.append(col)
+            self.all_col_names = ", ".join([c.name for c in self.columns])
+            self.valcol_names = ", ".join([col.name for col in self.columns[:self.pks]])
         return col
 
-    async def insert_next(self):
-        seed = self.next_val_seed_count.__next__()
-        return await cql_execute(self.cql, f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
+    def insert_next(self):
+        with self.lock:
+            seed = self.next_val_seed_count.__next__()
+        return cql_execute(self.cql, f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
                     f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
                     parameters=[c.nextval(seed) for c in self.columns])
 
@@ -259,36 +278,39 @@ class Table():
         return f"{self.name}_{col_id:04}_{idx_id:04}"
 
     # TODO: custom index name (change tracking)
-    async def create_index(self, column=None):
+    def create_index(self, column=None):
         """Create a secondary index on a value column and return its id"""
-        # XXX check if index already exists!
-        if column is None:
-            col = self.columns[random.randint(self.pks, len(self.columns) - 1)]
-        elif type(column) is str:
-            try:
-                col = next(col for col in self.columns if col.name == column)
-            except StopIteration:
-                raise Exception(f"Column {column} to index not found in table {self.name}")
-        elif type(column) is int:
-            assert column < len(self.columns), f"column {column} to index not found in table {self.name}"
-            assert column >= self.pks, f"column {column} to index must be a value column"
-            col = self.columns[column]
-        elif type(column) is Column:
-            assert column in self.columns, f"column {column.name} to index must be present"
-            assert self.columns.index(column) >= self.pks, "column to index must be present"
+        with self.lock:
+            # XXX check if index already exists!
+            if column is None:
+                col = self.columns[random.randint(self.pks, len(self.columns) - 1)]
+            elif type(column) is str:
+                try:
+                    col = next(col for col in self.columns if col.name == column)
+                except StopIteration:
+                    raise Exception(f"Column {column} to index not found in table {self.name}")
+            elif type(column) is int:
+                assert column < len(self.columns), f"column {column} to index not found in table {self.name}"
+                assert column >= self.pks, f"column {column} to index must be a value column"
+                col = self.columns[column]
+            elif type(column) is Column:
+                assert column in self.columns, f"column {column.name} to index must be present"
+                assert self.columns.index(column) >= self.pks, "column to index must be present"
 
-        idx_id = self.next_idx_id_count.__next__()
-        await cql_execute(self.cql, f"CREATE INDEX {self.idx_name(idx_id, col.id)} ON {self.full_name} ({col.name})")
-        self.indexes[idx_id] = col.id
+            idx_id = self.next_idx_id_count.__next__()
+        cql_execute(self.cql, f"CREATE INDEX {self.idx_name(idx_id, col.id)} ON {self.full_name} ({col.name})")
+        with self.lock:
+            self.indexes[idx_id] = col.id
         return idx_id
 
-    async def drop_index(self, idx_id=None):
-        if idx_id is None:
-            idx_id, col_id = self.indexes.popitem()  # random enough
-        else:
-            assert idx_id in self.indexes, "index to drop {idx_id} must exist"
-            col_id = self.indexes.pop(idx_id)
-        await cql_execute(self.cql, f"DROP INDEX {self.idx_name(idx_id, col.id)}")
+    def drop_index(self, idx_id=None):
+        with self.lock:
+            if idx_id is None:
+                idx_id, col_id = self.indexes.popitem()  # random enough
+            else:
+                assert idx_id in self.indexes, "index to drop {idx_id} must exist"
+                col_id = self.indexes.pop(idx_id)
+        cql_execute(self.cql, f"DROP INDEX {self.idx_name(idx_id, col.id)}")
 
     # TODO: insert random, track existing random values in column
 
@@ -303,43 +325,51 @@ class Keyspace():
         self.replication_factor = replication_factor
         self.tables = [Table(cql, self.name, cols=ncols) for _ in range(ntables)]
         self.cql = cql
+        self.lock = threading.Lock()
 
-    async def create(self):
-        await cql_execute(self.cql, f"CREATE KEYSPACE {self.name} WITH REPLICATION = {{ 'class' : '{self.replication_strategy}', 'replication_factor' : {self.replication_factor} }}")
-        [await t.create() for t in self.tables]
+    def create(self):
+        cql_execute(self.cql, f"CREATE KEYSPACE {self.name} WITH REPLICATION = {{ 'class' : '{self.replication_strategy}', 'replication_factor' : {self.replication_factor} }}")
 
-    async def drop(self):
-        [await t.drop() for t in self.tables]
-        await cql_execute(self.cql, f"DROP KEYSPACE {self.name}")
+    def create_tables(self):
+        [t.create() for t in self.tables]
 
-    async def drop_random_table(self):
-        table = random.choice(self.tables)
-        await table.drop()
+    def drop_tables(self):
+        [t.drop() for t in self.tables]
+
+    def drop(self):
+        cql_execute(self.cql, f"DROP KEYSPACE {self.name}")
+
+    def drop_random_table(self):
+        with self.lock:
+            table = random.choice(self.tables)
+        table.drop()
         return table
 
     @property
     def random_table(self):
-        return random.choice(self.tables)
+        with self.lock:
+            return random.choice(self.tables)
 
     def get_table(self, name):
-        return next(t for t in self.tables if t.name == name)
+        with self.lock:
+            return next(t for t in self.tables if t.name == name)
 
     def new_table(self, name):
         raise Exception("Not implemented")
-        self.tables.append(Table())
+        #self.tables.append(Table())
 
     def drop_table(self, name):
         raise Exception("Not implemented")
-        pos, t = next((pos, t) for pos, t in enumerate(self.tables) if t.name = name)
-        del self.tables[pos]
-        self.removed_tables.append(t)
+        #pos, t = next((pos, t) for pos, t in enumerate(self.tables) if t.name = name)
+        #del self.tables[pos]
+        #self.removed_tables.append(t)
 
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in a test. The keyspace is created with RF=2
 # and destroyed after each test (not reused).
 @pytest.fixture()
-async def keyspace(request, cql):
+def keyspace(event_loop, request, cql):
     marker_tables = request.node.get_closest_marker("ntables")
     ntables = marker_tables.args[0] if marker_tables is not None else 10
     marker_ncols = request.node.get_closest_marker("ncols")
@@ -350,13 +380,14 @@ async def keyspace(request, cql):
     # TODO: pick default RF from number of available nodes
     rf = marker_rf.args[0] if marker_rf is not None else 1
     ks = Keyspace(cql, rstrategy, rf, ntables, ncols)
-    await ks.create()
+    ks.create()
+    ks.create_tables()
     yield ks
-    await ks.drop()
+    ks.drop()
 
-async def insert_rows(table, n):
+def insert_rows(table, n):
     for _ in range(n):
-        await table.insert_next()
+        table.insert_next()
 
 # async def test_multi_add_one_column(keyspace):
 #     await keyspace.random_table.add_column()
@@ -399,70 +430,65 @@ async def insert_rows(table, n):
 # - Drop 7 columns one at time across 20 tables
 # - Add 7 columns one at time across 20 tables
 # - Add one column index on each of the 7 columns on 20 tables
-@pytest.mark.asyncio  # XXX needed?
 @pytest.mark.ntables(0)
-async def test_cassandra_issue_10250(event_loop, cql, keyspace):
+def test_cassandra_issue_10250(event_loop, thread_pool, cql, keyspace):
 
-    assert len(keyspace.tables) == 0, "Keyspace not empty"
-    for n in range(20):
+    RANGE = 20
+    for n in range(RANGE):
         # alter_me: id uuid, s1 int, ..., s7 int
         ta = Table(cql, keyspace.name, name=f"alter_me_{n}", cols=[Column(name="id", ctype=UUIDType),
                     *[Column(name=f"s{i}", ctype=IntType) for i in range(1, 8)]])
-        await ta.create()
+        ta.create()
         # index_me: id uuid, c1 int, ..., c7 int
         ti = Table(cql, keyspace.name, name=f"index_me_{n}", cols=[Column(name="id", ctype=UUIDType),
                     *[Column(name=f"c{i}", ctype=IntType) for i in range(1, 8)]])
-        await ti.create()
+        ti.create()
         keyspace.tables.extend([ta, ti])
 
-    aws = []
-    for n in range(20):
+    to_run = []
+    for n in range(RANGE):
         tn = Table(cql, keyspace.name, name=f"new_table_{n}", cols=[Column(name="id", ctype=UUIDType),
                     *[Column(name=f"s{i}", ctype=IntType) for i in range(1, 5)]])
-        aws.append(tn.create())  # XXX is this correct?
-        keyspace.tables.append(tn)
+        to_run.append(tn.create)
         for a in range(1, 8):
             # cmds.append(("alter table alter_me_{0} drop s{1};".format(n, a), ()))
-            aws.append(keyspace.get_table(f"alter_me_{n}").remove_column(f"s{a}"))
+            to_run.append(partial(keyspace.get_table(f"alter_me_{n}").remove_column, f"s{a}"))
 
             # cmds.append(("alter table alter_me_{0} add c{1} int;".format(n, a), ()))
-            aws.append(keyspace.get_table(f"alter_me_{n}").add_column(Column(name=f"c{a}", ctype=IntType)))
+            to_run.append(partial(keyspace.get_table(f"alter_me_{n}").add_column, Column(name=f"c{a}", ctype=IntType)))
 
             # cmds.append(("create index ix_index_me_{0}_c{1} on index_me_{0} (c{1});".format(n, a), ())
-            aws.append(keyspace.get_table(f"index_me_{n}").create_index(column=f"c{a}"))
+            to_run.append(partial(keyspace.get_table(f"index_me_{n}").create_index, column=f"c{a}"))
 
-    #results = execute_concurrent(session, cmds, concurrency=100, raise_on_first_error=True)
-    # XXX XXX XXX run in executor? threads? processes?
-    res = await asyncio.gather(*aws)   # XXX is this correct?
-    print(f"XXX res {res}")
+    res = event_loop.run_until_complete(run_blocking_tasks(event_loop, thread_pool, to_run))
 
-    logger.debug("sleeping 20 to make sure things are settled")
-    await asyncio.sleep(20)
+    logger.debug("sleeping 20 seconds to make sure things are settled")
+    time.sleep(20)
 
     logger.debug(f"verifing schema status")
     cql.cluster.refresh_schema_metadata()
 
-
-    #print(f"XXX keyspaces keys {cql.cluster.metadata.keyspaces.keys()} ks {keyspace.name}", file=sys.stderr) # XXX remove
-
     table_meta = cql.cluster.metadata.keyspaces[keyspace.name].tables
-    errors = []
-    for n in range(20):
-        if "new_table_{0}".format(n) not in table_meta:
-            errors.append("table is missing: new_table_{0}".format(n))
-        if 7 != len(table_meta["index_me_{0}".format(n)].indexes):
-            errors.append("index_me_{0} expected indexes ix_index_me_c0->7, got: {1}".format(n, sorted(list(table_meta["index_me_{0}".format(n)].indexes))))
-        altered = table_meta["alter_me_{0}".format(n)]
-        for col in altered.columns:
-            if not col.startswith("c") and col != "id":
-                 errors.append("alter_me_{0} column[{1}] does not start with c and should have been dropped: {2}".format(n, col, sorted(list(altered.columns))))
-        if 8 != len(altered.columns):
-            errors.append("alter_me_{0} expected c1 -> c7, id, got: {1}".format(n, sorted(list(altered.columns))))
+    missing_tables = [f"new_table_{n}" for n in range(RANGE) if f"new_table_{n}" not in table_meta]
+    if missing_tables:
+        print(f"Missing tables: {', '.join(missing_tables)}", file=sys.stderr)
+        logger.error(f"Missing tables: {', '.join(missing_tables)}")
 
-    if 0 != len(errors):
-        print("Errors found:\n{0}".format("\n".join(errors)), file=sys.stderr)
-        logger.debug("Errors found:\n{0}".format("\n".join(errors)))
+    not_indexed = [f"index_me_{n}" for n in range(RANGE) if len(table_meta[f"index_me_{n}"].indexes) != 7]
+    if not_indexed:
+        print(f"Not indexed tables: {', '.join(not_indexed)}", file=sys.stderr)
+        logger.error(f"Not indexed tables: {', '.join(not_indexed)}")
+
+    expected_cols = sorted(['id', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'])
+    errors = []
+    for n in range(RANGE):
+        altered = table_meta[f"alter_me_{n}"]
+        if sorted(altered.columns) != expected_cols:
+            errors.append(f"alter_me_{n}: {', '.join(list(altered.columns))}")
+
+    if errors:
+        logger.error("Errors found:\n{0}".format('\n'.join(errors)))
+        raise Exception("Schema errors found, check log")
     else:
-        print("No Errors found, try again", file=sys.stderr)
-        logger.debug("No Errors found, try again")
-    raise Exception("XXX") # XXX keep log
+        logger.error("No Errors found, try again")
+
