@@ -316,6 +316,8 @@ class CqlTestSuite(TestSuite):
         return "*_test.cql"
 
 
+
+
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
 
@@ -328,32 +330,44 @@ class PythonTestSuite(TestSuite):
             self.scylla_env = dict()
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
-        async def start_server():
-            server = ScyllaServer(
-                exe=self.scylla_exe,
-                vardir=self.options.tmpdir,
-                hosts=self.hosts,
-                cmdline_options=self.cfg.get("extra_scylla_cmdline_options", []))
+        topology = self.cfg.get("topology", { "class": "simple", "replication_factor": 1 })
 
-            async def stop_server():
-                if server.is_running:
-                    await server.stop()
+        self.start_server = self.topology_for_class(topology["class"], topology) 
 
-            async def uninstall_server():
-                await server.uninstall()
+        self.servers = Pool(cfg.get("pool_size", 2), self.start_server)
 
-            # Suite artefacts are removed when
-            # the entire suite ends successfully. If it
-            # fails, we'd like to keep the data dir. This
-            # is why uninstall_server is not an exit artefact.
-            self.artefacts.add_suite_artefact(self, stop_server)
-            self.artefacts.add_suite_artefact(self, uninstall_server)
-            self.artefacts.add_exit_artefact(stop_server)
 
-            await server.start()
-            return server
+    def topology_for_class(self, class_name, cfg):
+        if class_name.lower() == "simple" and cfg["replication_factor"] == 1:
+            async def start_server():
+                server = ScyllaServer(
+                    exe=self.scylla_exe,
+                    vardir=self.options.tmpdir,
+                    hosts=self.hosts,
+                    cmdline_options=self.cfg.get("extra_scylla_cmdline_options", []))
 
-        self.servers = Pool(cfg.get("pool_size", 2), start_server)
+                async def stop_server():
+                    if server.is_running:
+                        await server.stop()
+
+                async def uninstall_server():
+                    await server.uninstall()
+
+                # Suite artefacts are removed when
+                # the entire suite ends successfully. If it
+                # fails, we'd like to keep the data dir. This
+                # is why uninstall_server is not an exit artefact.
+                self.artefacts.add_suite_artefact(self, stop_server)
+                self.artefacts.add_suite_artefact(self, uninstall_server)
+                self.artefacts.add_exit_artefact(stop_server)
+
+                await server.start()
+                return server
+
+            return start_server
+        else:
+            raise RuntimeError("Unsupported topology name")
+
 
     async def add_test(self, shortname):
         test = PythonTest(self.next_id, shortname, self)
