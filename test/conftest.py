@@ -9,8 +9,20 @@ from cassandra.cluster import Cluster, ConsistencyLevel                  # type:
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from test.pylib.util import unique_name                                  # type: ignore
+import asyncio
 import pytest
 import ssl
+
+
+# Change default pytest-asyncio event_loop fixture scope to session to
+# allow async fixtures with scope larger than function.
+# See https://github.com/pytest-dev/pytest-asyncio/issues/68
+@pytest.fixture(scope="session")
+def event_loop(request):
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
