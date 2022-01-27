@@ -112,7 +112,7 @@ def this_dc(cql):
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
-@pytest.fixture(scope="session")
+@pytest.fixture()
 def test_keyspace(cql, this_dc):
     name = unique_name()
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
