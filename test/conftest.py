@@ -19,6 +19,11 @@ from cassandra.policies import RoundRobinPolicy                          # type:
 from test.pylib.util import unique_name                                  # type: ignore
 import pytest
 import ssl
+from typing import AsyncGenerator
+
+
+# Default initial values
+DEFAULT_DCRF = 3        # Replication Factor for this_dc
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -134,14 +139,14 @@ def cql_test_connection(cql, request):
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
-# "test_keyspace" fixture: Creates and returns a temporary keyspace to be
-# used in tests that need a keyspace. The keyspace is created with RF=1,
-# and automatically deleted at the end. We use scope="session" so that all
-# tests will reuse the same keyspace.
+
+# "keyspace" fixture: Creates and returns a temporary keyspace to be
+# used in tests that need a keyspace.  It's automatically dropped
+# at the end of the session. All tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-def test_keyspace(cql, this_dc):
+async def keyspace(request, cql, this_dc) -> AsyncGenerator:
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 1 }")
+    await cql.run_async(f"CREATE KEYSPACE {name} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', " +
+                        f"'{this_dc}' : '{DEFAULT_DCRF}' }}")
     yield name
-    cql.execute("DROP KEYSPACE " + name)
+    await cql.run_async("DROP KEYSPACE " + name)
