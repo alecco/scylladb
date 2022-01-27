@@ -35,6 +35,11 @@ import itertools
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 
+# Default initial tables per test
+DEFAULT_NTABLES = 2
+DEFAULT_NCOLUMNS = 4
+
+
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
@@ -139,19 +144,53 @@ def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 
+class Table():
+    newid = itertools.count(start=1).__next__
+
+    def __init__(self, cql, keyspace_name, ncolumns, name=None, pks=2):
+        """Set up a new table definition from column definitions.
+           If column definitions not specified pick a random number of columns with random types.
+           By default there will be 4 columns with first column as Primary Key"""
+        self.id = Table.newid()
+        self.cql = cql
+        self.keyspace_name = keyspace_name
+        self.name = name if name is not None else f"t_{self.id:02}"
+        self.full_name = keyspace_name + "." + self.name
+        # TODO: assumes primary key is composed of first self.pks columns
+        self.pks = pks
+
+        assert ncolumns > pks, "Not enough value columns provided"
+        self.next_clustering_id = itertools.count(start=1).__next__
+        self.next_value_id = itertools.count(start=1).__next__
+        # Primary key pk, clustering columns c_xx, value columns v_xx
+        self.columns = ["pk"]
+        self.columns += [f"c_{self.next_clustering_id():02}" for i in range(1, pks)]
+        self.columns += [f"v_{self.next_value_id():02}" for i in range(ncolumns - pks)]
+
+    async def create(self):
+        await self.cql.run_async(f"CREATE TABLE {self.full_name} (" + ", ".join(f"{c} text" for c in self.columns) +
+                                 ", primary key(" + ", ".join(c for c in self.columns[:self.pks]) + "))")
+
+    async def drop(self):
+        await self.cql.run_async(f"DROP TABLE {self.full_name}")
+
+
 class Keyspace():
     newid = itertools.count(start=1).__next__
 
-    def __init__(self, cql, this_dc):
+    def __init__(self, cql, this_dc, ntables, ncolumns):
         self.id = Keyspace.newid()
         self.name = f"ks_{self.id:04}"
         self.replication_strategy = 'NetworkTopologyStrategy'
         self.cql = cql
         self.this_dc = this_dc
+        self.new_table_id = itertools.count(start=1).__next__
+        self.tables = [Table(cql, self.name, ncolumns) for _ in range(ntables)]
 
     async def create(self):
         await self.cql.run_async(f"CREATE KEYSPACE {self.name} WITH REPLICATION = "
                                  f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : 3 }}")
+        [await t.create() for t in self.tables]
 
     async def drop(self):
         await self.cql.run_async(f"DROP KEYSPACE {self.name}")
@@ -162,7 +201,11 @@ class Keyspace():
 # and destroyed after each test (not reused).
 @pytest.fixture()
 async def keyspace(request, cql, this_dc):
-    ks = Keyspace(cql, this_dc)
+    marker_tables = request.node.get_closest_marker("ntables")
+    ntables = marker_tables.args[0] if marker_tables is not None else DEFAULT_NTABLES
+    marker_columns = request.node.get_closest_marker("ncolumns")
+    ncolumns = marker_tables.args[0] if marker_columns is not None else DEFAULT_NCOLUMNS
+    ks = Keyspace(cql, this_dc, ntables, ncolumns)
     await ks.create()
     yield ks
     await ks.drop()
