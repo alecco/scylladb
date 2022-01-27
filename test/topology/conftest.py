@@ -7,9 +7,6 @@
 # defines common test fixtures for all of them to use
 
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore
-from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
-from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
-from cassandra.policies import RoundRobinPolicy                          # type: ignore
 import pathlib
 import pytest
 import ssl
