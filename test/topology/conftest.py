@@ -160,7 +160,7 @@ class Keyspace():
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in a test. The keyspace is created with RF=2
 # and destroyed after each test (not reused).
-@pytest.fixture(scope="session")
+@pytest.fixture()
 def keyspace(request, cql, this_dc):
     ks = Keyspace(cql, this_dc)
     ks.create()
