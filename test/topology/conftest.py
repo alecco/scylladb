@@ -15,7 +15,6 @@ import sys
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 from pylib.util import random_string, unique_name
 
-
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
