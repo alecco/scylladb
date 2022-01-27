@@ -139,19 +139,49 @@ def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 
+class Table():
+    newid = itertools.count(start=1).__next__
+
+    def __init__(self, cql, keyspace_name, name=None, cols=4, pks=1):
+        """Set up a new table definition from column definitions.
+           If column definitions not specified pick a random number of columns with random types.
+           By default there will be 4 columns with first column as Primary Key"""
+        self.id = Table.newid()
+        self.cql = cql
+        self.keyspace_name = keyspace_name
+        self.name = name if name is not None else f"t_{self.id:02}"
+        self.full_name = keyspace_name + "." + self.name
+        # TODO: assumes primary key is composed of first self.pks columns
+        self.pks = pks
+
+        assert cols > pks, "Not enough value columns provided"
+        self.next_col_id = itertools.count(start=1).__next__
+        self.columns = [f"c_{self.next_col_id():02}" for i in range(cols)]
+
+    def create_cql(self):
+        return f"CREATE TABLE {self.full_name} (" + ", ".join(f"{c} int" for c in self.columns) + \
+                    ", primary key(" + ", ".join(c for c in self.columns[:self.pks]) + "))"
+
+    def drop_cql(self):
+        cql_execute(self.cql, f"DROP TABLE {self.full_name}")
+
+
 class Keyspace():
     newid = itertools.count(start=1).__next__
 
-    def __init__(self, cql, this_dc):
+    def __init__(self, cql, this_dc, ntables=2):
         self.id = Keyspace.newid()
         self.name = f"ks_{self.id:04}"
         self.replication_strategy = 'NetworkTopologyStrategy'
         self.cql = cql
         self.this_dc = this_dc
+        self.new_table_id = itertools.count(start=1).__next__
+        self.tables = [Table(cql, self.name) for _ in range(ntables)]
 
     async def create(self):
         await self.cql.run_async(f"CREATE KEYSPACE {self.name} WITH REPLICATION = "
                                  f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : 1 }}")
+        self.tables = [await self.cql.run_async(t.create_cql()) for t in self.tables]
 
     async def drop(self):
         await self.cql.run_async(f"DROP KEYSPACE {self.name}")
