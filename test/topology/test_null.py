@@ -29,3 +29,14 @@ async def test_delete_empty_string_key(cql, keyspace):
     # error that a "Key may not be empty":
     with pytest.raises(InvalidRequest, match='Key may not be empty'):
         await cql.run_async(f"DELETE FROM {keyspace.tables[0].full_name} WHERE pk='' AND c_01='{s}'")
+
+
+@pytest.mark.asyncio
+@pytest.mark.ntables(1)
+async def test_insert_one(cql, keyspace):
+    """Insert a row in a table"""
+    await keyspace.tables[0].insert_seq()
+    res = [row for row in await cql.run_async(f"SELECT * FROM {keyspace.tables[0].full_name} "
+                                              "WHERE pk='1' AND c_01='1'")]
+    assert len(res) == 1
+    assert list(res[0])[:2] == ['1', '1']
