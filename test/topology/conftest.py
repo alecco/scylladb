@@ -30,9 +30,13 @@ import pathlib
 import pytest
 import ssl
 import sys
+import itertools
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-from pylib.util import random_string, unique_name
+
+
+# Default initial values
+DEFAULT_DCRF = 3        # Replication Factor for this_dc
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -146,17 +150,36 @@ def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 
-# "test_keyspace" fixture: Creates and returns a temporary keyspace to be
-# used in tests that need a keyspace. The keyspace is created with RF=1,
-# and automatically deleted at the end. We use scope="session" so that all
-# tests will reuse the same keyspace.
+class Keyspace():
+    newid = itertools.count(start=1).__next__
+
+    def __init__(self, cql, this_dc, dc_rf):
+        self.id = Keyspace.newid()
+        self.name = f"ks_{self.id:04}"
+        self.replication_strategy = 'NetworkTopologyStrategy'
+        self.cql = cql
+        self.this_dc = this_dc
+        self.dc_rf = dc_rf
+
+    async def create(self):
+        await self.cql.run_async(f"CREATE KEYSPACE {self.name} WITH REPLICATION = "
+                                 f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : {self.dc_rf} }}")
+
+    async def drop(self):
+        await self.cql.run_async(f"DROP KEYSPACE {self.name}")
+
+
+# "keyspace" fixture: Creates and returns a temporary keyspace to be
+# used in a test. The keyspace is created with RF=2
+# and destroyed after each test (not reused).
 @pytest.fixture(scope="session")
-async def test_keyspace(cql, this_dc):
-    name = unique_name()
-    await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                        this_dc + "' : 3 }")
-    yield name
-    await cql.run_async("DROP KEYSPACE " + name)
+async def keyspace(request, cql, this_dc):
+    marker_dcrf = request.node.get_closest_marker("dc_rf")
+    dc_rf = marker_dcrf.args[0] if marker_dcrf is not None else DEFAULT_DCRF
+    ks = Keyspace(cql, this_dc, dc_rf)
+    await ks.create()
+    yield ks
+    await ks.drop()
 
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
