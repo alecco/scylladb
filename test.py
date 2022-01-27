@@ -616,6 +616,8 @@ class PythonTest(Test):
     async def run(self, options):
         async with self.suite.clusters.instance() as cluster:
             self.args.insert(0, "--host={}".format(cluster[0].host))
+            dc_rf = self.suite.cfg.get("topology", {}).get("replication_factor", 1)
+            self.args.insert(0, "--dc_rf={}".format(dc_rf))
             cluster[0].take_log_savepoint()
             self.success = await run_test(self, options)
             if not self.success:
