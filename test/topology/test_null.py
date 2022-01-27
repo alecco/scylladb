@@ -19,9 +19,9 @@ from cassandra.protocol import InvalidRequest
 from pylib.util import random_string, unique_name
 import pytest
 
-@pytest.fixture(scope="module")
-def table1(cql, test_keyspace):
-    table = test_keyspace + "." + unique_name()
+@pytest.fixture(scope="session")
+def table1(cql, keyspace):
+    table = keyspace.name + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (p text, c text, v text, primary key (p, c))")
     yield table
     cql.execute("DROP TABLE " + table)

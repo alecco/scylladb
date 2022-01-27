@@ -30,9 +30,9 @@ import pathlib
 import pytest
 import ssl
 import sys
+import itertools
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-from pylib.util import random_string, unique_name
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -139,17 +139,33 @@ def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 
-# "test_keyspace" fixture: Creates and returns a temporary keyspace to be
-# used in tests that need a keyspace. The keyspace is created with RF=1,
-# and automatically deleted at the end. We use scope="session" so that all
-# tests will reuse the same keyspace.
+class Keyspace():
+    newid = itertools.count(start=1).__next__
+
+    def __init__(self, cql, this_dc):
+        self.id = Keyspace.newid()
+        self.name = f"ks_{self.id:04}"
+        self.replication_strategy = 'NetworkTopologyStrategy'
+        self.cql = cql
+        self.this_dc = this_dc
+
+    def create(self):
+        self.cql.execute(f"CREATE KEYSPACE {self.name} WITH REPLICATION = "
+                         f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : 1 }}")
+
+    def drop(self):
+        self.cql.execute(f"DROP KEYSPACE {self.name}")
+
+
+# "keyspace" fixture: Creates and returns a temporary keyspace to be
+# used in a test. The keyspace is created with RF=2
+# and destroyed after each test (not reused).
 @pytest.fixture(scope="session")
-def test_keyspace(cql, this_dc):
-    name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 1 }")
-    yield name
-    cql.execute("DROP KEYSPACE " + name)
+def keyspace(request, cql, this_dc):
+    ks = Keyspace(cql, this_dc)
+    ks.create()
+    yield ks
+    ks.drop()
 
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
