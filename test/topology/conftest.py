@@ -34,6 +34,7 @@ import itertools
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
+DEFAULT_TABLES = 10
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
@@ -142,19 +143,30 @@ def this_dc(cql):
 class Keyspace():
     newid = itertools.count(start=1).__next__
 
-    def __init__(self, cql, this_dc):
+    def __init__(self, cql, this_dc, ntables):
         self.id = Keyspace.newid()
         self.name = f"ks_{self.id:04}"
         self.replication_strategy = 'NetworkTopologyStrategy'
         self.cql = cql
         self.this_dc = this_dc
+        self.new_table_id = itertools.count(start=1).__next__
+        self.ntables = ntables
 
     def create(self):
         self.cql.execute(f"CREATE KEYSPACE {self.name} WITH REPLICATION = "
                          f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : 1 }}")
+        self.tables = [self.create_table() for _ in range(self.ntables)]
 
     def drop(self):
         self.cql.execute(f"DROP KEYSPACE {self.name}")
+
+    def create_table(self, name=None):
+        table_name = name if name is not None else f"t_{self.new_table_id():04}"
+        self.cql.execute(f"CREATE TABLE {self.name}.{table_name} (p text, c text, v text, primary key (p, c))")
+        return table_name
+
+    def drop_table(self, table_name):
+        self.cql.execute(f"DROP TABLE {self.name}.{table_name}")
 
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
@@ -162,7 +174,9 @@ class Keyspace():
 # and destroyed after each test (not reused).
 @pytest.fixture()
 def keyspace(request, cql, this_dc):
-    ks = Keyspace(cql, this_dc)
+    marker_tables = request.node.get_closest_marker("ntables")
+    ntables = marker_tables.args[0] if marker_tables is not None else DEFAULT_TABLES
+    ks = Keyspace(cql, this_dc, ntables)
     ks.create()
     yield ks
     ks.drop()
