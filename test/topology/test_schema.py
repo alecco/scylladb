@@ -29,9 +29,10 @@ async def test_verify_schema(keyspace):
 @pytest.mark.ntables(0)
 async def test_new_table(cql, keyspace):
     table = await keyspace.create_table()
-    val = "'1'"
-    await cql.run_async(f"INSERT INTO {table.full_name} ({','.join(c for c in table.columns)})" +
-                        f"VALUES ({','.join([val] * len(table.columns))})")
+    await cql.run_async(f"INSERT INTO {table.full_name} ({','.join(c.name for c in table.columns)})" +
+                        f"VALUES ({', '.join(['%s'] * len(table.columns))})",
+                        parameters=[c.val(1) for c in table.columns])
+
     res = [row for row in await cql.run_async(f"SELECT * FROM {keyspace.tables[0].full_name} "
                                               "WHERE pk='1' AND c_01='1'")]
     assert len(res) == 1
