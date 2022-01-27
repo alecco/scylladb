@@ -74,6 +74,7 @@ fedora_packages=(
     python3-colorama
     python3-boto3
     python3-pytest
+    python3-pytest-asyncio
     python3-redis
     dnf-utils
     pigz
