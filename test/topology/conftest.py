@@ -23,8 +23,9 @@
 # and automatically setting up the fixtures they need.
 
 from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
+from cassandra.cluster import Cluster, Session, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT, ResponseFuture
 from cassandra.policies import RoundRobinPolicy
+import asyncio
 import pathlib
 import pytest
 import ssl
@@ -44,6 +45,36 @@ def pytest_addoption(parser):
                      help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
+
+
+def _wrap_future(f: ResponseFuture):
+    """Wrap a cassandra Future into an asyncio.Future object.
+
+    Args:
+        f: future to wrap
+
+    Returns:
+        And asyncio.Future object which can be awaited.
+    """
+    loop = asyncio.get_event_loop()
+    aio_future = loop.create_future()
+
+    def on_result(result):
+        loop.call_soon_threadsafe(aio_future.set_result, result)
+
+    def on_error(exception, *_):
+        loop.call_soon_threadsafe(aio_future.set_exception, exception)
+
+    f.add_callback(on_result)
+    f.add_errback(on_error)
+    return aio_future
+
+
+def run_async(self, query, parameters=None):
+    return _wrap_future(self.execute_async(query=query, parameters=parameters))
+
+
+Session.run_async = run_async
 
 
 # "cql" fixture: set up client object for communicating with the CQL API.
