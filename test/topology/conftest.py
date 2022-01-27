@@ -28,9 +28,11 @@ from cassandra.policies import RoundRobinPolicy
 import asyncio
 import pathlib
 import pytest
+import random
 import ssl
 import sys
 import itertools
+import uuid
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 from pylib.util import random_string, unique_name
@@ -152,10 +154,64 @@ def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 
+class ValueType():
+    def val(self, seed):
+        """Return next value for this type"""
+        pass
+
+
+class IntType(ValueType):
+    def __init__(self):
+        self.name = 'int'
+
+    def val(self, seed):
+        return seed
+
+
+class TextType(ValueType):
+    def __init__(self):
+        self.name = 'text'
+
+    def val(self, seed):
+        return str(seed)
+
+
+class FloatType(ValueType):
+    def __init__(self):
+        self.name = 'float'
+
+    def val(self, seed):
+        return float(seed)
+
+
+class UUIDType(ValueType):
+    def __init__(self):
+        self.name = 'uuid'
+
+    def val(self, seed):
+        return uuid.UUID(f"{{00000000-0000-0000-0000-{seed:012}}}")
+
+
+class Column():
+    def __init__(self, name, ctype=None):
+        """A column definition.
+           If no type given picks a simple type (no collection or user-defined)"""
+        self.name = name
+        if ctype is not None:
+            self.ctype = ctype()
+        else:
+            self.ctype = random.choice([IntType, TextType, FloatType, UUIDType])()
+
+        self.cql = f"{self.name} {self.ctype.name}"
+
+    def val(self, seed):
+        return self.ctype.val(seed)
+
+
 class Table():
     newid = itertools.count(start=1).__next__
 
-    def __init__(self, cql, keyspace, ncolumns, pks=2, name=None):
+    def __init__(self, cql, keyspace, ncolumns=None, columns=None, pks=2, name=None):
         """Set up a new table definition from column definitions.
            If column definitions not specified pick a random number of columns with random types.
            By default there will be 4 columns with first column as Primary Key"""
@@ -164,20 +220,28 @@ class Table():
         self.keyspace = keyspace
         self.name = name if name is not None else f"t_{self.id:02}"
         self.full_name = keyspace + "." + self.name
+        self.next_clustering_id = itertools.count(start=1).__next__
+        self.next_value_id = itertools.count(start=1).__next__
         # TODO: assumes primary key is composed of first self.pks columns
         self.pks = pks
 
-        assert ncolumns > pks, "Not enough value columns provided"
-        self.next_clustering_id = itertools.count(start=1).__next__
-        self.next_value_id = itertools.count(start=1).__next__
-        # Primary key pk, clustering columns c_xx, value columns v_xx
-        self.columns = ["pk"]
-        self.columns += [f"c_{self.next_clustering_id():02}" for i in range(1, pks)]
-        self.columns += [f"v_{self.next_value_id():02}" for i in range(ncolumns - pks)]
+        if columns is not None:
+            assert len(columns) > pks, "Not enough value columns provided"
+            self.columns = columns
+        else:
+            assert ncolumns > pks, "Not enough value columns provided"
+            # Primary key pk, clustering columns c_xx, value columns v_xx
+            self.columns = [Column("pk", ctype=TextType)]
+            self.columns += [Column(f"c_{self.next_clustering_id():02}", ctype=TextType) for i in range(1, pks)]
+            self.columns += [Column(f"v_{self.next_value_id():02}") for i in range(1, ncolumns - pks + 1)]
+
+    @property
+    def all_col_names(self):
+        return ", ".join([c.name for c in self.columns])
 
     async def create(self):
-        await self.cql.run_async(f"CREATE TABLE {self.full_name} (" + ", ".join(f"{c} text" for c in self.columns) +
-                                 ", primary key(" + ", ".join(c for c in self.columns[:self.pks]) + "))")
+        await self.cql.run_async(f"CREATE TABLE {self.full_name} (" + ", ".join(f"{c.cql}" for c in self.columns) +
+                                 ", primary key(" + ", ".join(c.name for c in self.columns[:self.pks]) + "))")
 
     async def drop(self):
         await self.cql.run_async(f"DROP TABLE {self.full_name}")
@@ -192,8 +256,8 @@ class TestTables():
         self.tables = [Table(cql, keyspace, ncolumns) for _ in range(ntables)]
         self.removed_tables = []
 
-    def new_table(self, ncolumns=None, pks=2, name=None):
-        table = Table(self.cql, self.keyspace, ncolumns, pks=pks, name=name)
+    def new_table(self, ncolumns=None, columns=None, pks=2, name=None):
+        table = Table(self.cql, self.keyspace, ncolumns=ncolumns, columns=columns, pks=pks, name=name)
         self.tables.append(table)
         return table
 
