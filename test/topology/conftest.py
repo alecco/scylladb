@@ -23,8 +23,9 @@
 # and automatically setting up the fixtures they need.
 
 from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
+from cassandra.cluster import Cluster, Session, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT, ResponseFuture
 from cassandra.policies import RoundRobinPolicy
+import asyncio
 import pathlib
 import pytest
 import ssl
@@ -51,6 +52,36 @@ def event_loop(request):
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
+
+
+def _wrap_future(f: ResponseFuture):
+    """Wrap a cassandra Future into an asyncio.Future object.
+
+    Args:
+        f: future to wrap
+
+    Returns:
+        And asyncio.Future object which can be awaited.
+    """
+    loop = asyncio.get_event_loop()
+    aio_future = loop.create_future()
+
+    def on_result(result):
+        loop.call_soon_threadsafe(aio_future.set_result, result)
+
+    def on_error(exception, *_):
+        loop.call_soon_threadsafe(aio_future.set_exception, exception)
+
+    f.add_callback(on_result)
+    f.add_errback(on_error)
+    return aio_future
+
+
+def run_async(self, *args, **kwargs):
+    return _wrap_future(self.execute_async(*args, **kwargs))
+
+
+Session.run_async = run_async
 
 
 # "cql" fixture: set up client object for communicating with the CQL API.
@@ -120,12 +151,12 @@ def this_dc(cql):
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-def test_keyspace(cql, this_dc):
+async def test_keyspace(cql, this_dc):
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 3 }")
+    await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
+                        this_dc + "' : 3 }")
     yield name
-    cql.execute("DROP KEYSPACE " + name)
+    await cql.run_async("DROP KEYSPACE " + name)
 
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
