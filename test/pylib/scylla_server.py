@@ -86,6 +86,17 @@ class ScyllaServer:
         }
         self.cmd = None
 
+        async def stop_server():
+            if self.is_running:
+                await self.stop()
+
+        async def uninstall_server():
+            await self.uninstall()
+
+        self.stop_artefact = stop_server
+        self.uninstall_artefact = uninstall_server
+
+
     async def start(self):
         await self.install()
 
