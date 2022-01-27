@@ -653,6 +653,8 @@ class PythonTest(Test):
     async def run(self, options):
         async with self.suite.clusters.instance() as cluster:
             self.args.insert(0, "--host={}".format(cluster[0].host))
+            dc_rf = self.suite.cfg.get("topology", {}).get("replication_factor", 1)
+            self.args.insert(0, "--dc_rf={}".format(dc_rf))
             try:
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
