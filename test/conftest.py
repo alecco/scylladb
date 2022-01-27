@@ -10,13 +10,20 @@
 # fixtures directly from test/pylib).
 #
 #
+import asyncio
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
+from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from test.pylib.util import unique_name                                  # type: ignore
 import pytest
 import ssl
+from typing import AsyncGenerator
+
+
+# Default initial values
+DEFAULT_DCRF = 3        # Replication Factor for this_dc
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -29,6 +36,47 @@ def pytest_addoption(parser):
                      help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
+
+
+# Change default pytest-asyncio event_loop fixture scope to session to
+# allow async fixtures with scope larger than function.
+# See https://github.com/pytest-dev/pytest-asyncio/issues/68
+@pytest.fixture(scope="session")
+def event_loop(request):
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+def _wrap_future(f: ResponseFuture) -> asyncio.Future:
+    """Wrap a cassandra Future into an asyncio.Future object.
+
+    Args:
+        f: future to wrap
+
+    Returns:
+        And asyncio.Future object which can be awaited.
+    """
+    loop = asyncio.get_event_loop()
+    aio_future = loop.create_future()
+
+    def on_result(result):
+        loop.call_soon_threadsafe(aio_future.set_result, result)
+
+    def on_error(exception, *_):
+        loop.call_soon_threadsafe(aio_future.set_exception, exception)
+
+    f.add_callback(on_result)
+    f.add_errback(on_error)
+    return aio_future
+
+
+def run_async(self, *args, **kwargs) -> asyncio.Future:
+    return _wrap_future(self.execute_async(*args, **kwargs))
+
+
+Session.run_async = run_async
+
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
@@ -91,14 +139,14 @@ def cql_test_connection(cql, request):
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
-# "test_keyspace" fixture: Creates and returns a temporary keyspace to be
-# used in tests that need a keyspace. The keyspace is created with RF=1,
-# and automatically deleted at the end. We use scope="session" so that all
-# tests will reuse the same keyspace.
+
+# "keyspace" fixture: Creates and returns a temporary keyspace to be
+# used in tests that need a keyspace.  It's automatically dropped
+# at the end of the session. All tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-def test_keyspace(cql, this_dc):
+async def keyspace(request, cql, this_dc) -> AsyncGenerator:
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 1 }")
+    await cql.run_async(f"CREATE KEYSPACE {name} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', " +
+                        f"'{this_dc}' : '{DEFAULT_DCRF}' }}")
     yield name
-    cql.execute("DROP KEYSPACE " + name)
+    await cql.run_async("DROP KEYSPACE " + name)
