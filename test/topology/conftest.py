@@ -37,6 +37,8 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 # Default initial values
 DEFAULT_DCRF = 3        # Replication Factor for this_dc
+DEFAULT_NTABLES = 2     # Initial tables
+DEFAULT_NCOLUMNS = 4    # Columns per table
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -143,23 +145,81 @@ def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 
+class Table():
+    newid = itertools.count(start=1).__next__
+
+    def __init__(self, cql, keyspace_name, ncolumns, name=None, pks=2):
+        """Set up a new table definition from column definitions.
+           If column definitions not specified pick a random number of columns with random types.
+           By default there will be 4 columns with first column as Primary Key"""
+        self.id = Table.newid()
+        self.cql = cql
+        self.keyspace_name = keyspace_name
+        self.name = name if name is not None else f"t_{self.id:02}"
+        self.full_name = keyspace_name + "." + self.name
+        # TODO: assumes primary key is composed of first self.pks columns
+        self.pks = pks
+
+        assert ncolumns > pks, "Not enough value columns provided"
+        self.next_clustering_id = itertools.count(start=1).__next__
+        self.next_value_id = itertools.count(start=1).__next__
+        # Primary key pk, clustering columns c_xx, value columns v_xx
+        self.columns = ["pk"]
+        self.columns += [f"c_{self.next_clustering_id():02}" for i in range(1, pks)]
+        self.columns += [f"v_{self.next_value_id():02}" for i in range(ncolumns - pks)]
+
+    async def create(self):
+        await self.cql.run_async(f"CREATE TABLE {self.full_name} (" + ", ".join(f"{c} text" for c in self.columns) +
+                                 ", primary key(" + ", ".join(c for c in self.columns[:self.pks]) + "))")
+
+    async def drop(self):
+        await self.cql.run_async(f"DROP TABLE {self.full_name}")
+
+
 class Keyspace():
     newid = itertools.count(start=1).__next__
 
-    def __init__(self, cql, this_dc, dc_rf):
+    def __init__(self, cql, this_dc, dc_rf, ntables, ncolumns):
         self.id = Keyspace.newid()
         self.name = f"ks_{self.id:04}"
         self.replication_strategy = 'NetworkTopologyStrategy'
         self.cql = cql
         self.this_dc = this_dc
         self.dc_rf = dc_rf
+        self.ncolumns = ncolumns
+        self.new_table_id = itertools.count(start=1).__next__
+        self.tables = [Table(cql, self.name, ncolumns) for _ in range(ntables)]
+        self.removed_tables = []
 
     async def create(self):
         await self.cql.run_async(f"CREATE KEYSPACE {self.name} WITH REPLICATION = "
-                                 f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : {self.dc_rf} }}")
+                                 f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : 3 }}")
+        [await t.create() for t in self.tables]
 
     async def drop(self):
         await self.cql.run_async(f"DROP KEYSPACE {self.name}")
+
+    async def create_table(self, table=None):
+        if table is None:
+            table = Table(self.cql, self.name, self.ncolumns)
+        elif type(table) is str:
+            table = Table(self.cql, self.name, self.ncolumns, name=table)
+        else:
+            assert type(table) is Table, f"Invalid table type {type(table)}"
+        await table.create()
+        self.tables.append(table)
+        return table
+
+    async def drop_table(self, table=None):
+        if table is None:
+            table = Table(self.cql, self.name, self.ncolumns)
+        elif type(table) is str:
+            table = Table(self.cql, self.name, self.ncolumns, name=table)
+        else:
+            assert type(table) is Table, f"Invalid table type {type(table)}"
+        await table.drop()
+        self.removed_tables.append(table)
+        return table
 
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
@@ -169,7 +229,11 @@ class Keyspace():
 async def keyspace(request, cql, this_dc):
     marker_dcrf = request.node.get_closest_marker("dc_rf")
     dc_rf = marker_dcrf.args[0] if marker_dcrf is not None else DEFAULT_DCRF
-    ks = Keyspace(cql, this_dc, dc_rf)
+    marker_tables = request.node.get_closest_marker("ntables")
+    ntables = marker_tables.args[0] if marker_tables is not None else DEFAULT_NTABLES
+    marker_columns = request.node.get_closest_marker("ncolumns")
+    ncolumns = marker_tables.args[0] if marker_columns is not None else DEFAULT_NCOLUMNS
+    ks = Keyspace(cql, this_dc, dc_rf, ntables, ncolumns)
     await ks.create()
     yield ks
     await ks.drop()
