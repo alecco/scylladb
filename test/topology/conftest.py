@@ -46,6 +46,13 @@ def pytest_addoption(parser):
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
 
 
+@pytest.fixture(scope="session")
+def event_loop(request):
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
 # --port options, and defaults to localhost and 9042, respectively.
