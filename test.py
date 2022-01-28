@@ -353,12 +353,18 @@ class PythonTestSuite(TestSuite):
         return server
 
     def topology_for_class(self, class_name, cfg):
-        if class_name.lower() == "simple" and cfg["replication_factor"] == 1:
-            async def start_server():
-                server = self.create_server()
-                await server.start()
-                return server
-            return start_server
+        if class_name.lower() == "simple":
+            replicas = int(cfg["replication_factor"])
+            cluster = []
+
+            async def start_simple():
+                for i in range(replicas):
+                    server = self.create_server()
+                    cluster.append(server)
+                    await server.start()
+                return cluster[0]
+
+            return start_simple
         else:
             raise RuntimeError("Unsupported topology name")
 
