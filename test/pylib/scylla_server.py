@@ -69,20 +69,20 @@ SCYLLA_CMDLINE_OPTIONS = [
 
 
 class ScyllaServer:
-    def __init__(self, exe=None, vardir=None, hosts=None,
-                 cmdline_options=None):
+    def __init__(self, exe=None, vardir=None, host_registry=None,
+                 cluster_name=None, seed=None, cmdline_options=None):
         self.exe = os.path.abspath(exe)
         self.vardir = vardir
-        self.hosts = hosts
+        self.host_registry = host_registry
         self.cmdline_options = cmdline_options
         self.cfg = {
-            "cluster_name": None,
+            "cluster_name": cluster_name,
             "host": None,
-            "workdir": None,
-            "seeds": None,
-            "skip_wait_for_gossip_to_settle": 0,
             "ring_delay_ms": 0,
+            "seeds": seed,
+            "skip_wait_for_gossip_to_settle": 0,
             "smp": 2,
+            "workdir": None,
         }
         self.cmd = None
 
@@ -124,10 +124,9 @@ class ScyllaServer:
 
         # Scylla assumes all instances of a cluster use the same port,
         # so each instance needs an own IP address.
-        self.cfg["cluster_name"] = str(uuid.uuid1())
-        self.cfg["host"] = await self.hosts.lease_host()
+        self.cfg["host"] = await self.host_registry.lease_host()
+        self.cfg["seeds"] = self.cfg.get("seeds") or self.cfg["host"]
         self.cfg["workdir"] = os.path.join(self.vardir, self.cfg["host"])
-        self.cfg["seeds"] = self.cfg["host"]
 
         logging.info("installing Scylla server in %s...", self.cfg["workdir"])
 
@@ -239,5 +238,6 @@ Check the log files:
 #        shutil.rmtree(self.cfg["workdir"])
 #        os.remove(self.log_file_name)
 
-        await self.hosts.release_host(self.cfg["host"])
+        await self.host_registry.release_host(self.cfg["host"])
         self.cfg["host"] = None
+

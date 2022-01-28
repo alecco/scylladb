@@ -116,7 +116,7 @@ def this_dc(cql):
 def test_keyspace(cql, this_dc):
     name = unique_name()
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 1 }")
+                this_dc + "' : 3 }")
     yield name
     cql.execute("DROP KEYSPACE " + name)
 

@@ -37,6 +37,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 import xml.etree.ElementTree as ET
 import yaml
 
@@ -316,8 +317,6 @@ class CqlTestSuite(TestSuite):
         return "*_test.cql"
 
 
-
-
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
 
@@ -332,15 +331,17 @@ class PythonTestSuite(TestSuite):
 
         topology = self.cfg.get("topology", { "class": "simple", "replication_factor": 1 })
 
-        self.start_server = self.topology_for_class(topology["class"], topology) 
+        self.create_cluster = self.topology_for_class(topology["class"], topology) 
 
-        self.servers = Pool(cfg.get("pool_size", 2), self.start_server)
+        self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
 
-    def create_server(self):
+    def create_server(self, cluster_name, seed):
         server = ScyllaServer(
             exe=self.scylla_exe,
             vardir=self.options.tmpdir,
-            hosts=self.hosts,
+            host_registry=self.hosts,
+            cluster_name=cluster_name,
+            seed=seed,
             cmdline_options=self.cfg.get("extra_scylla_cmdline_options", []))
 
         # Suite artefacts are removed when
@@ -353,16 +354,18 @@ class PythonTestSuite(TestSuite):
         return server
 
     def topology_for_class(self, class_name, cfg):
+
         if class_name.lower() == "simple":
             replicas = int(cfg["replication_factor"])
-            cluster = []
-
             async def start_simple():
+                cluster = []
+                cluster_name = str(uuid.uuid1())
                 for i in range(replicas):
-                    server = self.create_server()
+                    seed = cluster[0].host if cluster else None
+                    server = self.create_server(cluster_name, seed)
                     cluster.append(server)
                     await server.start()
-                return cluster[0]
+                return cluster
 
             return start_simple
         else:
@@ -610,8 +613,8 @@ class PythonTest(Test):
 
     async def run(self, options):
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
-        async with self.suite.servers.instance() as server:
-            self.args.insert(0, "--host={}".format(server.host))
+        async with self.suite.clusters.instance() as cluster:
+            self.args.insert(0, "--host={}".format(cluster[0].host))
             self.success = await run_test(self, options)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
