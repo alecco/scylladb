@@ -43,14 +43,23 @@ async def test_verify_schema(tables):
 
 
 @pytest.mark.asyncio
-@pytest.mark.ntables(0)
+@pytest.mark.ntables(1)
 async def test_new_table_insert_one(cql, keyspace):
-    table = await keyspace.create_table()
+    table = tables[0]
     await table.insert_seq()
-    res = [row for row in await cql.run_async(f"SELECT * FROM {keyspace.tables[0].full_name} "
-                                              "WHERE pk='1' AND c_01='1'")]
+    res = [row for row in await cql.run_async(f"SELECT * FROM {table.full_name} WHERE pk='1' AND c_01='1'")]
     assert len(res) == 1
     assert list(res[0])[:2] == ['1', '1']
     await keyspace.drop_table(table)
     with pytest.raises(InvalidRequest, match='unconfigured table'):
         await cql.run_async(f"SELECT * FROM {table.full_name}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.ntables(1)
+async def test_drop_column(tables):
+    """Drop a random column from a table"""
+    table = tables[0]
+    await table.insert_seq()
+    await table.drop_column()
+    await tables.verify_schema(table)
