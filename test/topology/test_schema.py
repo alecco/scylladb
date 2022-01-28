@@ -54,3 +54,13 @@ async def test_new_table_insert_one(cql, keyspace):
     await keyspace.drop_table(table)
     with pytest.raises(InvalidRequest, match='unconfigured table'):
         await cql.run_async(f"SELECT * FROM {table.full_name}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.ntables(1)
+async def test_drop_column(cql, keyspace):
+    """Drop a random column from a table"""
+    ncols = len(keyspace.tables[0].columns)
+    await keyspace.tables[0].insert_seq()
+    await keyspace.tables[0].drop_column()
+    await keyspace.verify_schema()
