@@ -40,3 +40,16 @@ async def test_insert_one(cql, keyspace):
                                               "WHERE pk='1' AND c_01='1'")]
     assert len(res) == 1
     assert list(res[0])[:2] == ['1', '1']
+
+
+@pytest.mark.asyncio
+@pytest.mark.ntables(1)
+async def test_drop_column(cql, keyspace):
+    """Drop a random column from a table"""
+    ncols = len(keyspace.tables[0].columns)
+    await keyspace.tables[0].insert_seq()
+    await keyspace.tables[0].drop_column()
+    assert ncols - 1 == len(keyspace.tables[0].columns)
+    res = [row for row in await cql.run_async(f"SELECT * FROM {keyspace.tables[0].full_name} "
+                                              "WHERE pk='1' AND c_01='1'")]
+    assert len(res[0]) == ncols - 1

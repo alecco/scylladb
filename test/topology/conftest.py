@@ -42,6 +42,10 @@ DEFAULT_NTABLES = 2
 DEFAULT_NCOLUMNS = 4
 
 
+class ColumnNotFound(Exception):
+    pass
+
+
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
@@ -222,6 +226,7 @@ class Table():
         self.columns = [Column("pk", ctype=TextType)]
         self.columns += [Column(f"c_{self.next_clustering_id():02}", ctype=TextType) for i in range(1, pks)]
         self.columns += [Column(f"v_{self.next_value_id():02}") for i in range(1, ncolumns - pks + 1)]
+        self.removed_columns = []
 
         # Counter for sequential values to insert
         self.next_seq = itertools.count(start=1).__next__
@@ -236,6 +241,28 @@ class Table():
 
     async def drop(self):
         await self.cql.run_async(f"DROP TABLE {self.full_name}")
+
+    async def drop_column(self, column=None):
+        if column is None:
+            col = random.choice(self.columns[self.pks:])
+        elif type(column) is int:
+            assert column >= self.pks, f"Cannot remove PK column at pos {column}"
+            col = self.columns[column]
+        elif type(column) is str:
+            try:
+                col = next(col for col in self.columns if col.name == column)
+            except StopIteration:
+                raise ColumnNotFound(f"Column {column.name} not found in table {self.name}")
+        else:
+            assert type(column) is Column, f"can not remove unknown type {type(column)}"
+            assert column in self.columns, f"column {column.name} not present"
+            col = column
+        assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {col.name}"
+
+        self.columns.remove(col)
+        self.removed_columns.append(col)
+
+        await self.cql.run_async(f"ALTER TABLE {self.full_name} DROP {col.name}")
 
     async def insert_seq(self):
         """Insert a row of next sequential values"""
