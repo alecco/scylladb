@@ -57,3 +57,10 @@ async def test_drop_column(cql, keyspace):
     res = [row for row in await cql.run_async(f"SELECT * FROM {keyspace.tables[0].full_name} "
                                               "WHERE pk='1' AND c_01='1'")]
     assert len(res[0]) == ncols - 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.ntables(1)
+async def test_xxx(cql, keyspace):
+    """Drop a random column from a table"""
+    await keyspace.verify_schema()
