@@ -220,6 +220,22 @@ class TestTables():
         [await t.drop() for t in self.tables]
         self.removed_tables = tables
 
+    async def verify_schema(self, table=None):
+        """Verify keyspace table schema"""
+        if table is not None:
+            assert type(table) is Table, f"Verify schema: wrong type {type(table)}"
+            if table.startswith(f"{self.keyspace}."):
+                table = table[len(self.name) + 1:]
+            tables = {table}
+            q = f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{self.keyspace}' " \
+                f"AND table_name = '{table}'"
+        else:
+            tables = set(t.name for t in self.tables)
+            q = f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{self.keyspace}'"
+
+        res = {row.table_name for row in await self.cql.run_async(q)}
+        assert not tables - res, f"Tables {tables - res} not present"
+
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace.  It's automatically dropped
