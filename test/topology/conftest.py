@@ -316,6 +316,81 @@ class Keyspace():
         self.removed_tables.append(table)
         return table
 
+    async def verify_schema(self, table=None):
+        """Verify keyspace table schema"""
+        # keyspace 0:
+        # Row(keyspace_name='system_auth',
+        #   durable_writes=True,
+        #   replication=OrderedMapSerializedKey([('class', 'org.apache.cassandra.locator.SimpleStrategy'),
+        #                                        ('replication_factor', '1')]))
+        #   Row(keyspace_name='ks_0001',
+        #       durable_writes=True,
+        #       replication=Map([('class', 'org.apache.cassandra.locator.NetworkTopologyStrategy'),
+        #                                            ('datacenter1', '3')]))
+        # XXX verify this keyspace
+        res = await self.cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{self.name}'")
+        row = res[0]
+        replication = row.replication
+        # Row(keyspace_name='ks_0001', durable_writes=True,
+        # replication=OrderedMapSerializedKey([('class', 'org.apache.cassandra.locator.NetworkTopologyStrategy'),
+        #                                      ('datacenter1', '3')]))
+        replication = dict(row.replication)
+        rclass = replication.pop('class')
+        assert rclass.endswith(self.replication_strategy),
+                    f"Keyspace {self.name} replication class {rclass} not matching {self.replication_strategy}"
+        rdc = replication.pop(self.this_dc)
+        assert rdc == str(self.dc_rf),
+                    f"Keyspace {self.name} DC {self.this_dc} RF {rdc} not matching {self.dc_rf}"
+        print(f"  repl class {replication}", file=sys.stderr) # XXX
+        print(f"  repl this_dc {row.replication[self.this_dc]}", file=sys.stderr) # XXX
+        print(f"XXX --------------------------------------------------------------------------------", file=sys.stderr) # XXX
+        raise Exception("XXX")
+        print(f"XXX --------------------------------------------------------------------------------", file=sys.stderr) # XXX
+        res = [row for row in await self.cql.run_async(f"SELECT * FROM system_schema.tables WHERE keyspace_name = '{self.name}'")]
+        print(f"XXX tables 0: {res[0]}", file=sys.stderr) # XXX
+        # Now the table
+        # 
+        # Row(keyspace_name='ks_0001', table_name='t_01',
+        #   bloom_filter_fp_chance=0.01,
+        #   caching=OrderedMapSerializedKey([('keys', 'ALL'),
+        #   ('rows_per_partition', 'ALL')]),
+        #   comment='',
+        #   compaction=OrderedMapSerializedKey([('class', 'SizeTieredCompactionStrategy')]),
+        #   compression=OrderedMapSerializedKey([('sstable_compression', 'org.apache.cassandra.io.compress.LZ4Compressor')]    ),
+        #   crc_check_chance=1.0,
+        #   dclocal_read_repair_chance=0.0,
+        #   default_time_to_live=0,
+        #   extensions=OrderedMapSerializedKey([]),
+        #   flags=SortedSet(['compound']),
+        #   gc_grace_seconds=864000,
+        #   id=UUID('99a56d60-829b-11ec-83cc-4e5a1e89bb2d'),
+        #   max_index_interval=2048,
+        #   memtable_flush_period_in_ms=0,
+        #   min_index_interval=128,
+        #   read_repair_chance=0.0,
+        #   speculative_retry='99.0PERCENTILE')
+        res = [row for row in await self.cql.run_async(f"SELECT * FROM system_schema.tables WHERE keyspace_name = '{self.name}'")]
+        print(f"XXX table 0: {res[0]}", file=sys.stderr) # XXX
+        print(f"XXX --------------------------------------------------------------------------------", file=sys.stderr) # XXX
+        # Row(keyspace_name='ks_0001',
+        #   table_name='t_01',
+        #   column_name='c_01',
+        #   clustering_order='ASC',
+        #   column_name_bytes=b'c_01',
+        #   kind='clustering',
+        #   position=0,
+        #   type='text')
+        for row in await self.cql.run_async(f"SELECT * FROM system_schema.columns WHERE keyspace_name = '{self.name}' AND table_name = '{self.tables[0].name}'"):
+            print(f"  {row.column_name}: {row.kind}, {row.type}", file=sys.stderr) # XXX
+
+        #    c_01: clustering, text 
+        #    pk: partition_key, text
+        #    v_01: regular, text
+        #    v_02: regular, float
+        #assert len(res) == 1
+        #assert list(res[0])[:2] == ['1', '1']
+        raise Exception("XXX")
+
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in a test. The keyspace is created with RF=2
