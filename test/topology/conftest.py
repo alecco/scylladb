@@ -187,6 +187,7 @@ class TestTables():
     """Create tables for a test in a given keyspace"""
     def __init__(self, test_name, cql, keyspace, ntables: int, ncolumns: int):
         self.test_name = test_name
+        self.cql = cql
         self.keyspace = keyspace
         self.tables = [Table(cql, keyspace, ncolumns) for _ in range(ntables)]
         self.removed_tables = []
@@ -222,6 +223,25 @@ class TestTables():
         """Drop all tables of a test"""
         [await t.drop() for t in self.tables]
         self.removed_tables = tables
+
+    async def verify_schema(self, table=None):
+        """Verify keyspace table schema"""
+        if type(table) is Table:
+            tables = {table.name}
+            q = f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{self.keyspace}' " \
+                f"AND table_name = '{table.name}'"
+        elif type(table) is str:
+            if table.startswith(f"{self.keyspace.name}."):
+                table = table[len(self.keyspace.name) + 1:]
+            tables = {table}
+            q = f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{self.keyspace}' " \
+                f"AND table_name = '{table}'"
+        else:
+            tables = set(t.name for t in self.tables)
+            q = f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{self.keyspace}'"
+
+        res = {row.table_name for row in await self.cql.run_async(q)}
+        assert not tables - res, f"Tables {tables - res} not present"
 
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
