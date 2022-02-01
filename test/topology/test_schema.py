@@ -33,3 +33,8 @@ async def test_new_table(cql, tables):
     await tables.drop_table(table)
     with pytest.raises(InvalidRequest, match='unconfigured table'):
         await cql.run_async(f"SELECT * FROM {table.full_name}")
+
+@pytest.mark.asyncio
+async def test_verify_schema(tables):
+    """Verify table schema"""
+    await tables.verify_schema()
