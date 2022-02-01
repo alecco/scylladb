@@ -37,3 +37,9 @@ async def test_delete_empty_string_key(cql, table1):
     # error that a "Key may not be empty":
     with pytest.raises(InvalidRequest, match='Key may not be empty'):
         await cql.run_async(f"DELETE FROM {table1} WHERE p='' AND c='{s}'")
+
+
+@pytest.mark.asyncio
+async def test_verify_schema(keyspace, table1):
+    """Verify table schema"""
+    await keyspace.verify_schema(table=table1)
