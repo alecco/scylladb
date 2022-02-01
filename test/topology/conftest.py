@@ -200,12 +200,38 @@ class Keyspace():
 
     async def create(self):
         await self.cql.run_async(f"CREATE KEYSPACE {self.name} WITH REPLICATION = "
-                                 f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : {self.dc_rf} }}")
+                                 f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : 3 }}")
+        [await t.create() for t in self.tables]
 
         [await t.create() for t in self.tables]
 
     async def drop(self):
         await self.cql.run_async(f"DROP KEYSPACE {self.name}")
+
+    async def verify_schema(self, table=None):
+        """Verify keyspace table schema"""
+        res = await self.cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{self.name}'")
+        row = res[0]
+        replication = row.replication
+        replication = dict(row.replication)
+        rclass = replication.pop('class')
+        assert rclass.endswith(self.replication_strategy), \
+                    f"Keyspace {self.name} replication class {rclass} not matching {self.replication_strategy}"
+        assert replication.pop(self.this_dc) == str(self.dc_rf), \
+                    f"Keyspace {self.name} DC {self.this_dc} RF {rdc} not matching {self.dc_rf}"
+
+        if table is not None:
+            if table.startswith(f"{self.name}."):
+                table = table[len(self.name) + 1:]
+            tables = {table}
+            q = f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{self.name}' " \
+                f"AND table_name = '{table}'"
+        else:
+            tables = set(t.name for t in self.tables)
+            q = f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{self.name}'"
+
+        res = {row.table_name for row in await self.cql.run_async(q)}
+        assert not tables - res, f"Tables {tables - res} not present"
 
     async def create_table(self, table=None):
         if table is None:
