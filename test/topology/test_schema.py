@@ -21,7 +21,7 @@ import pytest
 
 @pytest.mark.asyncio
 @pytest.mark.ntables(1)
-async def test_new_table(cql, keyspace, tables):
+async def test_new_table(cql, tables):
     table = tables[0]
     val = "'1'"
     await cql.run_async(f"INSERT INTO {table.full_name} ({','.join(c for c in table.columns)})" +
