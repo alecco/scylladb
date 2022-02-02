@@ -232,6 +232,9 @@ class Table():
         self.columns += [Column(f"c_{self.next_clustering_id():02}", ctype=TextType) for i in range(1, pks)]
         self.columns += [Column(f"v_{self.next_value_id():02}") for i in range(1, ncolumns - pks + 1)]
 
+        # Counter for sequential values to insert
+        self.next_seq = itertools.count(start=1).__next__
+
     @property
     def all_col_names(self):
         return ", ".join([c.name for c in self.columns])
@@ -242,6 +245,13 @@ class Table():
 
     async def drop(self):
         await self.cql.run_async(f"DROP TABLE {self.full_name}")
+
+    async def insert_seq(self):
+        """Insert a row of next sequential values"""
+        seed = self.next_seq()
+        await self.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
+                                 f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
+                                 parameters=[c.val(seed) for c in self.columns])
 
 
 class Keyspace():
