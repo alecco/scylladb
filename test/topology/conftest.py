@@ -238,6 +238,13 @@ class Table():
     async def drop(self):
         await self.cql.run_async(f"DROP TABLE {self.full_name}")
 
+    async def insert_seq(self):
+        """Insert a row of next sequential values"""
+        seed = self.next_seq()
+        await self.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
+                                 f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
+                                 parameters=[c.val(seed) for c in self.columns])
+
 
 class Keyspace():
     newid = itertools.count(start=1).__next__
