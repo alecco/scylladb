@@ -23,7 +23,6 @@ import pytest
 @pytest.mark.ntables(1)
 async def test_new_table(cql, tables):
     table = tables[0]
-    val = "'1'"
     await cql.run_async(f"INSERT INTO {table.full_name} ({','.join(c.name for c in table.columns)})" +
                         f"VALUES ({', '.join(['%s'] * len(table.columns))})",
                         parameters=[c.val(1) for c in table.columns])
