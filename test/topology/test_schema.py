@@ -37,6 +37,11 @@ async def test_new_table(cql, tables):
 
 
 @pytest.mark.asyncio
-async def test_verify_schema(tables):
+async def test_verify_schema(cql, tables):
     """Verify table schema"""
+    table = tables[0]
     await tables.verify_schema()
+    # Manually remove a column
+    await cql.run_async(f"ALTER TABLE {table.full_name} DROP {table.columns[-1].name}")
+    with pytest.raises(AssertionError, match='Column'):
+        await tables.verify_schema()
