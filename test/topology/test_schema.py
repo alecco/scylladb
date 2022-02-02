@@ -35,6 +35,7 @@ async def test_new_table(cql, tables):
     with pytest.raises(InvalidRequest, match='unconfigured table'):
         await cql.run_async(f"SELECT * FROM {table.full_name}")
 
+
 @pytest.mark.asyncio
 async def test_verify_schema(cql, tables):
     """Verify table schema"""
@@ -44,3 +45,16 @@ async def test_verify_schema(cql, tables):
     await cql.run_async(f"ALTER TABLE {table.full_name} DROP {table.columns[-1].name}")
     with pytest.raises(AssertionError, match='Column'):
         await tables.verify_schema()
+
+
+@pytest.mark.asyncio
+@pytest.mark.ntables(1)
+async def test_new_table_insert_one(cql, tables):
+    table = tables[0]
+    await table.insert_seq()
+    res = [row for row in await cql.run_async(f"SELECT * FROM {table.full_name} WHERE pk='1' AND c_01='1'")]
+    assert len(res) == 1
+    assert list(res[0])[:2] == ['1', '1']
+    await tables.drop_table(table)
+    with pytest.raises(InvalidRequest, match='unconfigured table'):
+        await cql.run_async(f"SELECT * FROM {table.full_name}")
