@@ -307,6 +307,31 @@ class TestTables():
         res = {row.table_name for row in await self.cql.run_async(q)}
         assert not tables - res, f"Tables {tables - res} not present"
 
+        for table_name in tables:
+            table = next(t for t in self.tables if t.name == table_name)
+            cols = {c.name: c for c in table.columns}
+            c_pos = {c.name: i for i, c in enumerate(table.columns)}
+            res = {row.column_name: row for row in await self.cql.run_async(
+                    f"SELECT column_name, position, kind, type FROM system_schema.columns "
+                    f"WHERE keyspace_name = '{self.keyspace}' AND table_name = '{table_name}'")}
+            assert res.keys() == cols.keys(), f"Column names for {table_name} do not match " \
+                                              "{', '.join(res.keys())} {', '.join(cols.keys())}"
+            for c_name, c in res.items():
+                pos = c_pos[c_name]
+                col = cols[c_name]
+                assert c.type == col.ctype.name, f"Column {c_name} type does not match {c.type} {col.ctype.name}"
+                if pos == 0:
+                    kind = "partition_key"
+                    schema_pos = 0
+                elif pos < table.pks:
+                    kind = "clustering"
+                    schema_pos = 0
+                else:
+                    kind = "regular"
+                    schema_pos = -1
+                assert c.kind == kind, f"Column {c_name} kind does not match {c.kind} {kind}"
+                assert c.position == schema_pos, f"Column {c_name} position {c.position} does not match {schema_pos}"
+
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace.  It's automatically dropped
