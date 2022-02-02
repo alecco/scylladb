@@ -35,3 +35,17 @@ async def test_new_table(cql, tables):
     await keyspace.drop_table("new_table", table)
     with pytest.raises(InvalidRequest, match='unconfigured table'):
         await cql.run_async(f"SELECT * FROM {table.full_name}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.ntables(0)
+async def test_new_table_insert_one(cql, keyspace):
+    table = await keyspace.create_table()
+    await table.insert_seq()
+    res = [row for row in await cql.run_async(f"SELECT * FROM {keyspace.tables[0].full_name} "
+                                              "WHERE pk='1' AND c_01='1'")]
+    assert len(res) == 1
+    assert list(res[0])[:2] == ['1', '1']
+    await keyspace.drop_table(table)
+    with pytest.raises(InvalidRequest, match='unconfigured table'):
+        await cql.run_async(f"SELECT * FROM {table.full_name}")
