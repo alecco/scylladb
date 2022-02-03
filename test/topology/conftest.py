@@ -26,6 +26,7 @@ from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, Session, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT, ResponseFuture
 from cassandra.policies import RoundRobinPolicy
 import asyncio
+from collections import defaultdict
 import pathlib
 import pytest
 import ssl
@@ -37,6 +38,8 @@ from pylib.util import random_string, unique_name
 
 # Default initial values
 DEFAULT_DCRF = 3        # Replication Factor for this_dc
+DEFAULT_NTABLES = 2     # Initial tables
+DEFAULT_NCOLUMNS = 4    # Columns per table
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -150,6 +153,94 @@ def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 
+class Table():
+    newid = itertools.count(start=1).__next__
+
+    def __init__(self, cql, keyspace_name, ncolumns, name=None, pks=2):
+        """Set up a new table definition from column definitions.
+           If column definitions not specified pick a random number of columns with random types.
+           By default there will be 4 columns with first column as Primary Key"""
+        self.id = Table.newid()
+        self.cql = cql
+        self.keyspace_name = keyspace_name
+        self.name = name if name is not None else f"t_{self.id:02}"
+        self.full_name = keyspace_name + "." + self.name
+        # TODO: assumes primary key is composed of first self.pks columns
+        self.pks = pks
+
+        assert ncolumns > pks, "Not enough value columns provided"
+        self.next_clustering_id = itertools.count(start=1).__next__
+        self.next_value_id = itertools.count(start=1).__next__
+        # Primary key pk, clustering columns c_xx, value columns v_xx
+        self.columns = ["pk"]
+        self.columns += [f"c_{self.next_clustering_id():02}" for i in range(1, pks)]
+        self.columns += [f"v_{self.next_value_id():02}" for i in range(ncolumns - pks)]
+
+    async def create(self):
+        await self.cql.run_async(f"CREATE TABLE {self.full_name} (" + ", ".join(f"{c} text" for c in self.columns) +
+                                 ", primary key(" + ", ".join(c for c in self.columns[:self.pks]) + "))")
+
+    async def drop(self):
+        await self.cql.run_async(f"DROP TABLE {self.full_name}")
+
+
+class Keyspace():
+
+    def __init__(self, cql, this_dc, dc_rf):
+        self.id = Keyspace.newid()
+        self.name = f"ks_{self.id:04}"
+        self.replication_strategy = 'NetworkTopologyStrategy'
+        self.cql = cql
+        self.this_dc = this_dc
+        self.dc_rf = dc_rf
+        self.new_table_id = itertools.count(start=1).__next__
+
+    async def create(self):
+        await self.cql.run_async(f"CREATE KEYSPACE {self.name} WITH REPLICATION = "
+                                 f"{{ 'class' : '{self.replication_strategy}', '{self.this_dc}' : {self.dc_rf} }}")
+
+        [await t.create() for t in self.tables]
+
+    async def drop(self):
+        await self.cql.run_async(f"DROP KEYSPACE {self.name}")
+
+
+class TestTables():
+    """Create tables for a test in a given keyspace"""
+    def __init__(self, test_name, keyspace, ntables: int):
+        newid = itertools.count(start=1).__next__
+        [await keyspace.create_table(test_name) for _ in range(ntables)]
+        # Dict of test : [tables]
+        self.tables = defaultdict(list)
+        self.removed_tables = defaultdict(list)
+
+    async def create_table(self, test_name, table=None):
+        if table is None:
+            table = Table(self.cql, self.name, DEFAULT_NCOLUMNS)
+        else:
+            assert type(table) is Table, f"Invalid table type {type(table)}"
+        await table.create()
+        self.tables[test_name].append(table)
+        return table
+
+    async def drop_table(self, test_name, table):
+        if type(table) is str:
+            table = next(t for t in self.tables[test_name])
+        else:
+            assert type(table) is Table, f"Invalid table type {type(table)}"
+        await table.drop()
+        self.tables[test_name].remove(table)
+        self.removed_tables[test_name].append(table)
+        return table
+
+    async def drop_all(self):
+        """Drop all tables of a test"""
+        tables = self.tables.pop(test_name)
+        [await t.drop() for t in tables]
+        self.removed_tables[test_name] = tables
+        self.keyspace = keyspace
+
+
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace.  It's automatically dropped 
 # at the end of the session. All tests will reuse the same keyspace.
@@ -162,6 +253,18 @@ async def keyspace(request, cql, this_dc):
                         f"'{this_dc}' : '{dc_rf}' }}")
     yield name
     await cql.run_async("DROP KEYSPACE " + name)
+
+
+@pytest.fixture()
+async def tables(request, keyspace):
+    test_name = request.node.name.removeprefix("test_")
+    marker_tables = request.node.get_closest_marker("ntables")
+    ntables = marker_tables.args[0] if marker_tables is not None else DEFAULT_NTABLES
+    marker_columns = request.node.get_closest_marker("ncolumns")
+    ncolumns = marker_tables.args[0] if marker_columns is not None else DEFAULT_NCOLUMNS
+    yield TestTables(keyspace, tables[test_name]
+    # Let keyspace cleanup do the drops for now
+    await keyspace.drop_tables(test_name)
 
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
