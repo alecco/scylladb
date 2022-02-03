@@ -37,6 +37,8 @@ from pylib.util import random_string, unique_name
 
 # Default initial values
 DEFAULT_DCRF = 3        # Replication Factor for this_dc
+DEFAULT_NTABLES = 2     # Initial tables
+DEFAULT_NCOLUMNS = 4    # Columns per table
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -150,6 +152,72 @@ def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 
+class Table():
+    newid = itertools.count(start=1).__next__
+
+    def __init__(self, cql, keyspace, ncolumns, pks=2, name=None):
+        """Set up a new table definition from column definitions.
+           If column definitions not specified pick a random number of columns with random types.
+           By default there will be 4 columns with first column as Primary Key"""
+        self.id = Table.newid()
+        self.cql = cql
+        self.keyspace = keyspace
+        self.name = name if name is not None else f"t_{self.id:02}"
+        self.full_name = keyspace + "." + self.name
+        # TODO: assumes primary key is composed of first self.pks columns
+        self.pks = pks
+
+        assert ncolumns > pks, "Not enough value columns provided"
+        self.next_clustering_id = itertools.count(start=1).__next__
+        self.next_value_id = itertools.count(start=1).__next__
+        # Primary key pk, clustering columns c_xx, value columns v_xx
+        self.columns = ["pk"]
+        self.columns += [f"c_{self.next_clustering_id():02}" for i in range(1, pks)]
+        self.columns += [f"v_{self.next_value_id():02}" for i in range(ncolumns - pks)]
+
+    async def create(self):
+        await self.cql.run_async(f"CREATE TABLE {self.full_name} (" + ", ".join(f"{c} text" for c in self.columns) +
+                                 ", primary key(" + ", ".join(c for c in self.columns[:self.pks]) + "))")
+
+    async def drop(self):
+        await self.cql.run_async(f"DROP TABLE {self.full_name}")
+
+
+class TestTables():
+    """Create tables for a test in a given keyspace"""
+    def __init__(self, test_name, cql, keyspace, ntables: int, ncolumns: int):
+        self.test_name = test_name
+        self.keyspace = keyspace
+        self.tables = [Table(cql, keyspace, ncolumns) for _ in range(ntables)]
+        self.removed_tables = []
+
+    def new_table(self, ncolumns=None, pks=2, name=None):
+        table = Table(self.cql, self.keyspace, ncolumns, pks=pks, name=name)
+        self.tables.append(table)
+        return table
+
+    def __getitem__(self, pos):
+        return self.tables[pos]
+
+    async def create_tables(self):
+        [await t.create() for t in self.tables]
+
+    async def drop_table(self, table):
+        if type(table) is str:
+            table = next(t for t in self.tables)
+        else:
+            assert type(table) is Table, f"Invalid table type {type(table)}"
+        await table.drop()
+        self.tables.remove(table)
+        self.removed_tables.append(table)
+        return table
+
+    async def drop_all(self):
+        """Drop all tables of a test"""
+        [await t.drop() for t in self.tables]
+        self.removed_tables = tables
+
+
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace.  It's automatically dropped
 # at the end of the session. All tests will reuse the same keyspace.
@@ -160,6 +228,20 @@ async def keyspace(request, cql, this_dc):
                         f"'{this_dc}' : '{DEFAULT_DCRF}' }}")
     yield name
     await cql.run_async("DROP KEYSPACE " + name)
+
+
+@pytest.fixture()
+async def tables(request, cql, keyspace):
+    test_name = request.node.name.removeprefix("test_")
+    marker_tables = request.node.get_closest_marker("ntables")
+    ntables = marker_tables.args[0] if marker_tables is not None else DEFAULT_NTABLES
+    marker_columns = request.node.get_closest_marker("ncolumns")
+    ncolumns = marker_tables.args[0] if marker_columns is not None else DEFAULT_NCOLUMNS
+    tables = TestTables(test_name, cql, keyspace, ntables, ncolumns)
+    await tables.create_tables()
+    yield tables
+    # Let keyspace cleanup do the drops for now
+    # await tables.drop_all()
 
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,

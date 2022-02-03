@@ -1,4 +1,4 @@
-# Copyright 2020-present ScyllaDB
+# Copyright 2022-present ScyllaDB
 #
 # This file is part of Scylla.
 #
@@ -16,17 +16,20 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 from cassandra.protocol import InvalidRequest
-from pylib.util import random_string
 import pytest
 
 
 @pytest.mark.asyncio
 @pytest.mark.ntables(1)
-async def test_delete_empty_string_key(cql, tables):
-    s = random_string()
-    # An empty-string clustering *is* allowed:
-    await cql.run_async(f"DELETE FROM {tables[0].full_name} WHERE pk='{s}' AND c_01=''")
-    # But an empty-string partition key is *not* allowed, with a specific
-    # error that a "Key may not be empty":
-    with pytest.raises(InvalidRequest, match='Key may not be empty'):
-        await cql.run_async(f"DELETE FROM {tables[0].full_name} WHERE pk='' AND c_01='{s}'")
+async def test_new_table(cql, tables):
+    table = tables[0]
+    val = "'1'"
+    await cql.run_async(f"INSERT INTO {table.full_name} ({','.join(c for c in table.columns)})" +
+                        f"VALUES ({','.join([val] * len(table.columns))})")
+    res = [row for row in await cql.run_async(f"SELECT * FROM {table.full_name} "
+                                              "WHERE pk='1' AND c_01='1'")]
+    assert len(res) == 1
+    assert list(res[0])[:2] == ['1', '1']
+    await tables.drop_table(table)
+    with pytest.raises(InvalidRequest, match='unconfigured table'):
+        await cql.run_async(f"SELECT * FROM {table.full_name}")
