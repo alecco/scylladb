@@ -302,6 +302,12 @@ class TestTables():
     def __getitem__(self, pos):
         return self.tables[pos]
 
+    def append(self, table):
+        return self.tables.append(table)
+
+    def extend(self, tables):
+        return self.tables.extend(tables)
+
     async def create_tables(self):
         [await t.create() for t in self.tables]
 
