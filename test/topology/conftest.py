@@ -261,11 +261,11 @@ class Table():
     async def add_column(self, name=None, ctype=None, column=None):
         if column is not None:
             assert type(column) is Column, "Wrong column type to add_column"
-            self.columns.append(column)
         else:
             name = name if name is not None else f"c_{self.next_clustering_id():02}"
             ctype = ctype if ctype is not None else TextType
             column = Column(name, ctype=ctype)
+        self.columns.append(column)
         await self.cql.run_async(f"ALTER TABLE {self.full_name} ADD {column.name} {column.ctype.name}")
 
     async def drop_column(self, column=None):
