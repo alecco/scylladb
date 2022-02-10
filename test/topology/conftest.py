@@ -240,6 +240,9 @@ class Table():
             self.columns += [Column(f"v_{self.next_value_id():02}") for i in range(1, ncolumns - pks + 1)]
 
         self.removed_columns = []
+        self.next_idx_id = itertools.count(start=1).__next__
+        self.indexes = []
+        self.removed_indexes = []
 
         # Counter for sequential values to insert
         self.next_seq = itertools.count(start=1).__next__
@@ -293,6 +296,27 @@ class Table():
         await self.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
                                  f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
                                  parameters=[c.val(seed) for c in self.columns])
+
+    async def add_index(self, column, name=None):
+        if type(column) is int:
+            col = self.columns[column].name
+        elif type(column) is str:
+            col = next(c for c in self.columns if c.name == column)
+        else:
+            assert type(column) is Column, "Wrong column type to add_column"
+            col = column.name
+
+        name = name if name is not None else f"{self.name}_{col.name}_{self.next_idx_id():02}"
+        await self.cql.run_async(f"CREATE INDEX {name} on {self.full_name} ({col.name})")
+        self.indexes.append(name)
+
+    async def drop_index(self, index):
+        if type(index) is int:
+            index = self.indexes[index]
+        else:
+            assert type(index) is str, "Need integer or name for index drop"
+        self.removed_indexes.append(index)
+        await self.cql.run_async(f"DROP INDEX {self.keyspace}.{index}")
 
 
 class TestTables():
