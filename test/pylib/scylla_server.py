@@ -88,6 +88,9 @@ SCYLLA_CMDLINE_OPTIONS = [
 
 
 class ScyllaServer:
+    # Regular expression to scan the log
+    STARTUP_MSG_RE = re.compile(".*Scylla.*initialization completed")
+
     def __init__(self, exe=None, vardir=None, host_registry=None,
                  cluster_name=None, seed=None, cmdline_options=None):
         self.exe = os.path.abspath(exe)
@@ -112,12 +115,12 @@ class ScyllaServer:
         self.stop_artifact = stop_server
         self.uninstall_artifact = uninstall_server
 
-    async def start(self):
+    async def install_and_start(self):
         await self.install()
 
         logging.info("starting server at host %s...", self.cfg["host"])
 
-        await self.do_start()
+        await self.start()
 
         logging.info("started server at host %s, pid %d", self.cfg["host"], self.cmd.pid)
 
@@ -134,6 +137,9 @@ class ScyllaServer:
             raise RuntimeError("{} is not executable", self.exe)
 
     async def install(self):
+        """Create a working directory with all subdirectories, initialize
+        a configuration file."""
+
         self.find_scylla_executable()
 
         # Scylla assumes all instances of a cluster use the same port,
@@ -146,11 +152,10 @@ class ScyllaServer:
 
         self.log_file_name = os.path.join(self.vardir, self.cfg["host"]+".log")
 
-        # SCYLLA_CONF env variable would be better called SCYLLA_CONF_DIR
-        # variable, the configuration file name is assumed to be scylla.yaml
         self.config_file_name = os.path.join(self.cfg["workdir"], "conf/scylla.yaml")
 
-        # Use tmpfs to speed up scylla start up
+        # Use tmpdir (likely tmpfs) to speed up scylla start up, but create a
+        # link to it to keep everything in one place under testlog/
         self.tmpdir = os.getenv('TMPDIR', '/tmp')
         self.tmpdir = os.path.join(self.tmpdir, 'scylla-test-'+self.cfg["host"])
 
@@ -168,26 +173,26 @@ class ScyllaServer:
 
         self.log_file = open(self.log_file_name, "wb")
 
-    def find_log_file_pattern(self, fil, pattern):
-        pattern_r_e = re.compile(pattern)
+    def find_log_file_pattern(self, fil, pattern_re):
         for line in fil.readlines():
-            if pattern_r_e.match(line):
+            if pattern_re.match(line):
                 return True
         return False
 
-    async def do_start(self):
+    async def start(self):
+        """Start an installed server. May be used for restarts."""
         START_TIMEOUT = 300     # seconds
 
-        args = SCYLLA_CMDLINE_OPTIONS
         # Add suite-specific command line options
-        args += self.cmdline_options
+        scylla_args = SCYLLA_CMDLINE_OPTIONS + self.cmdline_options
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
-            *args,
+            *scylla_args,
             cwd=self.cfg["workdir"],
             stderr=self.log_file,
             stdout=self.log_file,
-            env={"SCYLLA_HOME": self.cfg["workdir"]},
+            # pass empty env to make user user's SCYLLA_HOME has no impact
+            env={}, 
             preexec_fn=os.setsid,
         )
 
@@ -208,7 +213,7 @@ Check the log files:
                         logging.getLogger().handlers[0].baseFilename,
                         self.log_file_name))
 
-                if self.find_log_file_pattern(log_file, ".*Scylla.*initialization completed"):
+                if self.find_log_file_pattern(log_file, ScyllaServer.STARTUP_MSG_RE):
                     return
 
                 # Sleep 10 milliseconds and retry
@@ -218,6 +223,8 @@ Check the log files:
             self.host, self.log_file_name))
 
     async def stop(self):
+        """Stop a running server. No-op if not running. Uses SIGKILL to
+        stop, so is not graceful. Waits for the process to exit before return."""
         # Preserve for logging
         host = self.cfg["host"]
         logging.info("stopping server at host %s", host)
@@ -229,13 +236,6 @@ Check the log files:
         except ProcessLookupError:
             pass
         else:
-            # # 3 seconds is enough for a good database to die gracefully:
-            # # send SIGKILL if SIGTERM doesn't reach its target
-            # timer := time.after_func(3*time.Second, func()
-            #         syscall.Kill(self.cmd.Process.Pid, syscall.SIGKILL)
-            # )
-            # timer.Stop()
-            # self.cmd.Process.Wait()
             await self.cmd.wait()
         finally:
             if self.cmd:
@@ -243,6 +243,9 @@ Check the log files:
             self.cmd = None
 
     async def uninstall(self):
+        """Clear all files left from a stopped server, including the 
+        data files and log files."""
+
         if not self.cfg["host"]:
             return
         logging.info("Uninstalling server at %s", self.cfg["workdir"])
