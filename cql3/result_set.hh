@@ -165,7 +165,12 @@ public:
 
     template<typename RowComparator>
     void sort(const RowComparator& cmp) {
+#if 0
         std::sort(_rows.begin(), _rows.end(), std::ref(cmp));
+#else
+        // XXX https://github.com/llvm/llvm-project/issues/53049
+        std::sort(_rows.begin(), _rows.end(), cmp);
+#endif
     }
 
     metadata& get_metadata();
