@@ -87,7 +87,7 @@ Session.run_async = run_async
 @pytest.fixture(scope="session")
 def cql(request):
     profile = ExecutionProfile(
-        load_balancing_policy=RoundRobinPolicy(),
+       load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeout (in seconds) for execute() commands is 10, which
@@ -438,3 +438,62 @@ def cassandra_bug(cql):
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     if not any('scylla' in name for name in names):
         pytest.xfail('A known Cassandra bug')
+
+
+class Node:
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def restart(self):
+        pass
+
+class HarnessCluster:
+    def __init__(self, name , nodes=3, populate=True):
+        self.nodes = nodes
+        self.cluster = HarnessCluster()
+        if populate:
+            self.cluster.XXX()
+
+    def node_uuid(self, node):
+        """Return a node's UUID"""
+        return self.nodes[node].get_uuid()
+
+    def add(self):
+        """Add node and return its UUID"""
+        node = Node()
+        self.nodes.append(node)
+        return node.uuid()
+
+    def remove(self, uuid):
+        """Remove node by UUID"""
+        self.cql[node] = None
+        # XXX stop, remove
+        self.nodes[node] = None
+
+
+    async def query_node(self, query, node=randint(0, len(self.nodes) - 1)):
+        """Remove node by UUID"""
+        if self.cql[node] is None:
+            self.connect_cql(node)
+        return await self.cql[node].run_async(query)
+
+
+class Harness
+    def __init__(self):
+        pass
+
+    def new_cluster(self):
+        return HarnessCluster()
+
+
+@pytest.fixture(scope="module")
+def harness():
+    return harness.new_cluster()
+
+
+@pytest.fixture(scope="module")
+def cluster(harness):
+    return harness.new_cluster()
