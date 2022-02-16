@@ -128,3 +128,42 @@ def cassandra_bug(cql):
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     if not any('scylla' in name for name in names):
         pytest.xfail('A known Cassandra bug')
+
+ 
+class Node:
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def restart(self):
+        pass
+
+class HarnessCluster:
+    def __init__(self, name , nodes=3, populate=True):
+        self.nodes = nodes
+        self.cluster = HarnessCluster()
+        if populate:
+            self.cluster.XXX()
+
+    def add(self):
+    """Add node and return its UUID"""
+        node = Node()
+        self.nodes.append(node)
+        return node.uuid()
+
+    def remove(self):
+    """Remove node by UUID"""
+
+
+class Harness
+    def __init__(self):
+        pass
+    def new_cluster(self):
+        return HarnessCluster()
+
+
+@pytest.fixture(scope="module")
+def cluster(harness):
+    return harness.new_cluster()
