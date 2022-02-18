@@ -347,7 +347,7 @@ class PythonTestSuite(TestSuite):
                     seed = cluster[0].host if cluster else None
                     server = self.create_server(cluster_name, seed)
                     cluster.append(server)
-                    await server.start()
+                    await server.install_and_start()
                 return cluster
 
             return start_simple
@@ -594,7 +594,6 @@ class PythonTest(Test):
         print(read_log(self.log_filename))
 
     async def run(self, options):
-        # This test can and should be killed gently, with SIGTERM, not with SIGKILL
         async with self.suite.clusters.instance() as cluster:
             self.args.insert(0, "--host={}".format(cluster[0].host))
             self.success = await run_test(self, options)
