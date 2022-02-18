@@ -344,7 +344,7 @@ class PythonTestSuite(TestSuite):
                 cluster = []
                 cluster_name = str(uuid.uuid1())
                 for i in range(replicas):
-                    seed = cluster[0].host if cluster else None
+                    seed = cluster[-1].host if cluster else None
                     server = self.create_server(cluster_name, seed)
                     cluster.append(server)
                     await server.install_and_start()

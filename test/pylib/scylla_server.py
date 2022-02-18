@@ -10,6 +10,8 @@ import pathlib
 import re
 import shutil
 import time
+from cassandra.auth import PlainTextAuthProvider
+from cassandra.cluster import Cluster
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -146,18 +148,20 @@ class ScyllaServer:
         # so each instance needs an own IP address.
         self.cfg["host"] = await self.host_registry.lease_host()
         self.cfg["seeds"] = self.cfg.get("seeds") or self.cfg["host"]
-        self.cfg["workdir"] = os.path.join(self.vardir, self.cfg["host"])
+        # Use the last part in host IP 127.151.3.27 -> 27
+        self.shortname = "scylla-" + self.cfg["host"].split(".")[-1]
+        self.cfg["workdir"] = os.path.join(self.vardir, self.shortname)
 
         logging.info("installing Scylla server in %s...", self.cfg["workdir"])
 
-        self.log_file_name = os.path.join(self.vardir, self.cfg["host"]+".log")
+        self.log_file_name = os.path.join(self.vardir, self.shortname+".log")
 
         self.config_file_name = os.path.join(self.cfg["workdir"], "conf/scylla.yaml")
 
         # Use tmpdir (likely tmpfs) to speed up scylla start up, but create a
         # link to it to keep everything in one place under testlog/
         self.tmpdir = os.getenv('TMPDIR', '/tmp')
-        self.tmpdir = os.path.join(self.tmpdir, 'scylla-test-'+self.cfg["host"])
+        self.tmpdir = os.path.join(self.tmpdir, 'scylla-'+self.cfg["host"])
 
         # Cleanup any remains of the previously running server in this path
         shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -218,9 +222,18 @@ Check the log files:
 
                 # Sleep 10 milliseconds and retry
                 await asyncio.sleep(0.1)
+                if self.cfg["seeds"] != self.cfg["host"]:
+                    await self.force_schema_migration()
 
         raise RuntimeError("failed to start server {}, check server log at {}".format(
             self.host, self.log_file_name))
+
+    async def force_schema_migration(self):
+        auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
+        with Cluster(contact_points=[self.cfg["seeds"]], auth_provider=auth) as cluster:
+            with cluster.connect() as session:
+                session.execute("CREATE KEYSPACE k WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+                session.execute("DROP KEYSPACE k")
 
     async def stop(self):
         """Stop a running server. No-op if not running. Uses SIGKILL to
