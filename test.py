@@ -347,7 +347,7 @@ class PythonTestSuite(TestSuite):
                     seed = cluster[0].host if cluster else None
                     server = self.create_server(cluster_name, seed)
                     cluster.append(server)
-                    await server.start()
+                    await server.install_and_start()
                 return cluster
 
             return start_simple
