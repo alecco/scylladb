@@ -64,6 +64,7 @@ class HostRegistry:
         async def cleanup():
             if self.lock_filename:
                 os.unlink(self.lock_filename)
+                self.lock_filename = None
 
         self.cleanup = cleanup
 
