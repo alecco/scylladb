@@ -46,6 +46,7 @@ debian_base_packages=(
 )
 
 fedora_packages=(
+    python3-aiofiles
     clang
     gdb
     lua-devel
