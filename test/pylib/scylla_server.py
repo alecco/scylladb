@@ -161,8 +161,7 @@ class ScyllaServer:
 
         # Use tmpdir (likely tmpfs) to speed up scylla start up, but create a
         # link to it to keep everything in one place under testlog/
-        self.tmpdir = os.getenv('TMPDIR', '/tmp')
-        self.tmpdir = os.path.join(self.tmpdir, 'scylla-'+self.cfg["host"])
+        self.tmpdir = os.path.join(self.host_registry.get_tmp_dir(), 'scylla-'+self.cfg["host"])
 
         # Cleanup any remains of the previously running server in this path
         shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -184,9 +183,9 @@ class ScyllaServer:
                 return True
         return False
 
-
-    ## Test that CQL is serving, for wait_for_services() below.
+    # Test that CQL is serving, for wait_for_services() below.
     async def cql_is_up(self):
+
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
         try:
             with Cluster(contact_points=[self.cfg["host"]], auth_provider=auth) as cluster:
