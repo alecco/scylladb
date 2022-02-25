@@ -81,7 +81,7 @@ class HostRegistry:
             self.next_host_id += 1
             return self.subnet.format(self.next_host_id)
 
-        self.pool = Pool(254, create_host)
+        self.pool = Pool(253, create_host)
 
         async def cleanup():
             if self.lock_filename:
