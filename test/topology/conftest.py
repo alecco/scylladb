@@ -6,6 +6,11 @@
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
 
+try:
+    from gevent.monkey import patch_all
+    patch_all()
+except Exception:
+    pass
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
