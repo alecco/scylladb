@@ -85,12 +85,12 @@ def run_async(self, *args, **kwargs):
 Session.run_async = run_async
 
 
-# "cql" fixture: set up client object for communicating with the CQL API.
+# "cluster" fixture: set up cluster interaction object
 # The host/port combination of the server are determined by the --host and
 # --port options, and defaults to localhost and 9042, respectively.
 # We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
-def cql(request):
+def cluster(request):
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -107,18 +107,23 @@ def cql(request):
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
     else:
         ssl_context = None
-    cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                      contact_points=[request.config.getoption('host')],
-                      port=request.config.getoption('port'),
-                      # TODO: make the protocol version an option, to allow testing with
-                      # different versions. If we drop this setting completely, it will
-                      # mean pick the latest version supported by the client and the server.
-                      protocol_version=4,
-                      # Use the default superuser credentials, which work for both Scylla and Cassandra
-                      auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
-                      ssl_context=ssl_context,
-                      )
-    return cluster.connect()
+    return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+                   contact_points=[request.config.getoption('host')],
+                   port=request.config.getoption('port'),
+                   # TODO: make the protocol version an option, to allow testing with
+                   # different versions. If we drop this setting completely, it will
+                   # mean pick the latest version supported by the client and the server.
+                   protocol_version=4,
+                   # Use the default superuser credentials, which work for both Scylla and Cassandra
+                   auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
+                   ssl_context=ssl_context,
+                   )
+
+
+# "cql" fixture: set up client object for communicating with the CQL API.
+@pytest.fixture(scope="session")
+def cql(cluster):
+    return cluster.connect()   # Return session object
 
 
 # A function-scoped autouse=True fixture allows us to test after every test
@@ -507,10 +512,5 @@ class Harness:
 
 
 @pytest.fixture(scope="module")
-def harness():
+def harness(cluster):
     return Harness()
-
-
-@pytest.fixture(scope="module")
-def cluster(harness):
-    return harness.new_cluster()
