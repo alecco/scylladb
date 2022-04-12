@@ -4,24 +4,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 from cassandra.protocol import InvalidRequest
-from pylib.util import random_string, unique_name
+from pylib.util import random_string
+from pylib.schema_helper import get_schema
 import pytest
 
 
-@pytest.fixture(scope="session")
-async def table1(cql, keyspace):
-    table = keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p text, c text, v text, primary key (p, c))")
-    yield table
-    await cql.run_async("DROP TABLE " + table)
-
-
 @pytest.mark.asyncio
-async def test_delete_empty_string_key(cql, table1):
+async def test_delete_empty_string_key(cql):
+    tables = await get_schema("delete_empty_string_key", cql, ntables=1, ncolumns=5)
     s = random_string()
     # An empty-string clustering *is* allowed:
-    await cql.run_async(f"DELETE FROM {table1} WHERE p='{s}' AND c=''")
+    await cql.run_async(f"DELETE FROM {tables[0]} WHERE pk = '{s}' AND {tables[0].columns[1]} = ''")
     # But an empty-string partition key is *not* allowed, with a specific
     # error that a "Key may not be empty":
     with pytest.raises(InvalidRequest, match='Key may not be empty'):
-        await cql.run_async(f"DELETE FROM {table1} WHERE p='' AND c='{s}'")
+        await cql.run_async(f"DELETE FROM {tables[0]} WHERE pk = '' AND {tables[0].columns[1]} = '{s}'")
+    await tables.verify_schema()
