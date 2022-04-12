@@ -20,6 +20,7 @@ from test.pylib.util import unique_name                                  # type:
 import pytest
 import ssl
 from typing import AsyncGenerator
+from test.pylib.schema_helper import TestTables                          # type: ignore
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -146,3 +147,14 @@ async def test_keyspace(request, cql, this_dc) -> AsyncGenerator:
                         f"'{this_dc}' : '{3}' }}")
     yield name
     await cql.run_async("DROP KEYSPACE " + name)
+
+
+# "schema" fixture: Creates and returns a temporary TestTables object
+# used in tests to make schema changes. Tables are dropped after finished.
+@pytest.fixture()
+async def tables(request, cql, test_keyspace) -> AsyncGenerator:
+    """Creates a specified table schema in a given keyspace and 
+       destroys it after finished"""
+    tables = TestTables(request.node.name, cql, test_keyspace)
+    return tables
+    await tables.drop_all_tables()
