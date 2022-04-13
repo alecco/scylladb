@@ -46,3 +46,17 @@ async def test_new_table_insert_one(cql, random_tables):
     res = [row for row in await cql.run_async(f"SELECT * FROM {table} WHERE pk='1' AND {col}='1'")]
     assert len(res) == 1
     assert list(res[0])[:2] == ['1', '1']
+
+
+@pytest.mark.asyncio
+async def test_drop_column(cql, random_tables):
+    """Drop a random column from a table"""
+    table = await random_tables.add_table(ncolumns=5)
+    await table.insert_seq()
+    await table.drop_column()
+    res = (await cql.run_async(f"SELECT * FROM {table} WHERE pk='1'"))[0]
+    assert len(res) == 4
+    await table.drop_column()
+    res = (await cql.run_async(f"SELECT * FROM {table} WHERE pk='1'"))[0]
+    assert len(res) == 3
+    await random_tables.verify_schema(table)
