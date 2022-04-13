@@ -363,7 +363,7 @@ class PythonTestSuite(TestSuite):
         return "test_*.py"
 
 
-class ApprovalTestSuite(TestSuite):
+class ApprovalTestSuite(PythonTestSuite):
     """Run CQL commands against a single Scylla instance"""
 
     def __init__(self, path, cfg, options, mode):
@@ -375,7 +375,7 @@ class ApprovalTestSuite(TestSuite):
 
     @property
     def pattern(self):
-        return "test_*.py"
+        return "*test.cql"
 
 
 class RunTestSuite(TestSuite):
@@ -579,25 +579,26 @@ class ApprovalTest(Test):
     def __init__(self, test_no, shortname, suite):
         super().__init__(test_no, shortname, suite)
         # Path to cql_repl driver, in the given build mode
-        self.path = os.path.join("build", self.mode, "test/tools/cql_repl")
+        self.path = "pytest"
         self.cql = os.path.join(suite.path, self.shortname + ".cql")
         self.result = os.path.join(suite.path, self.shortname + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = os.path.join(suite.path, self.shortname + ".reject")
-        self.args = shlex.split("-c1 -m2G --input={} --output={} --log={}".format(
-            self.cql, self.tmpfile, self.log_filename))
-        self.args += UnitTest.standard_args
+        self.args = [
+            "test/pylib/cql_repl/cql_repl.py",
+            "--input={}".format(self.cql),
+            "--output={}".format(self.tmpfile),
+        ]
         self.is_executed_ok = False
         self.is_new = False
         self.is_equal_result = None
         self.summary = "not run"
-        if self.mode == "coverage":
-            self.env = coverage.env(self.path, distinct_id=self.id)
-        else:
-            self.env = dict()
+        self.env = dict()
 
     async def run(self, options):
-        self.is_executed_ok = await run_test(self, options, env=self.env)
+        async with self.suite.clusters.instance() as cluster:
+            self.args.insert(1, "--host={}".format(cluster[0].host))
+            self.is_executed_ok = await run_test(self, options, env=self.env)
 
         self.success = False
         self.summary = "failed"
