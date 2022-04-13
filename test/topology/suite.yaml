@@ -5,3 +5,4 @@ topology:
     replication_factor: 3
 disable:
     - test_null
+    - test_cassandra_10250
