@@ -68,3 +68,16 @@ async def test_drop_column(cql):
     await table.insert_seq()
     await table.drop_column()
     await tables.verify_schema(table)
+
+
+@pytest.mark.asyncio
+async def test_add_index(cql):
+    """Add and drop an index"""
+    tables = await get_schema("add_index", cql, ntables=1, ncolumns=3)
+    table = tables[0]
+    with pytest.raises(AssertionError, match='PK'):
+        await table.add_index(0)
+    with pytest.raises(AssertionError, match='CK'):
+        await table.add_index(1)
+    await table.add_index(2)
+    await tables.verify_schema(table)
