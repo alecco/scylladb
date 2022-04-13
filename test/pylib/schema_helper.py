@@ -18,7 +18,7 @@ import asyncio
 import itertools
 import random
 import uuid
-from typing import Type, List, Union, TYPE_CHECKING
+from typing import Type, List, Set, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from cassandra.cluster import Session as CassandraSession            # type: ignore
 
@@ -119,6 +119,9 @@ class Table():
         self.removed_columns: List[Column] = []
         # Counter for sequential values to insert
         self.next_seq = itertools.count(start=1).__next__
+        self.next_idx_id = itertools.count(start=1).__next__
+        self.indexes: Set[str] = set()
+        self.removed_indexes: Set[str] = set()
 
     @property
     def all_col_names(self) -> str:
@@ -169,6 +172,27 @@ class Table():
         return await self.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
                                         f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
                                         parameters=[c.val(seed) for c in self.columns])
+
+    async def add_index(self, column: Union[Column, str], name: str = None) -> str:
+        if type(column) is int:
+            assert column >= self.pks, f"Idex on {'PK' if column == 0 else 'CK'} column"
+            col_name = self.columns[column].name
+        elif type(column) is str:
+            col_name = next(c for c in self.columns if c.name == column)
+        else:
+            assert type(column) is Column, "Wrong column type to add_column"
+            assert column in self.columns
+            col_name = column.name
+
+        name = name if name is not None else f"{self.name}_{col_name}_{self.next_idx_id():02}"
+        await self.cql.run_async(f"CREATE INDEX {name} on {self.full_name} ({col_name})")
+        self.indexes.add(name)
+        return name
+
+    async def drop_index(self, name: str) -> None:
+        self.indexes.remove(name)
+        await self.cql.run_async(f"DROP INDEX {self.keyspace}.{name}")
+        self.removed_indexes.add(name)
 
     def __str__(self):
         return self.full_name
