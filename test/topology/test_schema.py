@@ -48,3 +48,13 @@ async def test_alter_verify_schema(cql, tables):
     await cql.run_async(f"ALTER TABLE {table} DROP {table.columns[-1].name}")
     with pytest.raises(AssertionError, match='Column'):
         await tables.verify_schema()
+
+
+@pytest.mark.asyncio
+async def test_new_table_insert_one(cql, tables):
+    table = await tables.add_table(ncolumns=5)
+    await table.insert_seq()
+    col = table.columns[0].name
+    res = [row for row in await cql.run_async(f"SELECT * FROM {table} WHERE pk='1' AND {col}='1'")]
+    assert len(res) == 1
+    assert list(res[0])[:2] == ['1', '1']
