@@ -47,3 +47,15 @@ async def test_verify_schema(cql):
     await cql.run_async(f"ALTER TABLE {table} DROP {table.columns[-1].name}")
     with pytest.raises(AssertionError, match='Column'):
         await tables.verify_schema()
+
+
+@pytest.mark.asyncio
+@pytest.mark.ntables(1)
+async def test_new_table_insert_one(cql):
+    tables = await get_schema("delete_empty_string_key", cql, ntables=1, ncolumns=5)
+    table = tables[0]
+    await table.insert_seq()
+    col = table.columns[0].name
+    res = [row for row in await cql.run_async(f"SELECT * FROM {table} WHERE pk='1' AND {col}='1'")]
+    assert len(res) == 1
+    assert list(res[0])[:2] == ['1', '1']
