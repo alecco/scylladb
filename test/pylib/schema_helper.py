@@ -24,6 +24,10 @@ DEFAULT_DCRF = 3        # Replication Factor for this_dc
 new_keyspace_id = itertools.count(start=1).__next__
 
 
+class ColumnNotFound(Exception):
+    pass
+
+
 class ValueType(metaclass=ABCMeta):
     name: str = ""
 
@@ -110,6 +114,7 @@ class Table():
             self.columns += [Column(f"c_{self.next_clustering_id():02}", ctype=TextType) for i in range(1, pks)]
             self.columns += [Column(f"v_{self.next_value_id():02}") for i in range(1, ncolumns - pks + 1)]
 
+        self.removed_columns: List[Column] = []
         # Counter for sequential values to insert
         self.next_seq = itertools.count(start=1).__next__
 
@@ -125,6 +130,36 @@ class Table():
 
     async def drop(self) -> asyncio.Future:
         return await self.cql.run_async(f"DROP TABLE {self.full_name}")
+
+    async def add_column(self, name: str = None, ctype: Type[ValueType] = None, column: Column = None):
+        if column is not None:
+            assert type(column) is Column, "Wrong column type to add_column"
+        else:
+            name = name if name is not None else f"c_{self.next_clustering_id():02}"
+            ctype = ctype if ctype is not None else TextType
+            column = Column(name, ctype=ctype)
+        self.columns.append(column)
+        await self.cql.run_async(f"ALTER TABLE {self.full_name} ADD {column.name} {column.ctype.name}")
+
+    async def drop_column(self, column: Union[Column, str] = None):
+        if column is None:
+            col = random.choice(self.columns[self.pks:])
+        elif type(column) is int:
+            assert column >= self.pks, f"Cannot remove {self.name} PK column at pos {column}"
+            col = self.columns[column]
+        elif type(column) is str:
+            try:
+                col = next(col for col in self.columns if col.name == column)
+            except StopIteration:
+                raise ColumnNotFound(f"Column {column} not found in table {self.name}")
+        else:
+            assert type(column) is Column, f"can not remove unknown type {type(column)}"
+            assert column in self.columns, f"column {column.name} not present"
+            col = column
+        assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {col.name} from {self.name}"
+        self.columns.remove(col)
+        self.removed_columns.append(col)
+        await self.cql.run_async(f"ALTER TABLE {self.full_name} DROP {col.name}")
 
     async def insert_seq(self) -> asyncio.Future:
         """Insert a row of next sequential values"""
