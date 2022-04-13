@@ -60,3 +60,15 @@ async def test_drop_column(cql, tables):
     res = (await cql.run_async(f"SELECT * FROM {table} WHERE pk='1'"))[0]
     assert len(res) == 3
     await tables.verify_schema(table)
+
+
+@pytest.mark.asyncio
+async def test_add_index(cql, tables):
+    """Add and drop an index"""
+    table = await tables.add_table(ncolumns=5)
+    with pytest.raises(AssertionError, match='PK'):
+        await table.add_index(0)
+    with pytest.raises(AssertionError, match='CK'):
+        await table.add_index(1)
+    await table.add_index(2)
+    await tables.verify_schema(table)
