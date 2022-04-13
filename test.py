@@ -75,7 +75,6 @@ class TestSuite(ABC):
     artifacts = ArtifactRegistry()
     hosts = HostRegistry()
     _next_id = 0
-    artifacts.add_exit_artifact(hosts.cleanup)
 
     def __init__(self, path, cfg, options, mode):
         self.path = path
@@ -974,6 +973,7 @@ async def run_all_tests(signaled, options):
             console.print_progress(result)
     console.print_start_blurb()
     try:
+        TestSuite.artifacts.add_exit_artifact(TestSuite.hosts.cleanup)
         for test in TestSuite.tests():
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
