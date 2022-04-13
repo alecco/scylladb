@@ -187,6 +187,10 @@ class ScyllaServer:
 
     async def cql_is_up(self) -> bool:
         """Test that CQL is serving, for wait_for_services() below."""
+        caslog = logging.getLogger('cassandra')
+        oldlevel = caslog.getEffectiveLevel()
+        # Be quiet about connection failures.
+        caslog.setLevel('CRITICAL')
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
         try:
             with Cluster(contact_points=[self.cfg["host"]], auth_provider=auth) as cluster:
@@ -194,6 +198,8 @@ class ScyllaServer:
                     return True
         except NoHostAvailable:
             return False
+        finally:
+            caslog.setLevel(oldlevel)
         # Any other exception may indicate a problem, and is passed to the caller.
 
     async def rest_api_is_up(self) -> bool:
