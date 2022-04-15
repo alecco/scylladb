@@ -690,6 +690,8 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
+            # API for communicating with harness
+            harness_api_r, harness_api_w = os.pipe()
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -700,10 +702,13 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                          # TMPDIR env variable is used by any seastar/scylla
                          # test for directory to store test temporary data.
                          TMPDIR=os.path.join(options.tmpdir, test.mode),
+                         HARNESS_API_FD=f"{harness_api_w}",
                          **env,
                          ),
                 preexec_fn=os.setsid,
+                pass_fds=(harness_api_w,),
             )
+            # XXX here read harness API commands or see if process is done
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
             if process.returncode != 0:

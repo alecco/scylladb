@@ -6,11 +6,17 @@
 from cassandra.protocol import InvalidRequest
 from pylib.util import random_string
 from pylib.schema_helper import get_schema
+import os
 import pytest
 
 
 @pytest.mark.asyncio
 async def test_delete_empty_string_key(cql):
+    import sys
+    harness_fd = os.environ['HARNESS_API_FD']
+    harness_api = open(int(os.environ['HARNESS_API_FD']))
+    print(f"XXX harness at {harness_fd}", file=sys.stderr)
+    raise Exception("XXX")
     tables = await get_schema("delete_empty_string_key", cql, ntables=1, ncolumns=5)
     s = random_string()
     # An empty-string clustering *is* allowed:
