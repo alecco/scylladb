@@ -11,6 +11,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_delete_empty_string_key(cql):
+    # raise Exception("XXX")  # XXX
     tables = await get_schema("delete_empty_string_key", cql, ntables=1, ncolumns=5)
     s = random_string()
     # An empty-string clustering *is* allowed:

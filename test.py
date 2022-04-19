@@ -34,6 +34,7 @@ from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.pool import Pool
 from test.pylib.host_registry import HostRegistry
 from test.pylib.scylla_server import ScyllaServer
+from test.pylib.rest_api import RestAPI
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -136,6 +137,7 @@ class TestSuite(ABC):
             kind = cfg.get("type")
             if kind is None:
                 raise RuntimeError("Failed to load tests in {}: suite.yaml has no suite type".format(path))
+            # XXX print(f"XXX opt_create {path} kind {kind.title()}")  # XXX
             SpecificTestSuite = globals().get(kind.title() + "TestSuite")
             if not SpecificTestSuite:
                 raise RuntimeError("Failed to load tests in {}: suite type '{}' not found".format(path, kind))
@@ -302,6 +304,9 @@ class PythonTestSuite(TestSuite):
         self.create_cluster = self.topology_for_class(topology["class"], topology)
 
         self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
+        print(f"XXX PythonTestSuite init {path}")  # XXX
+        # XXX here rest_api (add routes and start with main event loop)
+        api = RestAPI()
 
     def create_server(self, cluster_name, seed):
         server = ScyllaServer(
@@ -690,6 +695,9 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
+
+            # XXX use API for communicating with harness
+
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -704,6 +712,8 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                          ),
                 preexec_fn=os.setsid,
             )
+
+            # XXX here read harness API commands or see if process is done
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
             if process.returncode != 0:
