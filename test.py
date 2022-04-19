@@ -354,6 +354,7 @@ class PythonTestSuite(TestSuite):
         if class_name.lower() == "simple":
             async def create_cluster():
                 cluster = ScyllaCluster(int(cfg["replication_factor"]),
+                                        os.path.join(self.options.tmpdir, self.mode),
                                         create_server)
                 await cluster.install_and_start()
                 return cluster
@@ -702,6 +703,7 @@ class PythonTest(Test):
     async def run(self, options):
         async with self.suite.clusters.instance() as cluster:
             self.args.insert(0, "--host={}".format(cluster[0].host))
+            self.args.append(f"--cluster_sock={cluster.sock_path}")
             try:
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
