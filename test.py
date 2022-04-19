@@ -611,7 +611,7 @@ class CQLApprovalTest(Test):
 
         async with self.suite.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(1, "--host={}".format(cluster[0].host))
+            self.args.insert(1, f"--api={cluster.sock_path}")
             # If pre-check fails, e.g. because Scylla failed to start
             # or crashed between two tests, fail entire test.py
             try:
@@ -750,7 +750,7 @@ class PythonTest(Test):
 
         async with self.suite.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(0, "--host={}".format(cluster[0].host))
+            self.args.insert(0, f"--api={cluster.sock_path}")
             try:
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
