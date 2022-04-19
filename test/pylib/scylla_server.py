@@ -4,14 +4,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 import aiohttp
+import aiohttp.web
 import asyncio
 import logging
 import os
 import pathlib
+from random import randint
 import shutil
 import time
 import uuid
-from typing import Optional, List, Callable
+from typing import Optional, Dict, List, Callable
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
 from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
@@ -349,34 +351,58 @@ Check the log files:
 
 
 class ScyllaCluster:
-    def __init__(self, replicas: int,
+    """ScyllaCluster: creates and manages a cluster of Scylla servers.
+    Control is provided through an HTTP REST API through an AF_UNIX socket.
+        /stop - stop entire cluster
+        /start - start entire cluster
+        /nodes - list cluster nodes (their server ids
+        /node/<id>/stop - stop node
+        /node/<id>/start - start node
+        /node/<id>/restart - restart node
+        /addnode - add a new node and return its id
+        /removenode/<id> - remove node by id
+        /decommission/<id> - decommission node by id
+        /replacenode/<id> - replace node by id, and return new node id.
+    """
+
+    def __init__(self, replicas: int, tmpdir: str,
                  create_server: Callable[[str, Optional[str]], ScyllaServer]) -> None:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
-        self.cluster: List[ScyllaServer] = []
+        self.cluster: Dict[str, ScyllaServer] = {}
         self.create_server = create_server
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
+        self.app = aiohttp.web.Application()
+        self.setup_routes()
+        self.runner = aiohttp.web.AppRunner(self.app)
+        self.sock_path = f"{tmpdir}/harness_sock_{randint(1000000,9999999)}"
+        self.dirty = False
 
     async def install_and_start(self) -> None:
         try:
+            seed = None
             for i in range(self.replicas):
-                seed = self.cluster[-1].host if self.cluster else None
                 server = self.create_server(self.name, seed)
-                self.cluster.append(server)
                 await server.install_and_start()
+                self.cluster[server.host] = server
+                seed = server.host
         except (RuntimeError, NoHostAvailable, InvalidRequest) as e:
             # If start fails, swallow the error to throw later,
             # at test time.
             self.start_exception = e
+        await self.runner.setup()
+        site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
+        await site.start()
 
     def __getitem__(self, i: int) -> ScyllaServer:
-        return self.cluster[i]
+        assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
+        return next(server for pos, server in enumerate(self.cluster.values()) if pos == i)
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert(self.start_exception is None)
-        rows = self.cluster[0].control_connection.execute(
+        rows = self[0].control_connection.execute(
             "select count(*) as c from system_schema.keyspaces")
         keyspace_count = int(rows.one()[0])
         return keyspace_count
@@ -398,3 +424,80 @@ class ScyllaCluster:
         if self._get_keyspace_count() != self.keyspace_count:
             raise RuntimeError("Test post-condition failed, "
                                "the test must drop all keyspaces it creates.")
+
+    def setup_routes(self):
+        self.app.router.add_get('/', self.index)
+        self.app.router.add_get('/cluster/nodes', self.cluster_nodes)
+        self.app.router.add_get('/cluster/stop', self.cluster_stop)
+        self.app.router.add_get('/cluster/start', self.cluster_start)
+        self.app.router.add_get('/cluster/node/{id}/stop', self.cluster_node_stop)
+        self.app.router.add_get('/cluster/node/{id}/start', self.cluster_node_start)
+        self.app.router.add_get('/cluster/node/{id}/restart', self.cluster_node_restart)
+        self.app.router.add_get('/cluster/addnode', self.cluster_node_add)
+        self.app.router.add_get('/cluster/removenode/{id}', self.cluster_node_remove)
+        self.app.router.add_get('/cluster/decommission/{id}', self.cluster_node_decommission)
+        self.app.router.add_get('/cluster/replacenode/{id}', self.cluster_node_replace)
+
+    async def index(self, request):
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_nodes(self, request):
+        return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.keys()))}")
+
+    async def cluster_stop(self, request):
+        await asyncio.gather(*(server.stop() for server in self.cluster.values()))
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_start(self, request):
+        await asyncio.gather(*(server.start() for server in self.cluster.values()))
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_stop(self, request):
+        node_id = request.match_info['id']
+        server = self.cluster.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        await server.stop()
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_start(self, request):
+        node_id = request.match_info['id']
+        server = self.cluster.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        await server.start()
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_restart(self, request):
+        node_id = request.match_info['id']
+        server = self.cluster.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        await server.stop()
+        await server.start()
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_add(self, request):
+        node_id = await self.add_server()
+        return aiohttp.web.Response(text=node_id)
+
+    async def cluster_node_remove(self, request):
+        node_id = request.match_info['id']
+        server = self.cluster.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        await server.stop()
+        await server.uninstall()
+        del self.cluster[node_id]
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_decommission(self, request):
+        # node_id = request.match_info['id']
+        return aiohttp.web.Response(status=500, text="Not implemented")
+
+    async def cluster_node_replace(self, request):
+        old_node_id = request.match_info['id']
+        await self.cluster_node_stop(old_node_id)
+        del self.cluster[old_node_id]
+        new_node_id = await self.add_server()
+        return aiohttp.web.Response(text=new_node_id)
