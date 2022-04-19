@@ -6,10 +6,16 @@
 from cassandra.protocol import InvalidRequest   # type: ignore
 from pylib.util import unique_name
 import pytest
+import sys   # XXX
+
+async def get_nodes(harness):   # XXX
+    nodes = await harness.nodes()
+    print(f"XXX test nodes {nodes}", file=sys.stderr)  # XXX
+    return await harness.nodes()
 
 
 @pytest.mark.asyncio
-async def test_delete_empty_string_key(cql, tables):
+async def test_delete_empty_string_key(cql, tables harness):
     table = await tables.add_table(ncolumns=5)
     s = "foobar"
     # An empty-string clustering *is* allowed:
