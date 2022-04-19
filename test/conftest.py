@@ -21,6 +21,7 @@ import pytest
 import ssl
 from typing import AsyncGenerator
 from test.pylib.schema_helper import TestTables                          # type: ignore
+from test.pylib.cluster_cli import ClusterCli
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -35,6 +36,8 @@ def pytest_addoption(parser):
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
     parser.addoption('--dc_rf', action='store', default='1',
                      help='Default datacenter replication factor')
+    parser.addoption('--cluster_sock', action='store', required=True,
+                     help='Harness unix socket path')
 
 
 # Change default pytest-asyncio event_loop fixture scope to session to
@@ -186,3 +189,10 @@ async def tables(request, cql, test_keyspace) -> AsyncGenerator:
     tables = TestTables(request.node.name, cql, test_keyspace)
     yield tables
     await tables.drop_all_tables()
+
+# "harness" fixture: set up client object for communicating with the Cluster API.
+# Connect to a Unix socket where a REST API is listening
+@pytest.fixture(scope="function")
+async def cluster(request):
+    sock_path = request.config.getoption('cluster_sock')
+    yield ClusterCli(sock_path)
