@@ -20,6 +20,7 @@ import asyncio
 import pytest
 import ssl
 from typing import AsyncGenerator
+from test.pylib.harness_cli import HarnessCli
 
 
 # Default initial values
@@ -36,6 +37,8 @@ def pytest_addoption(parser):
                      help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
+    parser.addoption('--harness_sock', action='store',
+                     help='Harness unix socket path')
 
 
 # Change default pytest-asyncio event_loop fixture scope to session to
@@ -150,3 +153,11 @@ async def keyspace(request, cql, this_dc) -> AsyncGenerator:
                         f"'{this_dc}' : '{DEFAULT_DCRF}' }}")
     yield name
     await cql.run_async("DROP KEYSPACE " + name)
+
+
+# "harness" fixture: set up client object for communicating with the Harness API.
+# Connect to a Unix socket where a REST API is listening
+@pytest.fixture(scope="function")
+async def harness(request):
+    sock_path = request.config.getoption('harness_sock')
+    yield HarnessCli(sock_path)
