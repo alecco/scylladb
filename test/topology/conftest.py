@@ -26,6 +26,8 @@ def pytest_addoption(parser):
                      help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
+    parser.addoption('--harness_sock', action='store',
+                     help='Harness unix socket path')
 
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
