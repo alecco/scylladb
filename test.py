@@ -24,7 +24,6 @@ import signal
 import subprocess
 import sys
 import time
-import uuid
 import xml.etree.ElementTree as ET
 import yaml
 
@@ -34,6 +33,7 @@ from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.pool import Pool
 from test.pylib.host_registry import HostRegistry
 from test.pylib.scylla_server import ScyllaServer
+from test.pylib.harness import Harness
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -136,6 +136,7 @@ class TestSuite(ABC):
             kind = cfg.get("type")
             if kind is None:
                 raise RuntimeError("Failed to load tests in {}: suite.yaml has no suite type".format(path))
+            #print(f"XXX opt_create {path} kind {kind.title()}")  # XXX
             SpecificTestSuite = globals().get(kind.title() + "TestSuite")
             if not SpecificTestSuite:
                 raise RuntimeError("Failed to load tests in {}: suite type '{}' not found".format(path, kind))
@@ -301,6 +302,7 @@ class PythonTestSuite(TestSuite):
 
         self.create_cluster = self.topology_for_class(topology["class"], topology)
 
+        #print(f"XXX PythonTestSuite init {path} cfg {str(cfg)}")  # XXX
         self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
 
     def create_server(self, cluster_name, seed):
@@ -328,15 +330,10 @@ class PythonTestSuite(TestSuite):
             replicas = int(cfg["replication_factor"])
 
             async def start_simple():
-                cluster = []
-                cluster_name = str(uuid.uuid1())
-                for i in range(replicas):
-                    seed = cluster[-1].host if cluster else None
-                    server = self.create_server(cluster_name, seed)
-                    cluster.append(server)
-                    await server.install_and_start()
-                return cluster
-
+                harness = Harness(self)
+                [await harness.add_server() for i in range(replicas)]
+                await harness.setup_and_run()
+                return harness
             return start_simple
         else:
             raise RuntimeError("Unsupported topology name")
@@ -596,8 +593,10 @@ class PythonTest(Test):
         print(read_log(self.log_filename))
 
     async def run(self, options):
-        async with self.suite.clusters.instance() as cluster:
-            self.args.insert(0, "--host={}".format(cluster[0].host))
+        async with self.suite.clusters.instance() as harness:
+            self.args.insert(0, "--host={}".format(harness.endpoint()))
+            #print(f"XXX PythonTest run() endpoint {harness.endpoint()} with harness sock path {harness.sock_path}")  # XXX
+            self.args.append(f"--harness_sock={harness.sock_path}")
             self.success = await run_test(self, options)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
@@ -685,11 +684,15 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             test.time_start = time.time()
             test.time_end = 0
 
+            # print(f"XXX run_test() {test.path} {test.args}")  # XXX
             path = test.path
             args = test.args
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
+
+            # XXX use API for communicating with harness
+
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -704,6 +707,8 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                          ),
                 preexec_fn=os.setsid,
             )
+
+            # XXX here read harness API commands or see if process is done
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
             if process.returncode != 0:
