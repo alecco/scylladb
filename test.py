@@ -34,6 +34,7 @@ from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.pool import Pool
 from test.pylib.host_registry import HostRegistry
 from test.pylib.scylla_server import ScyllaServer
+import test.pylib.rest_api as rest_api
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -690,6 +691,10 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
+
+            # API for communicating with harness
+            # XXX here rest_api (add routes and start with main event loop)
+
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -700,10 +705,13 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                          # TMPDIR env variable is used by any seastar/scylla
                          # test for directory to store test temporary data.
                          TMPDIR=os.path.join(options.tmpdir, test.mode),
+                         HARNESS_API_FD=f"{harness_api_w}",
                          **env,
                          ),
                 preexec_fn=os.setsid,
             )
+
+            # XXX here read harness API commands or see if process is done
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
             if process.returncode != 0:
