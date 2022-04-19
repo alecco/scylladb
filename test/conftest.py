@@ -21,18 +21,17 @@ import pytest
 import ssl
 from typing import AsyncGenerator
 from test.pylib.random_tables import RandomTables                        # type: ignore
+from test.pylib.cluster_cli import ClusterCli                            # type: ignore
 
 
-# By default, tests run against a CQL server (Scylla or Cassandra) listening
-# on localhost:9042. Add the --host and --port options to allow overiding
-# these defaults.
+# By default, tests run against a CQL cluster (Scylla or Cassandra)
+# Get cluster harness management API sock.
+# Find out the CQL host:port listening through the API.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-                     help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-                     help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
+    parser.addoption('--api', action='store', required=True,
+                     help='Harness unix socket path')
 
 
 # Change default pytest-asyncio event_loop fixture scope to session to
@@ -75,12 +74,20 @@ def run_async(self, *args, **kwargs) -> asyncio.Future:
 Session.run_async = run_async
 
 
+# "harness" fixture: set up client object for communicating with the Cluster API.
+# Connect to a Unix socket where a REST API is listening
+@pytest.fixture(scope="session")
+async def cluster_api(request):
+    sock_path = request.config.getoption('api')
+    yield ClusterCli(sock_path)
+
+
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
 # --port options, and defaults to localhost and 9042, respectively.
 # We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
-def cql(request):
+async def cql(request, cluster_api):
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -97,9 +104,11 @@ def cql(request):
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
     else:
         ssl_context = None
+    nodes = await cluster_api.nodes()
+    cql_port: int = await cluster_api.cql_port()
     cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                      contact_points=[request.config.getoption('host')],
-                      port=int(request.config.getoption('port')),
+                      contact_points=nodes,
+                      port=cql_port,
                       # TODO: make the protocol version an option, to allow testing with
                       # different versions. If we drop this setting completely, it will
                       # mean pick the latest version supported by the client and the server.
@@ -164,10 +173,11 @@ async def fails_without_raft(request, check_pre_raft):
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-async def keyspace(cql, this_dc):
+async def keyspace(cql, this_dc, cluster_api):
     name = unique_name()
+    replicas = await cluster_api.replicas()
     await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 1 }")
+                this_dc + f"' : {replicas} }}")
     yield name
     await cql.run_async("DROP KEYSPACE " + name)
 
