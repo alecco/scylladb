@@ -3,7 +3,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+import itertools
 import aiohttp
+import aiohttp.web
 import asyncio
 import logging
 import os
@@ -12,7 +14,7 @@ import shutil
 import tempfile
 import time
 import uuid
-from typing import Optional, List, Callable
+from typing import Optional, Dict, List, Set, Callable
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
 from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
@@ -380,6 +382,9 @@ Check the log files:
 
 
 class ScyllaCluster:
+    """ScyllaCluster: creates and manages a cluster of Scylla servers.
+       Control is provided through an HTTP REST API through an AF_UNIX socket.
+    """
     def __init__(self, scylla_exe: str, replicas: int, test_base_dir: str,
                  cmdline_options: List[str], host_registry: HostRegistry) -> None:
         self.name = str(uuid.uuid1())
@@ -388,11 +393,19 @@ class ScyllaCluster:
         self.cluster_dir = tempfile.mkdtemp(prefix="cluster-", dir=test_base_dir)
         self.cmdline_options = cmdline_options
         self.host_registry = host_registry
-        self.cluster: List[ScyllaServer] = []
+        self.started: Dict[str, ScyllaServer] = {}
+        self.stopped: Dict[str, ScyllaServer] = {}
+        self.removed: Set[str] = set()
         self.is_running: bool = True
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
-        self.last_seed: str = None     # id as IP Address like '127.1.2.3'
+        self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
+        self.cql_port: int = 9042                # numeric TCP port for CQL connections
+        self.app = aiohttp.web.Application()
+        self.setup_routes()
+        self.runner = aiohttp.web.AppRunner(self.app)
+        self.sock_path = f"{self.cluster_dir}/api_sock"
+        self.dirty = False
 
         async def stop_cluster() -> None:
             if self.is_running:
@@ -406,6 +419,7 @@ class ScyllaCluster:
 
     async def install_and_start(self) -> None:
         try:
+            seed = None
             for i in range(self.replicas):
                 await self.add_server()
             self.keyspace_count = self._get_keyspace_count()
@@ -413,29 +427,38 @@ class ScyllaCluster:
             # If start fails, swallow the error to throw later,
             # at test time.
             self.start_exception = e
+        await self.runner.setup()
+        site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
+        await site.start()
 
     async def uninstall(self) -> None:
         """Stop running servers, uninstall all servers, and remove API socket"""
         logging.info("Uninstalling cluster")
         await self.stop_gracefully()
-        await asyncio.gather(*(server.uninstall() for server in self.cluster))
+        await asyncio.gather(*(server.uninstall() for server in self.stopped.values()))
         shutil.rmtree(self.cluster_dir)
 
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
         if self.is_running:
-            await asyncio.gather(*(server.stop() for server in self.cluster))
-        self.last_seed = None
+            await asyncio.gather(*(server.stop() for server in self.started.values()))
+            self.last_seed = None
+            self.stopped.update(self.started)
+            self.started.clear()
         self.is_running = False
 
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
         if self.is_running:
-            await asyncio.gather(*(server.stop_gracefully() for server in self.cluster))
+            await asyncio.gather(*(server.stop_gracefully() for server in self.started.values()))
+            self.last_seed = None
+            self.stopped.update(self.started)
+            self.started.clear()
         self.is_running = False
         self.last_seed = None
 
     async def add_server(self):
+        """Create and start a server in the cluster"""
         server = ScyllaServer(
             exe=self.scylla_exe,
             vardir=self.cluster_dir,
@@ -443,17 +466,18 @@ class ScyllaCluster:
             cluster_name=self.name,
             seed=self.last_seed,
             cmdline_options=self.cmdline_options)
-        self.cluster.append(server)
         await server.install_and_start()
+        self.started[server.host] = server
         self.last_seed = server.host
 
     def __getitem__(self, i: int) -> ScyllaServer:
-        return self.cluster[i]
+        assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
+        return next(server for pos, server in enumerate(self.started.values()) if pos == i)
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert(self.start_exception is None)
-        rows = self.cluster[0].control_connection.execute(
+        rows = self[0].control_connection.execute(
             "select count(*) as c from system_schema.keyspaces")
         keyspace_count = int(rows.one()[0])
         return keyspace_count
@@ -467,7 +491,7 @@ class ScyllaCluster:
         if self.start_exception:
             raise self.start_exception
 
-        for server in self.cluster:
+        for server in self.started.values():
             server.write_log_marker("------ Starting test {} ------\n".format(name))
 
     def after_test(self, name) -> None:
@@ -477,5 +501,163 @@ class ScyllaCluster:
         if self._get_keyspace_count() != self.keyspace_count:
             raise RuntimeError("Test post-condition failed, "
                                "the test must drop all keyspaces it creates.")
-        for server in self.cluster:
+        for server in itertools.chain(self.started.values(), self.stopped.values()):
             server.write_log_marker("------ Ending test {} ------\n".format(name))
+
+    def update_last_seed(self, removed_host: str) -> None:
+        if self.last_seed == removed_host:
+            self.last_seed = next(iter(self.started.keys())) if self.started else None
+
+    def setup_routes(self) -> None:
+        self.app.router.add_get('/', self.index)
+        self.app.router.add_get('/cluster/up', self.cluster_up)
+        self.app.router.add_get('/cluster/start', self.cluster_start)
+        self.app.router.add_get('/cluster/nodes', self.cluster_nodes)
+        self.app.router.add_get('/cluster/stop', self.cluster_stop)
+        self.app.router.add_get('/cluster/stop_gracefully', self.cluster_stop_gracefully)
+        self.app.router.add_get('/cluster/cql-port', self.cluster_cql_port)
+        self.app.router.add_get('/cluster/replicas', self.cluster_replicas)
+        self.app.router.add_get('/cluster/mark-dirty', self.mark_dirty)
+        self.app.router.add_get('/cluster/node/{id}/stop', self.cluster_node_stop)
+        self.app.router.add_get('/cluster/node/{id}/stop_gracefully', self.cluster_node_stop_gracefully)
+        self.app.router.add_get('/cluster/node/{id}/start', self.cluster_node_start)
+        self.app.router.add_get('/cluster/node/{id}/restart', self.cluster_node_restart)
+        self.app.router.add_get('/cluster/addnode', self.cluster_node_add)
+        self.app.router.add_get('/cluster/removenode/{id}', self.cluster_node_remove)
+        self.app.router.add_get('/cluster/decommission/{id}', self.cluster_node_decommission)
+        self.app.router.add_get('/cluster/replacenode/{id}', self.cluster_node_replace)
+
+    async def index(self, request) -> aiohttp.web.Response:
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_up(self, request) -> aiohttp.web.Response:
+        """Is cluster running"""
+        return aiohttp.web.Response(text=f"{self.is_running}")
+
+    async def cluster_start(self, request) -> aiohttp.web.Response:
+        if not self.is_running:
+            await self.install_and_start()
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_nodes(self, request) -> aiohttp.web.Response:
+        """Return a list of active server ids (IPs)"""
+        return aiohttp.web.Response(text=f"{','.join(sorted(self.started.keys()))}")
+
+    async def cluster_stop(self, request) -> aiohttp.web.Response:
+        """Stop all active servers right now"""
+        await self.stop()
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_stop_gracefully(self, request) -> aiohttp.web.Response:
+        """Stop all active servers gracefully"""
+        await self.stop_gracefully()
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_cql_port(self, request) -> aiohttp.web.Response:
+        """Return cluster's configured CQL TCP port"""
+        return aiohttp.web.Response(text=f"{self.cql_port}")
+
+    async def cluster_replicas(self, request) -> aiohttp.web.Response:
+        """Return cluster's configured number of replicas (replication factor)"""
+        return aiohttp.web.Response(text=f"{self.replicas}")
+
+    async def mark_dirty(self, request) -> aiohttp.web.Response:
+        """Manually mark cluster dirty"""
+        self.dirty = True
+        return aiohttp.web.Response(text="OK")
+
+    async def _node_stop(self, request: aiohttp.web.Request, gracefully: bool) \
+                        -> aiohttp.web.Response:
+        """Stop a server. No-op if already stopped."""
+        node_id = request.match_info['id']
+        if node_id in self.stopped or node_id in self.removed:
+            return aiohttp.web.Response(text="OK")
+        if node_id not in self.started:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        self.dirty = True
+        server = self.started.pop(node_id)
+        if gracefully:
+            await server.stop_gracefully()
+        else:
+            await server.stop()
+        self.update_last_seed(server.host)
+        self.stopped[node_id] = server
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_stop(self, request) -> aiohttp.web.Response:
+        """Stop a specified server"""
+        return await self._node_stop(request, gracefully = False)
+
+    async def cluster_node_stop_gracefully(self, request) -> aiohttp.web.Response:
+        """Stop a specified server gracefully"""
+        return await self._node_stop(request, gracefully = True)
+
+    async def cluster_node_start(self, request) -> aiohttp.web.Response:
+        """Start a specified server (must be stopped)"""
+        node_id = request.match_info['id']
+        server = self.stopped.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        server.seeds = self.last_seed
+        await server.start()
+        self.started[node_id] = self.stopped.pop(node_id)
+        self.dirty = True
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_restart(self, request) -> aiohttp.web.Response:
+        """Start a specified server (must be already started)"""
+        node_id = request.match_info['id']
+        server = self.started.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        await server.stop_gracefully()
+        await server.start()
+        self.dirty = True
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_add(self, request) -> aiohttp.web.Response:
+        """Add a new server"""
+        node_id = await self.add_server()
+        self.dirty = True
+        return aiohttp.web.Response(text=node_id)
+
+    async def _node_remove(self, node_id: str) -> None:
+        """Remove a specified server"""
+        if node_id in self.started:
+            server = self.started.pop(node_id)
+            await server.stop_gracefully()
+            self.update_last_seed(server.host)
+        elif node_id in self.stopped:
+            server = self.stopped.pop(node_id)
+        else:
+            return
+        await server.uninstall()
+        self.removed.add(node_id)
+        self.dirty = True
+
+    async def cluster_node_remove(self, request) -> aiohttp.web.Response:
+        """Remove a specified server"""
+        node_id = request.match_info['id']
+        await self._node_remove(node_id)
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_node_decommission(self, request) -> aiohttp.web.Response:
+        """Deactivate a selected node by streaming its data to the next node in the ring."""
+        return aiohttp.web.Response(status=500, text="Not implemented")
+
+    async def cluster_node_replace(self, request) -> aiohttp.web.Response:
+        """Replace a specified server with a new one"""
+        old_node_id = request.match_info['id']
+        if old_node_id in self.started:
+            server = self.started.pop(old_node_id)
+            await server.stop_gracefully()
+            self.update_last_seed(server.host)
+        elif old_node_id in self.stopped:
+            server = self.stopped.pop(old_node_id)
+        else:
+            return aiohttp.web.Response(status=500, text=f"Host {old_node_id} not found")
+        await server.uninstall()
+        self.removed.add(old_node_id)
+        new_node_id = await self.add_server()
+        self.dirty = True
+        return aiohttp.web.Response(text=new_node_id)
