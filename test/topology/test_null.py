@@ -15,6 +15,8 @@ async def test_delete_empty_string_key(cql, harness):
     import sys
     print(f"XXX test nodes {nodes}", file=sys.stderr)  # XXX
 
+    raise Exception("XXX")  # XXX force print and keep output
+
     tables = await get_schema("delete_empty_string_key", cql, ntables=1, ncolumns=5)
     s = random_string()
     # An empty-string clustering *is* allowed:
