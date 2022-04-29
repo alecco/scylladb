@@ -11,10 +11,9 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_delete_empty_string_key(cql, harness):
-    resp = await harness.nodes()
-    txt = await resp.text()
+    nodes = await harness.nodes()
     import sys
-    print(f"XXX test stop resp text {txt}", file=sys.stderr)  # XXX
+    print(f"XXX test nodes {nodes}", file=sys.stderr)  # XXX
 
     tables = await get_schema("delete_empty_string_key", cql, ntables=1, ncolumns=5)
     s = random_string()
