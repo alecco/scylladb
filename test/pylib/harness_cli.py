@@ -35,6 +35,20 @@ class HarnessCli():
         host_list = await resp.text()
         return host_list.split(',')
 
+    async def addnode(self):
+        resp = await self.session.get(f"http://localhost/cluster/addnode")
+        return await resp.text()
+
+    async def node_start(self, ip: str):
+        resp = await self.session.get(f"http://localhost/cluster/node/{ip}/start")
+        ret = await resp.text()
+        return ret == "OK"
+
+    async def node_stop(self, ip: str):
+        resp = await self.session.get(f"http://localhost/cluster/node/{ip}/stop")
+        ret = await resp.text()
+        return ret == "OK"
+
     async def stop(self):
         #print(f"XXX going to STOP to {self.sock_path}/stop", file=sys.stderr)  # XXX
         resp = await self.session.get(f"http://localhost/cluster/stop")

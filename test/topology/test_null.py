@@ -7,14 +7,19 @@ from cassandra.protocol import InvalidRequest
 from pylib.util import random_string
 from pylib.schema_helper import get_schema
 import pytest
+import sys   # XXX
+
+async def get_nodes(harness):   # XXX
+    nodes = await harness.nodes()
+    print(f"XXX test nodes {nodes}", file=sys.stderr)  # XXX
+    return await harness.nodes()
 
 
 @pytest.mark.asyncio
 async def test_delete_empty_string_key(cql, harness):
-    nodes = await harness.nodes()
-    import sys
-    print(f"XXX test nodes {nodes}", file=sys.stderr)  # XXX
-
+    nodes = get_nodes(harness)
+    ret = harness.addnode()
+    print(f"XXX added server {ret}", file=sys.stderr)  # XXX
     raise Exception("XXX")  # XXX force print and keep output
 
     tables = await get_schema("delete_empty_string_key", cql, ntables=1, ncolumns=5)

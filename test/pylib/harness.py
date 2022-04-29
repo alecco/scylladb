@@ -47,6 +47,7 @@ class Harness():
         server = self.suite.create_server(self.name, self.seed())
         await server.install_and_start()
         self.hosts[server.host] = server
+        return server.host
 
     async def setup_and_run(self):  # XXX XXX XXX call this??
         await self.runner.setup()
@@ -92,6 +93,7 @@ class Harness():
         return aiohttp.web.Response(text="OK")
 
     async def cluster_addnode(self, request):
+        await self.add_server()
         return aiohttp.web.Response(text="7")
 
     async def cluster_removenode(self, request):
