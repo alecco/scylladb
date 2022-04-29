@@ -71,7 +71,7 @@ class Harness():
         return aiohttp.web.Response(text="OK")
 
     async def cluster_nodes(self, request):
-        return aiohttp.web.Response(text=f"{','.join(self.hosts.keys())}")
+        return aiohttp.web.Response(text=f"{','.join(sorted(self.hosts.keys()))}")
 
     async def cluster_stop(self, request):
         return aiohttp.web.Response(text="OK")
