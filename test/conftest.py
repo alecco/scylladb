@@ -139,7 +139,5 @@ async def keyspace(request, cql, this_dc) -> AsyncGenerator:
 # Connect to a Unix socket where a REST API is listening
 @pytest.fixture(scope="function")
 async def harness(request):
-    print(f"XXX harness fixture <<<<<<<<<<<<<<<<<<<<<<< ")  # XXX
     sock_path = request.config.getoption('harness_sock')
     yield HarnessCli(sock_path)
-    # XXX 

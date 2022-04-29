@@ -26,18 +26,17 @@ import sys  # XXX
 class HarnessCli():
     def __init__(self, sock_path):
         self.sock_path = sock_path
-        print(f"XXX HarnessCli() {sock_path}", file=sys.stderr)  # XXX
+        #print(f"XXX HarnessCli() {sock_path}", file=sys.stderr)  # XXX
         self.conn = aiohttp.UnixConnector(path=self.sock_path)
         self.session = aiohttp.ClientSession(connector=self.conn)
 
     async def nodes(self):
         resp = await self.session.get(f"http://localhost/cluster/nodes")
         host_list = await resp.text()
-        print(f"XXX host list {host_list.split()}", file=sys.stderr)  # XXX
         return host_list.split(',')
 
     async def stop(self):
-        print(f"XXX going to STOP to {self.sock_path}/stop", file=sys.stderr)  # XXX
+        #print(f"XXX going to STOP to {self.sock_path}/stop", file=sys.stderr)  # XXX
         resp = await self.session.get(f"http://localhost/cluster/stop")
-        print(f"XXX STOP resp {resp.status}", file=sys.stderr)  # XXX
+        #print(f"XXX STOP resp {resp.status}", file=sys.stderr)  # XXX
         return resp

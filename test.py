@@ -136,7 +136,7 @@ class TestSuite(ABC):
             kind = cfg.get("type")
             if kind is None:
                 raise RuntimeError("Failed to load tests in {}: suite.yaml has no suite type".format(path))
-            print(f"XXX opt_create {path} kind {kind.title()}")  # XXX
+            #print(f"XXX opt_create {path} kind {kind.title()}")  # XXX
             SpecificTestSuite = globals().get(kind.title() + "TestSuite")
             if not SpecificTestSuite:
                 raise RuntimeError("Failed to load tests in {}: suite type '{}' not found".format(path, kind))
@@ -302,7 +302,7 @@ class PythonTestSuite(TestSuite):
 
         self.create_cluster = self.topology_for_class(topology["class"], topology)
 
-        print(f"XXX PythonTestSuite init {path} cfg {str(cfg)}")  # XXX
+        #print(f"XXX PythonTestSuite init {path} cfg {str(cfg)}")  # XXX
         self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
 
     def create_server(self, cluster_name, seed):
@@ -595,7 +595,7 @@ class PythonTest(Test):
     async def run(self, options):
         async with self.suite.clusters.instance() as harness:
             self.args.insert(0, "--host={}".format(harness.endpoint()))
-            print(f"XXX PythonTest run() endpoint {harness.endpoint()} with harness sock path {harness.sock_path}")  # XXX
+            #print(f"XXX PythonTest run() endpoint {harness.endpoint()} with harness sock path {harness.sock_path}")  # XXX
             self.args.append(f"--harness_sock={harness.sock_path}")
             self.success = await run_test(self, options)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
