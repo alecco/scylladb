@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 from __future__ import annotations
+import asyncio
 import aiohttp.web
 from random import randint
 import uuid
@@ -47,6 +48,7 @@ class Harness():
         server = self.suite.create_server(self.name, self.seed())
         await server.install_and_start()
         self.hosts[server.host] = server
+        return server.host
 
     async def setup_and_run(self):  # XXX XXX XXX call this??
         await self.runner.setup()
@@ -62,46 +64,77 @@ class Harness():
         self.app.router.add_get('/cluster/node/{id}/stop', self.cluster_node_stop)
         self.app.router.add_get('/cluster/node/{id}/start', self.cluster_node_start)
         self.app.router.add_get('/cluster/node/{id}/restart', self.cluster_node_restart)
-        self.app.router.add_get('/cluster/addnode', self.cluster_addnode)
-        self.app.router.add_get('/cluster/removenode/{id}', self.cluster_removenode)
-        self.app.router.add_get('/cluster/decommission/{id}', self.cluster_decommission)
-        self.app.router.add_get('/cluster/replacenode/{id}', self.cluster_replacenode)
+        self.app.router.add_get('/cluster/addnode', self.cluster_node_add)
+        self.app.router.add_get('/cluster/removenode/{id}', self.cluster_node_remove)
+        self.app.router.add_get('/cluster/decommission/{id}', self.cluster_node_decommission)
+        self.app.router.add_get('/cluster/replacenode/{id}', self.cluster_node_replace)
 
     async def index(self, request):
         return aiohttp.web.Response(text="OK")
 
     async def cluster_nodes(self, request):
+        print(f"RestAPI nodes")  # XXX
         return aiohttp.web.Response(text=f"{','.join(sorted(self.hosts.keys()))}")
 
     async def cluster_stop(self, request):
+        await asyncio.gather(*(server.stop() for server in self.hosts.values()))
         return aiohttp.web.Response(text="OK")
 
     async def cluster_start(self, request):
+        await asyncio.gather(*(server.start() for server in self.hosts.values()))
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_stop(self, request):
         node_id = request.match_info['id']
+        server = self.hosts.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        await server.stop()
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_start(self, request):
         node_id = request.match_info['id']
+        server = self.hosts.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        await server.start()
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_restart(self, request):
         node_id = request.match_info['id']
+        server = self.hosts.get(node_id, None)
+        if server is None:
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        await server.stop()
+        await server.start()
         return aiohttp.web.Response(text="OK")
 
-    async def cluster_addnode(self, request):
-        return aiohttp.web.Response(text="7")
+    async def cluster_node_add(self, request):
+        node_id = await self.add_server()
+        return aiohttp.web.Response(text=node_id)
 
-    async def cluster_removenode(self, request):
+    async def cluster_node_remove(self, request):
         node_id = request.match_info['id']
+        server = self.hosts.get(node_id, None)
+        print(f"RestAPI REMOVING {node_id}")  # XXX
+        if server is None:
+            print(f"RestAPI ERROR REMOVING {node_id}")  # XXX
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        print(f"RestAPI node_remove stopping {node_id}")  # XXX
+        await server.stop()
+        print(f"RestAPI node_remove uninstalling {node_id}")  # XXX
+        await server.uninstall()
+        del self.hosts[node_id]
+        print(f"RestAPI node_remove done {node_id}")  # XXX
         return aiohttp.web.Response(text="OK")
 
-    async def cluster_decommission(self, request):
+    async def cluster_node_decommission(self, request):
         node_id = request.match_info['id']
-        return aiohttp.web.Response(text="OK")
+        return aiohttp.web.Response(status=500, text="Not implemented")
 
-    async def cluster_replacenode(self, request):
-        node_id = request.match_info['id']
-        return aiohttp.web.Response(text="OK")
+    async def cluster_node_replace(self, request):
+        old_node_id = request.match_info['id']
+        await self.cluster_node_stop(old_node_id)
+        del self.hosts[node_id]
+        new_node_id = await self.add_server()
+        return aiohttp.web.Response(text=new_node_id)
