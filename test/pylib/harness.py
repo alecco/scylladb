@@ -27,40 +27,38 @@ class Harness():
     def __init__(self, suite: PythonTestSuite):
         self.name = str(uuid.uuid1())
         self.suite = suite
-        self.hosts = []
+        self.hosts = {}
         self.app = aiohttp.web.Application()
         self.setup_routes()
         self.runner = aiohttp.web.AppRunner(self.app)
         self.sock_path = f"{suite.options.tmpdir}/harness_sock_{randint(1000000,9999999)}"
-        print(f"RestAPI '{self.name}' going to listen on {self.sock_path}")  # XXX
+        #print(f"RestAPI '{self.name}' going to listen on {self.sock_path}")  # XXX
         self.dirty = False
 
     def endpoint(self):
-        print(f"XXX Harness endpoint() {self.hosts[0].host} <<<<")
-        return self.hosts[0].host
+        #print(f"XXX Harness endpoint() {next(iter(self.hosts.keys()))} <<<<")
+        return next(iter(self.hosts.keys()))
 
     def seed(self):
-        return self.hosts[-1].host if self.hosts else None
+        #print(f"XXX Harness seed() {next(iter(self.hosts.keys())) if self.hosts else None} <<<<")
+        return next(iter(self.hosts.keys())) if self.hosts else None
 
     async def add_server(self):
-        print(f"XXX Harness add_server() <<<<")
         server = self.suite.create_server(self.name, self.seed())
-        self.hosts.append(server)
         await server.install_and_start()
+        self.hosts[server.host] = server
 
     async def setup_and_run(self):  # XXX XXX XXX call this??
         await self.runner.setup()
-        # site = aiohttp.web.TCPSite(runner)  # XXX: port=
-        # curl -GET --unix-socket /tmp/eraseme_aiohttp http://localhost/name-pepe
         site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)  # XXX path
-        print(f"RestAPI listening on {site.name} ...")  # XXX
+        #print(f"RestAPI listening on {site.name} ...")  # XXX
         await site.start()
 
     def setup_routes(self):
         self.app.router.add_get('/', self.index)
+        self.app.router.add_get('/cluster/nodes', self.cluster_nodes)
         self.app.router.add_get('/cluster/stop', self.cluster_stop)
         self.app.router.add_get('/cluster/start', self.cluster_start)
-        self.app.router.add_get('/cluster/nodes', self.cluster_nodes)
         self.app.router.add_get('/cluster/node/{id}/stop', self.cluster_node_stop)
         self.app.router.add_get('/cluster/node/{id}/start', self.cluster_node_start)
         self.app.router.add_get('/cluster/node/{id}/restart', self.cluster_node_restart)
@@ -72,14 +70,14 @@ class Harness():
     async def index(self, request):
         return aiohttp.web.Response(text="OK")
 
+    async def cluster_nodes(self, request):
+        return aiohttp.web.Response(text=f"{','.join(self.hosts.keys())}")
+
     async def cluster_stop(self, request):
         return aiohttp.web.Response(text="OK")
 
     async def cluster_start(self, request):
         return aiohttp.web.Response(text="OK")
-
-    async def cluster_nodes(self, request):
-        return aiohttp.web.Response(text="[1,2,3,4,5,6]")
 
     async def cluster_node_stop(self, request):
         node_id = request.match_info['id']
