@@ -10,8 +10,12 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_delete_empty_string_key(cql):
-    # raise Exception("XXX")  # XXX
+async def test_delete_empty_string_key(cql, harness):
+    resp = await harness.nodes()
+    txt = await resp.text()
+    import sys
+    print(f"XXX test stop resp text {txt}", file=sys.stderr)  # XXX
+
     tables = await get_schema("delete_empty_string_key", cql, ntables=1, ncolumns=5)
     s = random_string()
     # An empty-string clustering *is* allowed:

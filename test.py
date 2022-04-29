@@ -24,7 +24,6 @@ import signal
 import subprocess
 import sys
 import time
-import uuid
 import xml.etree.ElementTree as ET
 import yaml
 
@@ -34,7 +33,7 @@ from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.pool import Pool
 from test.pylib.host_registry import HostRegistry
 from test.pylib.scylla_server import ScyllaServer
-from test.pylib.rest_api import RestAPI
+from test.pylib.harness import Harness
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -305,8 +304,6 @@ class PythonTestSuite(TestSuite):
 
         print(f"XXX PythonTestSuite init {path} cfg {str(cfg)}")  # XXX
         self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
-        # XXX here rest_api (add routes and start with main event loop)
-        api = RestAPI()
 
     def create_server(self, cluster_name, seed):
         server = ScyllaServer(
@@ -333,15 +330,10 @@ class PythonTestSuite(TestSuite):
             replicas = int(cfg["replication_factor"])
 
             async def start_simple():
-                cluster = []
-                cluster_name = str(uuid.uuid1())
-                for i in range(replicas):
-                    seed = cluster[-1].host if cluster else None
-                    server = self.create_server(cluster_name, seed)
-                    cluster.append(server)
-                    await server.install_and_start()
-                return cluster
-
+                harness = Harness(self)
+                [await harness.add_server() for i in range(replicas)]
+                await harness.setup_and_run()
+                return harness
             return start_simple
         else:
             raise RuntimeError("Unsupported topology name")
@@ -601,16 +593,12 @@ class PythonTest(Test):
         print(read_log(self.log_filename))
 
     async def run(self, options):
-        print(f"XXX PythonTest.run() type suite {type(self.suite)}")  # XXX
-        async with self.suite.clusters.instance() as cluster:
-            # XXX here rest_api (add routes and start with main event loop)
-            # XXX XXX XXX
-            # XXX here pass suite's harness API unix socket
-            self.args.insert(0, "--host={}".format(cluster[0].host))
-            print(f"  PythonTest.run() type cluster {type(cluster)} len cluster {len(cluster)}")  # XXX
+        async with self.suite.clusters.instance() as harness:
+            self.args.insert(0, "--host={}".format(harness.endpoint()))
+            print(f"XXX PythonTest run() endpoint {harness.endpoint()} with harness sock path {harness.sock_path}")  # XXX
+            self.args.append(f"--harness_sock={harness.sock_path}")
             self.success = await run_test(self, options)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
-        print("  PythonTest.run() finished test")  # XXX
         return self
 
 

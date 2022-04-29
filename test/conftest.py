@@ -14,6 +14,7 @@ import asyncio
 import pytest
 import ssl
 from typing import AsyncGenerator
+from test.pylib.harness_cli import HarnessCli
 
 
 # Default initial values
@@ -132,3 +133,13 @@ async def keyspace(request, cql, this_dc) -> AsyncGenerator:
                         f"'{this_dc}' : '{DEFAULT_DCRF}' }}")
     yield name
     await cql.run_async("DROP KEYSPACE " + name)
+
+
+# "harness" fixture: set up client object for communicating with the Harness API.
+# Connect to a Unix socket where a REST API is listening
+@pytest.fixture(scope="function")
+async def harness(request):
+    print(f"XXX harness fixture <<<<<<<<<<<<<<<<<<<<<<< ")  # XXX
+    sock_path = request.config.getoption('harness_sock')
+    yield HarnessCli(sock_path)
+    # XXX 
