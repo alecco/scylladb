@@ -3,11 +3,9 @@
 #
 # Copyright (C) 2015-present ScyllaDB
 #
-
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-from abc import ABC, abstractmethod
 import argparse
 import asyncio
 import colorama
@@ -26,10 +24,16 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 import xml.etree.ElementTree as ET
 import yaml
 
+from abc import ABC, abstractmethod
 from scripts import coverage
+from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.pool import Pool
+from test.pylib.host_registry import HostRegistry
+from test.pylib.scylla_server import ScyllaServer
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -68,6 +72,8 @@ class TestSuite(ABC):
 
     # All existing test suites, one suite per path/mode.
     suites = dict()
+    artifacts = ArtifactRegistry()
+    hosts = HostRegistry()
     _next_id = 0
 
     def __init__(self, path, cfg, options, mode):
@@ -77,6 +83,7 @@ class TestSuite(ABC):
         self.options = options
         self.mode = mode
         self.tests = []
+        self.pending_test_count = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
@@ -129,7 +136,15 @@ class TestSuite(ABC):
             kind = cfg.get("type")
             if kind is None:
                 raise RuntimeError("Failed to load tests in {}: suite.yaml has no suite type".format(path))
-            SpecificTestSuite = globals().get(kind.title() + "TestSuite")
+
+            def suite_type_to_class_name(suite_type: str) -> str:
+                if suite_type.casefold() == "Approval".casefold():
+                    suite_type = "CQLApproval"
+                else:
+                    suite_type = suite_type.title()
+                return suite_type + "TestSuite"
+
+            SpecificTestSuite = globals().get(suite_type_to_class_name(kind))
             if not SpecificTestSuite:
                 raise RuntimeError("Failed to load tests in {}: suite type '{}' not found".format(path, kind))
             suite = SpecificTestSuite(path, cfg, options, mode)
@@ -149,6 +164,15 @@ class TestSuite(ABC):
     @abstractmethod
     async def add_test(self, shortname):
         pass
+
+    async def run(self, test, options):
+        try:
+            await test.run(options)
+        finally:
+            self.pending_test_count -= 1
+            if self.pending_test_count == 0:
+                await TestSuite.artifacts.cleanup_after_suite(self)
+        return test
 
     def junit_tests(self):
         """Tests which participate in a consolidated junit report"""
@@ -177,6 +201,7 @@ class TestSuite(ABC):
                 # so that case cache has a chance to populate
                 for i in range(options.repeat):
                     await self.add_test(shortname)
+                    self.pending_test_count += 1
 
             for p in patterns:
                 if p in t:
@@ -268,17 +293,83 @@ class BoostTestSuite(UnitTestSuite):
         return []
 
 
-class CqlTestSuite(TestSuite):
-    """TestSuite for CQL tests"""
+class PythonTestSuite(TestSuite):
+    """A collection of Python pytests against a single Scylla instance"""
+
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
+        self.scylla_exe = os.path.join("build", self.mode, "scylla")
+        if self.mode == "coverage":
+            self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
+        else:
+            self.scylla_env = dict()
+        self.scylla_env['SCYLLA'] = self.scylla_exe
+
+        topology = self.cfg.get("topology", {"class": "simple", "replication_factor": 1})
+
+        self.create_cluster = self.topology_for_class(topology["class"], topology)
+
+        self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
+
+    def create_server(self, cluster_name, seed):
+        server = ScyllaServer(
+            exe=self.scylla_exe,
+            vardir=self.options.tmpdir,
+            host_registry=self.hosts,
+            cluster_name=cluster_name,
+            seed=seed,
+            cmdline_options=self.cfg.get("extra_scylla_cmdline_options", []))
+
+        # Suite artifacts are removed when
+        # the entire suite ends successfully.
+        self.artifacts.add_suite_artifact(self, server.stop_artifact)
+        if not self.options.save_log_on_success:
+            # If a test fails, we might want to keep the data dir.
+            self.artifacts.add_suite_artifact(self, server.uninstall_artifact)
+        self.artifacts.add_exit_artifact(server.stop_artifact)
+        return server
+
+    def topology_for_class(self, class_name, cfg):
+
+        if class_name.lower() == "simple":
+            replicas = int(cfg["replication_factor"])
+
+            async def start_simple():
+                cluster = []
+                cluster_name = str(uuid.uuid1())
+                for i in range(replicas):
+                    seed = cluster[-1].host if cluster else None
+                    server = self.create_server(cluster_name, seed)
+                    cluster.append(server)
+                    await server.install_and_start()
+                return cluster
+
+            return start_simple
+        else:
+            raise RuntimeError("Unsupported topology name")
 
     async def add_test(self, shortname):
-        """Create a CqlTest class and add it to the list"""
-        test = CqlTest(self.next_id, shortname, self)
+        test = PythonTest(self.next_id, shortname, self)
         self.tests.append(test)
 
     @property
     def pattern(self):
-        return "*_test.cql"
+        return "test_*.py"
+
+
+class CQLApprovalTestSuite(PythonTestSuite):
+    """Run CQL commands against a single Scylla instance"""
+
+    def __init__(self, path, cfg, options, mode):
+        super().__init__(path, cfg, options, mode)
+
+    async def add_test(self, shortname):
+        test = CQLApprovalTest(self.next_id, shortname, self)
+        self.tests.append(test)
+
+    @property
+    def pattern(self):
+        return "*test.cql"
 
 
 class RunTestSuite(TestSuite):
@@ -409,32 +500,35 @@ class BoostTest(UnitTest):
         super().check_log(trim)
 
 
-class CqlTest(Test):
-    """Run the sequence of CQL commands stored in the file and check
-    output"""
+class CQLApprovalTest(Test):
+    """Run a sequence of CQL commands against a standlone Scylla"""
 
     def __init__(self, test_no, shortname, suite):
         super().__init__(test_no, shortname, suite)
         # Path to cql_repl driver, in the given build mode
-        self.path = os.path.join("build", self.mode, "test/tools/cql_repl")
+        self.path = "pytest"
         self.cql = os.path.join(suite.path, self.shortname + ".cql")
         self.result = os.path.join(suite.path, self.shortname + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = os.path.join(suite.path, self.shortname + ".reject")
-        self.args = shlex.split("-c1 -m2G --input={} --output={} --log={}".format(
-            self.cql, self.tmpfile, self.log_filename))
-        self.args += UnitTest.standard_args
+        self.args = [
+            "test/pylib/cql_repl/cql_repl.py",
+            "--input={}".format(self.cql),
+            "--output={}".format(self.tmpfile),
+        ]
         self.is_executed_ok = False
         self.is_new = False
         self.is_equal_result = None
         self.summary = "not run"
-        if self.mode == "coverage":
-            self.env = coverage.env(self.path, distinct_id=self.id)
-        else:
-            self.env = dict()
+        self.env = dict()
 
     async def run(self, options):
-        self.is_executed_ok = await run_test(self, options, env=self.env)
+        async with self.suite.clusters.instance() as cluster:
+            self.args.insert(1, "--host={}".format(cluster[0].host))
+            cluster[0].take_log_savepoint()
+            self.is_executed_ok = await run_test(self, options, env=self.env)
+            if self.is_executed_ok is False:
+                self.server_log = cluster[0].read_log()
 
         self.success = False
         self.summary = "failed"
@@ -472,7 +566,12 @@ class CqlTest(Test):
     def print_summary(self):
         print("Test {} ({}) {}".format(palette.path(self.name), self.mode,
                                        self.summary))
-        if self.is_equal_result is False:
+        if self.is_executed_ok is False:
+            print(read_log(self.log_filename))
+            if self.server_log:
+                print("Server log of the first server:")
+                print(self.server_log)
+        elif self.is_equal_result is False:
             print_unidiff(self.result, self.reject)
 
 
@@ -492,6 +591,35 @@ class RunTest(Test):
     async def run(self, options):
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
         self.success = await run_test(self, options, gentle_kill=True, env=self.suite.scylla_env)
+        logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
+        return self
+
+
+class PythonTest(Test):
+    """Run a pytest collection of cases against a standalone Scylla"""
+
+    def __init__(self, test_no, shortname, suite):
+        super().__init__(test_no, shortname, suite)
+        self.path = "pytest"
+        self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.args = ["-o", "junit_family=xunit2",
+                     "--junit-xml={}".format(self.xmlout),
+                     os.path.join(suite.path, shortname + ".py")]
+
+    def print_summary(self):
+        print("Output of {} {}:".format(self.path, " ".join(self.args)))
+        print(read_log(self.log_filename))
+        if self.server_log:
+            print("Server log of the first server:")
+            print(self.server_log)
+
+    async def run(self, options):
+        async with self.suite.clusters.instance() as cluster:
+            self.args.insert(0, "--host={}".format(cluster[0].host))
+            cluster[0].take_log_savepoint()
+            self.success = await run_test(self, options)
+            if not self.success:
+                self.server_log = cluster[0].read_log()
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
 
@@ -719,7 +847,7 @@ def parse_cmd_line():
     def prepare_dir(dirname, pattern):
         # Ensure the dir exists
         pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
-        # Remove old artefacts
+        # Remove old artifacts
         for p in glob.glob(os.path.join(dirname, pattern), recursive=True):
             pathlib.Path(p).unlink()
 
@@ -787,13 +915,14 @@ async def run_all_tests(signaled, options):
             console.print_progress(result)
     console.print_start_blurb()
     try:
+        TestSuite.artifacts.add_exit_artifact(TestSuite.hosts.cleanup)
         for test in TestSuite.tests():
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 await reap(done, pending, signaled)
-            pending.add(asyncio.create_task(test.run(options)))
+            pending.add(asyncio.create_task(test.suite.run(test, options)))
         # Wait & reap ALL tasks but signaled_task
         # Do not use asyncio.ALL_COMPLETED to print a nice progress report
         while len(pending) > 1:
@@ -802,6 +931,8 @@ async def run_all_tests(signaled, options):
 
     except asyncio.CancelledError:
         return
+    finally:
+        await TestSuite.artifacts.cleanup_before_exit()
 
     console.print_end_blurb()
 
@@ -818,11 +949,11 @@ def read_log(log_filename):
         return "===Error reading log {}===".format(e)
 
 
-def print_summary(failed_tests):
+def print_summary(failed_tests, options):
     if failed_tests:
         print("The following test(s) have failed: {}".format(
             palette.path(" ".join([t.name for t in failed_tests]))))
-        if not output_is_a_tty:
+        if options.verbose:
             for test in failed_tests:
                 test.print_summary()
                 print("-"*78)
@@ -932,7 +1063,7 @@ async def main():
 
     failed_tests = [t for t in TestSuite.tests() if t.success is not True]
 
-    print_summary(failed_tests)
+    print_summary(failed_tests, options)
 
     for mode in options.modes:
         write_junit_report(options.tmpdir, mode)
