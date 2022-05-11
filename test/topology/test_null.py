@@ -9,6 +9,7 @@ from pylib.schema_helper import get_schema
 import pytest
 import sys   # XXX
 
+
 async def get_nodes(harness):   # XXX
     nodes = await harness.nodes()
     print(f"XXX test nodes {nodes}", file=sys.stderr)  # XXX

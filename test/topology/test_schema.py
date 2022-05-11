@@ -20,10 +20,17 @@ import pytest
 import random
 from cassandra.protocol import InvalidRequest                            # type: ignore
 from pylib.schema_helper import get_schema                               # type: ignore
-from typing import Set, TYPE_CHECKING
+from typing import List, TYPE_CHECKING
 if TYPE_CHECKING:
     from test.pylib.harness import HarnessCli                            # type: ignore
+    from test.pylib.schema_helper import TestTables                      # type: ignore
 from sys import stderr
+
+
+async def get_nodes(harness):   # XXX
+    nodes = await harness.nodes()
+    print(f"XXX test nodes {nodes}", file=stderr)  # XXX
+    return await harness.nodes()
 
 
 @pytest.mark.asyncio
@@ -90,67 +97,89 @@ async def test_add_index(cql):
     await tables.verify_schema(table)
 
 
-def random_topology_change(n: int, harness: HarnessCli, started_nodes: List[str], stopped_nodes: List[str], rf: int, max_nodes: int):
+class ChangesTrack():
+    def __init__(self, end_schema_changes, end_topology_changes, end_time):
+        self.end_schema_changes = end_schema_changes
+        self.end_topology_changes = end_topology_changes
+        self.end_time = False
+        self.current_schema = 0
+        self.current_topology_changes = 0
+        self.current_time = 0
+
+    def __bool__(self):
+        return self.end_schema >= self.current_schema and \
+               self.end_topology_changes >= self.current_topology_changes and self.end_time
+
+
+async def random_schema_changes(n: int, tables: TestTables, started_nodes: List[str], track: ChangesTrack,
+                                rf: int, max_nodes: int = 8):
+    for _ in range(n):
+        pass  # XXX
+
+
+async def random_topology_changes(n: int, harness: HarnessCli, started_nodes: List[str], rf: int, max_nodes: int = 8):
     """Random topology changes while keeping minimum RF
        Operations are remove, add, stop, and start node.
        A set of running nodes must be provided.
     """
+    stopped_nodes: List[str] = []
+
     class NodeOp(Enum):
         ADD = 0
         REMOVE = 1
         START = 2
         STOP = 3
+
+    def random_node_rf_safe():
+        nn = len(started_nodes) + len(stopped_nodes)
+        pos = random.randint(0, min(nn, rf) - 1)
+        if pos < len(started_nodes):
+            node_id = started_nodes.pop(pos)
+        else:
+            node_id = stopped_nodes.pop(pos - len(started_nodes))
+        return node_id
+
     for _ in range(n):
+        # Pick valid topology changes at this stage
         if len(started_nodes) + len(stopped_nodes) < max_nodes:
             ops = [NodeOp.ADD]
+        if len(started_nodes) > rf:
+            ops.append(NodeOp.REMOVE)
+            ops.append(NodeOp.STOP)
         if len(stopped_nodes):
-            ops = [NodeOp.START]
-        if len(stopped_nodes) <= rf:
-        # XXX can stop if started nodes > rf
-        if len(nodes) > rf:
-            ops.append[1]     # Remove
-        if len(stopped_nodes) <= rf:
-            bit_ops = 1    # Only do add and start node (ops 0, 1)
-        else:
-            bit_ops = 2    # Can also do stop and remove node (ops 2, 3)
-        op = random.getrandbits(bit_ops)
-        # XXX remove carefully to keep RF (e.g. stopped node)
-        match random.choice(ops):
-            case NodeOp.ADD:
-                print(f"XXX adding  node {len(nodes)}", file=stderr)  # XXX
-                node_id = await harness.node_add()
-                nodes.add(node_id)
-            case NodeOp.REMOVE:
-                # XXX careful with RF (else pick stopped?)
-                print(f"XXX removing node {node_id}", file=stderr)  # XXX
-                await harness.node_remove(random.choice(nodes))
-                nodes.remove(node_id)
-                pass
-            case NodeOp.START:
-                node_id = random.choice(stopped_nodes)
-                print(f"XXX starting node {node_id}", file=stderr)  # XXX
-                await harness.node_start(node_id)
-                stopped_nodes.remove(node_id)
-            case NodeOp.STOP:
-                # XXX careful with RF (else pick stopped?)
-                node_id = random.choice(nodes - stopped_nodes)
-                print(f"XXX starting node {node_id}", file=stderr)  # XXX
-                await harness.node_start(node_id)
-                stopped_nodes.remove(node_id)
-        elif op == 2:                               # Remove
-        elif op == 3:                               # Stop
+            ops.append(NodeOp.START)
+
+        op = random.choice(ops)
+        if op == NodeOp.ADD:
+            node_id = await harness.node_add()
+            print(f"XXX adding  node {node_id}", file=stderr)  # XXX
+            started_nodes.append(node_id)
+        elif op == NodeOp.REMOVE:
+            node_id = random_node_rf_safe()
+            print(f"XXX removing node {node_id}", file=stderr)  # XXX
+            await harness.node_remove(node_id)
+        elif op == NodeOp.START:
+            node_id = random.choice(stopped_nodes)
+            print(f"XXX starting node {node_id}", file=stderr)  # XXX
+            await harness.node_start(node_id)
+            stopped_nodes.remove(node_id)
+            started_nodes.append(node_id)
+        elif op == NodeOp.STOP:
+            node_id = random_node_rf_safe()
             print(f"XXX stopping node {node_id}", file=stderr)  # XXX
-            node_id = random.choice(nodes)
             await harness.node_stop(node_id)
-            stopped_nodes.add(node_id)
 
 
 @pytest.mark.asyncio
 async def test_random_schema_topology(cql, harness):
+    tables = await get_schema("new_table_insert_one", cql, ntables=10, ncolumns=10)
     """Run random topology and schema changes in parallel"""
     # XXX
     # Pick random topology changes
-    topology_changes = [random_topology_change(harness, rf) for _ in range(20)]
+    started_nodes = await get_nodes(harness)
+    # XXX calculate max nodes or get from global params
+    # XXX get RF ??
+    topology_changes = random_topology_changes(harness, started_nodes, rf)
     schema_changes = []
     await tables.verify_schema(table)
 
