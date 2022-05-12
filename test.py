@@ -84,6 +84,8 @@ class TestSuite(ABC):
         self.mode = mode
         self.tests = []
         self.pending_test_count = 0
+        # The number of failed tests
+        self.n_failed = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
@@ -170,7 +172,8 @@ class TestSuite(ABC):
             await test.run(options)
         finally:
             self.pending_test_count -= 1
-            if self.pending_test_count == 0:
+            self.n_failed += int(not test.success)
+            if self.pending_test_count == 0 and self.n_failed == 0:
                 await TestSuite.artifacts.cleanup_after_suite(self)
         return test
 
