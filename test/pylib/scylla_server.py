@@ -3,14 +3,15 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+import aiohttp
 import asyncio
 import logging
 import os
 import pathlib
 import shutil
 import time
-import aiohttp
-from typing import Optional, List
+import uuid
+from typing import Optional, List, Callable
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
 from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
@@ -337,3 +338,22 @@ Check the log files:
 
         await self.host_registry.release_host(self.hostname)
         self.hostname = ""
+
+
+class ScyllaCluster:
+    def __init__(self, replicas: int,
+                 create_server: Callable[[str, Optional[str]], ScyllaServer]) -> None:
+        self.name = str(uuid.uuid1())
+        self.replicas = replicas
+        self.cluster: List[ScyllaServer] = []
+        self.create_server = create_server
+
+    async def install_and_start(self) -> None:
+        for i in range(self.replicas):
+            seed = self.cluster[-1].host if self.cluster else None
+            server = self.create_server(self.name, seed)
+            self.cluster.append(server)
+            await server.install_and_start()
+
+    def __getitem__(self, i: int) -> ScyllaServer:
+        return self.cluster[i]
