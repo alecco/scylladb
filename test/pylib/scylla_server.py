@@ -196,16 +196,20 @@ class ScyllaServer:
 
     def read_log(self) -> str:
         """ Return first 3 lines of the log + everything that happened
-        since the last savepoint. Used to diagnose CI failures."""
-        with self.log_filename.open("r") as log:
-            # Read the first 5 lines of the start log
-            lines: List[str] = []
-            for i in range(3):
-                lines.append(log.readline())
-            # Read the lines since the last savepoint
-            if self.log_savepoint and self.log_savepoint > log.tell():
-                log.seek(self.log_savepoint)
-            return "".join(lines + log.readlines())
+        since the last savepoint. Used to diagnose CI failures, so
+        avoid a nessted exception."""
+        try:
+            with self.log_filename.open("r") as log:
+                # Read the first 5 lines of the start log
+                lines: List[str] = []
+                for i in range(3):
+                    lines.append(log.readline())
+                # Read the lines since the last savepoint
+                if self.log_savepoint and self.log_savepoint > log.tell():
+                    log.seek(self.log_savepoint)
+                return "".join(lines + log.readlines())
+        except Exception as e:
+            return "Exception when reading server log {}: {}".format(self.log_filename, str(e))
 
     async def cql_is_up(self) -> bool:
         """Test that CQL is serving (a check we use at start up)."""
@@ -228,6 +232,8 @@ class ScyllaServer:
                     session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
                                     "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
                     session.execute("DROP KEYSPACE k")
+                    self.control_connection = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+                                                      contact_points=[self.hostname], auth_provider=auth).connect()
                     return True
         except (NoHostAvailable, InvalidRequest):
             return False
@@ -324,6 +330,7 @@ Check the log files:
             if self.cmd:
                 logging.info("stopped server at host %s", hostname)
             self.cmd = None
+            self.control_connection = None
 
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
@@ -348,13 +355,47 @@ class ScyllaCluster:
         self.replicas = replicas
         self.cluster: List[ScyllaServer] = []
         self.create_server = create_server
+        self.start_exception: Optional[Exception] = None
+        self.keyspace_count = 0
 
     async def install_and_start(self) -> None:
-        for i in range(self.replicas):
-            seed = self.cluster[-1].host if self.cluster else None
-            server = self.create_server(self.name, seed)
-            self.cluster.append(server)
-            await server.install_and_start()
+        try:
+            for i in range(self.replicas):
+                seed = self.cluster[-1].host if self.cluster else None
+                server = self.create_server(self.name, seed)
+                self.cluster.append(server)
+                await server.install_and_start()
+        except (RuntimeError, NoHostAvailable, InvalidRequest) as e:
+            # If start fails, swallow the error to throw later,
+            # at test time.
+            self.start_exception = e
 
     def __getitem__(self, i: int) -> ScyllaServer:
+        assert(self.start_exception is None)
         return self.cluster[i]
+
+    def _get_keyspace_count(self) -> int:
+        """Get the current keyspace count"""
+        assert(self.start_exception is None)
+        rows = self.cluster[0].control_connection.execute(
+            "select count(*) as c from system_schema.keyspaces")
+        keyspace_count = int(rows.one()[0])
+        return keyspace_count
+
+    def pre_check(self) -> None:
+        """Check that  the cluster is ready for a test. If
+        there was a start error, throw it here - the server is
+        started when it's added to the pool, which can't be attributed
+        to any specific test, throwing it here would stop a specific
+        test."""
+        if self.start_exception:
+            raise self.start_exception
+        self.keyspace_count = self._get_keyspace_count()
+
+    def post_check(self) -> None:
+        """Check that the cluster is still alive and the test
+        hasn't left any garbage."""
+        assert(self.start_exception is None)
+        if self._get_keyspace_count() != self.keyspace_count:
+            raise RuntimeError("Test post-condition failed, "
+                               "the test must drop all keyspaces it creates.")
