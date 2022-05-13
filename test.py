@@ -28,6 +28,7 @@ import xml.etree.ElementTree as ET
 import yaml
 
 from abc import ABC, abstractmethod
+from io import StringIO
 from scripts import coverage
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.pool import Pool
@@ -63,6 +64,10 @@ class palette:
     diff_mark = create_formatter(colorama.Fore.MAGENTA)
     warn = create_formatter(colorama.Fore.YELLOW)
     crit = create_formatter(colorama.Fore.RED, colorama.Style.BRIGHT)
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    @staticmethod
+    def nocolor(text: str) -> str:
+        return palette.ansi_escape.sub('', text)
 
 
 class TestSuite(ABC):
@@ -541,7 +546,9 @@ class CQLApprovalTest(Test):
         else:
             self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
             if self.is_equal_result is False:
+                self.unidiff = format_unidiff(self.result, self.reject)
                 set_summary("failed: test output does not match expected result")
+                logging.info("\n{}".format(palette.nocolor(self.unidiff)))
             elif self.is_executed_ok:
                 self.success = True
                 set_summary("succeeded")
@@ -568,7 +575,7 @@ class CQLApprovalTest(Test):
                 print("Server log of the first server:")
                 print(self.server_log)
         elif self.is_equal_result is False:
-            print_unidiff(self.result, self.reject)
+            print(self.unidiff)
 
 
 class RunTest(Test):
@@ -957,8 +964,9 @@ def print_summary(failed_tests, options):
             len(failed_tests), TestSuite.test_count()))
 
 
-def print_unidiff(fromfile, tofile):
+def format_unidiff(fromfile, tofile):
     with open(fromfile, "r") as frm, open(tofile, "r") as to:
+        buf = StringIO()
         diff = difflib.unified_diff(
             frm.readlines(),
             to.readlines(),
@@ -977,7 +985,8 @@ def print_unidiff(fromfile, tofile):
                 line = palette.diff_out(line)
             elif line.startswith('@'):
                 line = palette.diff_mark(line)
-            sys.stdout.write(line)
+            buf.write(line)
+        return buf.getvalue()
 
 
 def write_junit_report(tmpdir, mode):
