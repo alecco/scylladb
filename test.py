@@ -517,53 +517,78 @@ class CQLApprovalTest(Test):
             "--input={}".format(self.cql),
             "--output={}".format(self.tmpfile),
         ]
+        self.is_pre_check_ok = False
         self.is_executed_ok = False
         self.is_new = False
+        self.is_post_check_ok = False
         self.is_equal_result = None
         self.summary = "not run"
         self.unidiff = None
+        self.server_log = None
         self.env = dict()
 
     async def run(self, options):
-        async with self.suite.clusters.instance() as cluster:
-            self.args.insert(1, "--host={}".format(cluster[0].host))
-            cluster[0].take_log_savepoint()
-            self.is_executed_ok = await run_test(self, options, env=self.env)
-            if self.is_executed_ok is False:
-                self.server_log = cluster[0].read_log()
-
         self.success = False
         self.summary = "failed"
 
         def set_summary(summary):
             self.summary = summary
             logging.info("Test %d %s", self.id, summary)
+            if self.server_log:
+                logging.info("Server log:\n%s", self.server_log)
 
-        if not os.path.isfile(self.tmpfile):
-            set_summary("failed: no output file")
-        elif not os.path.isfile(self.result):
-            set_summary("failed: no result file")
-            self.is_new = True
-        else:
-            self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
-            if self.is_equal_result is False:
-                self.unidiff = format_unidiff(self.result, self.reject)
-                set_summary("failed: test output does not match expected result")
-                logging.info("\n{}".format(palette.nocolor(self.unidiff)))
-            elif self.is_executed_ok:
-                self.success = True
-                set_summary("succeeded")
-            else:
-                set_summary("failed: correct output but non-zero return status.\nCheck test log.")
+        async with self.suite.clusters.instance() as cluster:
+            self.args.insert(1, "--host={}".format(cluster[0].host))
+            # If pre-check fails, e.g. because Scylla failed to start
+            # or crashed between two tests, fail entire test.py
+            try:
+                cluster.pre_check()
+                self.is_pre_check_ok = True
+                cluster[0].take_log_savepoint()
+                self.is_executed_ok = await run_test(self, options, env=self.env)
+                cluster.post_check()
+                self.is_post_check_ok = True
 
-        if self.is_new or self.is_equal_result is False:
-            # Put a copy of the .reject file close to the .result file
-            # so that it's easy to analyze the diff or overwrite .result
-            # with .reject. Preserve the original .reject file: in
-            # multiple modes the copy .reject file may be overwritten.
-            shutil.copyfile(self.tmpfile, self.reject)
-        elif os.path.exists(self.tmpfile):
-            pathlib.Path(self.tmpfile).unlink()
+                if self.is_executed_ok is False:
+                    set_summary("""returned non-zero return status.\n
+Check test log at {}.""".format(self.log_filename))
+                elif not os.path.isfile(self.tmpfile):
+                    set_summary("failed: no output file")
+                elif not os.path.isfile(self.result):
+                    set_summary("failed: no result file")
+                    self.is_new = True
+                else:
+                    self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
+                    if self.is_equal_result is False:
+                        self.unidiff = format_unidiff(self.result, self.tmpfile)
+                        set_summary("failed: test output does not match expected result")
+                        logging.info("\n{}".format(palette.nocolor(self.unidiff)))
+                    else:
+                        self.success = True
+                        set_summary("succeeded")
+            except Exception as e:
+                # Server log bloats the output if we produce it in all
+                # cases. So only grab it when it's relevant:
+                # 1) failed pre-check, e.g. start failure
+                # 2) failed test execution.
+                if self.is_executed_ok is False:
+                    self.server_log = cluster[0].read_log()
+                    if self.is_pre_check_ok is False:
+                        set_summary("pre-check failed: {}".format(e))
+                        print("Test {} {}".format(self.name, self.summary))
+                        print("Server log  of the first server:\n{}".format(self.server_log))
+                        # Don't try to continue if the cluster is broken
+                        raise
+                set_summary("failed: {}".format(e))
+            finally:
+                if self.is_new or self.is_equal_result is False:
+                    # Put a copy of the .reject file close to the .result file
+                    # so that it's easy to analyze the diff or overwrite .result
+                    # with .reject. Preserve the original .reject file: in
+                    # multiple modes the copy .reject file may be overwritten.
+                    shutil.copyfile(self.tmpfile, self.reject)
+                elif os.path.exists(self.tmpfile):
+                    pathlib.Path(self.tmpfile).unlink()
 
         return self
 
@@ -605,6 +630,7 @@ class PythonTest(Test):
     def __init__(self, test_no, shortname, suite):
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
+        self.server_log = None
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["-o", "junit_family=xunit2",
                      "--junit-xml={}".format(self.xmlout),
