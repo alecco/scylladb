@@ -17,6 +17,8 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 
+import sys  # XXX
+
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
 # configuration file, Scylla will boot fine and ignore the setting.
@@ -308,6 +310,7 @@ Check the log files:
         stop, so is not graceful. Waits for the process to exit before return."""
         # Preserve for logging
         hostname = self.hostname
+        print(f"ScyllaServer stopping server at host {hostname}", file=sys.stderr)  # XXX
         logging.info("stopping server at host %s", hostname)
         if not self.cmd:
             return
@@ -320,6 +323,7 @@ Check the log files:
             await self.cmd.wait()
         finally:
             if self.cmd:
+                print(f"ScyllaServer stopped server at host {hostname}", file=sys.stderr)  # XXX
                 logging.info("stopped server at host %s", hostname)
             self.cmd = None
 

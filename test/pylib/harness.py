@@ -89,6 +89,7 @@ class Harness():
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_stop(self, request):
+        print(f"XXX RestAPI stopping {node_id}")  # XXX
         node_id = request.match_info['id']
         server = self.servers.get(node_id, None)
         if server is None:
@@ -105,6 +106,7 @@ class Harness():
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_restart(self, request):
+        print(f"XXX RestAPI restarting {node_id}")  # XXX
         node_id = request.match_info['id']
         server = self.servers.get(node_id, None)
         if server is None:
@@ -115,9 +117,11 @@ class Harness():
 
     async def cluster_node_add(self, request):
         node_id = await self.add_server()
+        print(f"XXX RestAPI added {node_id}")  # XXX
         return aiohttp.web.Response(text=node_id)
 
     async def cluster_node_remove(self, request):
+        print(f"XXX RestAPI removing {node_id}")  # XXX
         node_id = request.match_info['id']
         server = self.servers.get(node_id, None)
         print(f"XXX RestAPI REMOVING {node_id}")  # XXX
@@ -134,10 +138,12 @@ class Harness():
 
     async def cluster_node_decommission(self, request):
         # node_id = request.match_info['id']
+        print(f"XXX RestAPI removing {request.match_info['id']}")  # XXX
         return aiohttp.web.Response(status=500, text="Not implemented")
 
     async def cluster_node_replace(self, request):
         old_node_id = request.match_info['id']
+        print(f"XXX RestAPI replace {request.match_info['id']}")  # XXX
         await self.cluster_node_stop(old_node_id)
         del self.servers[old_node_id]
         new_node_id = await self.add_server()
