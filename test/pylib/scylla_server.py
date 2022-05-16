@@ -107,6 +107,7 @@ class ScyllaServer:
         self.hostname = ""
         self.seeds = seed
         self.cmd: Optional[asyncio.subprocess.Process] = None
+        self.log_savepoint = 0
 
         async def stop_server() -> None:
             if self.is_running:
