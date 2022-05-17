@@ -242,6 +242,7 @@ class ScyllaServer:
             async with aiohttp.ClientSession() as s:
                 url = "http://{}:10000/".format(self.hostname)
                 async with s.get(url):
+                    print(f"XXX ScyllaServer rest_api_is_up {self.hostname}", file=sys.stderr)  # XXX
                     return True
         except aiohttp.ClientConnectionError:
             return False
@@ -253,6 +254,7 @@ class ScyllaServer:
 
         # Add suite-specific command line options
         scylla_args = SCYLLA_CMDLINE_OPTIONS + self.cmdline_options
+        print(f"XXX ScyllaServer start() {self.hostname}", file=sys.stderr)  # XXX
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
         self.cmd = await asyncio.create_subprocess_exec(
