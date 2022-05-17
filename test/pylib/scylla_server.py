@@ -20,6 +20,7 @@ from cassandra.auth import PlainTextAuthProvider        # type: ignore
 from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
+import sys  # XXX
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -227,13 +228,15 @@ class ScyllaServer:
                     # words, even after CQL port is up, Scylla may still be
                     # initializing. When the role is ready, queries begin to
                     # work, so rely on this "side effect".
-                    session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
+                    session.execute("CREATE KEYSPACE pylib_cluster_connect WITH REPLICATION = {" +
                                     "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
-                    session.execute("DROP KEYSPACE k")
                     self.control_connection = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
                                                       contact_points=[self.hostname], auth_provider=auth).connect()
+                    session.execute("DROP KEYSPACE pylib_cluster_connect")
+                    print(f"XXX ScyllaServer cql_is_up {self.hostname} UP", file=sys.stderr)  # XXX
                     return True
-        except (NoHostAvailable, InvalidRequest):
+        except (NoHostAvailable, InvalidRequest) as exp:
+            print(f"XXX ScyllaServer cql_is_up {self.hostname} FAIL {str(exp)}", file=sys.stderr)  # XXX
             return False
         finally:
             caslog.setLevel(oldlevel)
@@ -257,6 +260,7 @@ class ScyllaServer:
 
         # Add suite-specific command line options
         scylla_args = SCYLLA_CMDLINE_OPTIONS + self.cmdline_options
+        print(f"XXX ScyllaServer start() {self.hostname}", file=sys.stderr)  # XXX
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
         self.cmd = await asyncio.create_subprocess_exec(
@@ -305,9 +309,9 @@ Check the log files:
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
         with Cluster(contact_points=[self.seeds], auth_provider=auth) as cluster:
             with cluster.connect() as session:
-                session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
+                session.execute("CREATE KEYSPACE pylib_force_schema_migration WITH REPLICATION = {" +
                                 "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
-                session.execute("DROP KEYSPACE k")
+                session.execute("DROP KEYSPACE pylib_force_schema_migration")
 
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
@@ -457,6 +461,7 @@ class ScyllaCluster:
         return aiohttp.web.Response(text="OK")
 
     async def cluster_nodes(self, request):
+        print(f"ScyllaCluster nodes")  # XXX
         return aiohttp.web.Response(text=f"{','.join(sorted(self.started.keys()))}")
 
     async def cluster_stop(self, request):
@@ -469,22 +474,29 @@ class ScyllaCluster:
 
     async def cluster_node_stop(self, request):
         node_id = request.match_info['id']
+        print(f"ScyllaCluster node_stop {node_id} 1 START")  # XXX
         if node_id in self.started:
             server = server.started.pop(node_id)
+            self.update_last_seed(server.host)
+            print(f"ScyllaCluster node_stop {node_id} 2 stopping")  # XXX
             await server.stop()
             self.update_last_seed(server.host)
             server.stopped[node_id] = server
         elif node_id not in server.stopped:
+            print(f"ScyllaCluster node_stop {node_id} not found")  # XXX
             return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        print(f"ScyllaCluster node_stop {node_id} DONE")  # XXX
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_start(self, request):
         node_id = request.match_info['id']
+        print(f"ScyllaCluster node_start {node_id} 1")  # XXX
         server = self.stopped.get(node_id, None)
         if server is None:
             return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
         server.seeds = self.last_seed
         await server.start()
+        print(f"ScyllaCluster node_start {node_id} DONE")  # XXX
         server.started[node_id] = server.stopped.pop(node_id)
         return aiohttp.web.Response(text="OK")
 
