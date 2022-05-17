@@ -128,9 +128,9 @@ class Harness():
         if server is None:
             print(f"RestAPI ERROR REMOVING {node_id}")  # XXX
             return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
-        print(f"XXX RestAPI node_remove stopping {node_id}")  # XXX
+        print(f"XXX RestAPI node_remove stopping {node_id}", file=sys.stderr)  # XXX
         await server.stop()
-        print(f"XXX RestAPI node_remove uninstalling {node_id}")  # XXX
+        print(f"XXX RestAPI node_remove uninstalling {node_id}", file=sys.stderr)  # XXX
         await server.uninstall()
         del self.servers[node_id]
         print(f"XXX RestAPI node_remove done {node_id}")  # XXX
@@ -138,7 +138,7 @@ class Harness():
 
     async def cluster_node_decommission(self, request):
         # node_id = request.match_info['id']
-        print(f"XXX RestAPI removing {request.match_info['id']}")  # XXX
+        print(f"XXX RestAPI removing {request.match_info['id']}", file=sys.stderr)  # XXX
         return aiohttp.web.Response(status=500, text="Not implemented")
 
     async def cluster_node_replace(self, request):
