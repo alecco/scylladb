@@ -233,13 +233,15 @@ class ScyllaServer:
                     # words, even after CQL port is up, Scylla may still be
                     # initializing. When the role is ready, queries begin to
                     # work, so rely on this "side effect".
-                    session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
+                    session.execute("CREATE KEYSPACE pylib_cluster_connect WITH REPLICATION = {" +
                                     "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
-                    session.execute("DROP KEYSPACE k")
                     self.control_connection = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
                                                       contact_points=[self.hostname], auth_provider=auth).connect()
+                    session.execute("DROP KEYSPACE pylib_cluster_connect")
+                    print(f"XXX ScyllaServer cql_is_up {self.hostname} UP", file=sys.stderr)  # XXX
                     return True
-        except (NoHostAvailable, InvalidRequest):
+        except (NoHostAvailable, InvalidRequest) as exp:
+            print(f"XXX ScyllaServer cql_is_up {self.hostname} FAIL {str(exp)}", file=sys.stderr)  # XXX
             return False
         finally:
             caslog.setLevel(oldlevel)
@@ -263,6 +265,7 @@ class ScyllaServer:
 
         # Add suite-specific command line options
         scylla_args = SCYLLA_CMDLINE_OPTIONS + self.cmdline_options
+        print(f"XXX ScyllaServer start() {self.hostname}", file=sys.stderr)  # XXX
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
         self.cmd = await asyncio.create_subprocess_exec(
@@ -311,9 +314,9 @@ Check the log files:
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
         with Cluster(contact_points=[self.seeds], auth_provider=auth) as cluster:
             with cluster.connect() as session:
-                session.execute("CREATE KEYSPACE k WITH REPLICATION = {" +
+                session.execute("CREATE KEYSPACE pylib_force_schema_migration WITH REPLICATION = {" +
                                 "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
-                session.execute("DROP KEYSPACE k")
+                session.execute("DROP KEYSPACE pylib_force_schema_migration")
 
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
