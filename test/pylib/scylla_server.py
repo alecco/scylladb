@@ -371,7 +371,6 @@ class ScyllaCluster:
             self.start_exception = e
 
     def __getitem__(self, i: int) -> ScyllaServer:
-        assert(self.start_exception is None)
         return self.cluster[i]
 
     def _get_keyspace_count(self) -> int:
