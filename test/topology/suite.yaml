@@ -3,4 +3,11 @@ pool_size: 4
 topology:
     class: Simple
     replication_factor: 3
+extra_scylla_cmdline_options:
+    - --logger-log-level
+    - raft=trace
+    - --logger-log-level
+    - storage_service=trace
+    - --logger-log-level
+    - gossip=trace
 

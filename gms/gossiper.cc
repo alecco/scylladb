@@ -717,8 +717,12 @@ future<> gossiper::do_status_check() {
 }
 
 future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep) {
-    return endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return semaphore(1); }).then([] (auto eptr) {
+    return endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return semaphore(1);
+logger.warn("lock_endpoint: 1 ({})", ep); // XXX
+            }).then([] (auto eptr) {
+logger.warn("lock_endpoint: 2 ({})", eptr); // XXX
         return get_units(*eptr, 1).then([eptr] (auto units) mutable {
+logger.warn("lock_endpoint: 3 ({})", eptr); // XXX
             return endpoint_permit{std::move(eptr), std::move(units)};
         });
     });
@@ -2020,17 +2024,23 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
     }
     return container().invoke_on(0, [states = std::move(states)] (gossiper& gossiper) mutable {
         return seastar::async([g = gossiper.shared_from_this(), states = std::move(states)]() mutable {
+logger.warn("add_local_application_state: 1"); // XXX
             auto& gossiper = *g;
             inet_address ep_addr = gossiper.get_broadcast_address();
+logger.warn("add_local_application_state: 1b lock_endpoint({})", ep_addr); // XXX
             // for symmetry with other apply, use endpoint lock for our own address.
             auto permit = gossiper.lock_endpoint(ep_addr).get0();
+logger.warn("add_local_application_state: 1c get_endpoint_state_for_endpoint_ptr({})", ep_addr); // XXX
             auto es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
+logger.warn("add_local_application_state: 1d"); // XXX
             if (!es) {
+logger.warn("add_local_application_state: 1e endpoint_state_map does not contain endpoint = {}, application_states = {}", ep_addr, states);  // XXX
                 auto err = format("endpoint_state_map does not contain endpoint = {}, application_states = {}",
                                   ep_addr, states);
                 throw std::runtime_error(err);
             }
 
+logger.warn("add_local_application_state: 2"); // XXX
             endpoint_state ep_state_before = *es;
 
             for (auto& p : states) {
@@ -2041,11 +2051,13 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value).get();
             }
 
+logger.warn("add_local_application_state: 3"); // XXX
             es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
             if (!es) {
                 return;
             }
 
+logger.warn("add_local_application_state: 4"); // XXX
             for (auto& p : states) {
                 auto& state = p.first;
                 auto& value = p.second;
@@ -2056,6 +2068,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 // Add to local application state
                 es->add_application_state(state, value);
             }
+logger.warn("add_local_application_state: 5"); // XXX
             for (auto& p : states) {
                 auto& state = p.first;
                 auto& value = p.second;
@@ -2066,7 +2079,9 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 gossiper.replicate(ep_addr, state, value).get();
                 gossiper.do_on_change_notifications(ep_addr, state, value).get();
             }
+logger.warn("add_local_application_state: 6"); // XXX
         }).handle_exception([] (auto ep) {
+logger.warn("add_local_application_state: 6 FAIL"); // XXX
             logger.warn("Fail to apply application_state: {}", ep);
         });
     });

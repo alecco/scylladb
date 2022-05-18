@@ -435,16 +435,19 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
     if (should_bootstrap()) {
+slogger.warn("join_token_ring: bootstrapping");  // XXX
         bool resume_bootstrap = _sys_ks.local().bootstrap_in_progress();
         if (resume_bootstrap) {
             slogger.warn("Detected previous bootstrap failure; retrying");
         } else {
             _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
+slogger.warn("join_token_ring: waiting for ring information");  // XXX
         slogger.info("waiting for ring information");
 
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
+slogger.warn("join_token_ring: waiting ring to settle");  // XXX
         wait_for_ring_to_settle(delay).get();
 
         if (!is_replacing()) {
@@ -495,6 +498,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         _sys_ks.local().update_tokens(_bootstrap_tokens).get();
         bootstrap(); // blocks until finished
     } else {
+slogger.warn("join_token_ring: not bootstrapping");  // XXX
         start_sys_dist_ks();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
@@ -510,6 +514,7 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         }
     }
 
+slogger.warn("join_token_ring: Setting tokens to {}", _bootstrap_tokens);  // XXX
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
     mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         // This node must know about its chosen tokens before other nodes do
@@ -526,8 +531,10 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
         // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
         db::system_keyspace::cdc_set_rewritten(std::nullopt).get();
     }
+else slogger.warn("join_token_ring: bootstrap_complete");  // XXX
 
     if (!_cdc_gen_id) {
+slogger.warn("join_token_ring: NOT cdc gen 1");  // XXX
         // If we didn't observe any CDC generation at this point, then either
         // 1. we're replacing a node,
         // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
@@ -553,22 +560,28 @@ void storage_service::join_token_ring(std::chrono::milliseconds delay) {
             }
         }
     }
+else slogger.warn("join_token_ring: cdc gen 1");  // XXX
 
     // Persist the CDC streams timestamp before we persist bootstrap_state = COMPLETED.
     if (_cdc_gen_id) {
+slogger.warn("join_token_ring: _cdc_gen_id");  // XXX
         db::system_keyspace::update_cdc_generation_id(*_cdc_gen_id).get();
     }
     // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
     // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
 
+slogger.warn("join_token_ring: set_bootstrap_state(COMPLETED)"); // XXX
     _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
     // At this point our local tokens and CDC streams timestamp are chosen (_bootstrap_tokens, _cdc_gen_id) and will not be changed.
 
+slogger.warn("join_token_ring: become_voter"); // XXX
     _group0->become_voter().get();
 
+slogger.warn("join_token_ring: set_gossip_tokens"); // XXX
     // start participating in the ring.
     set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_gen_id).get();
 
+slogger.warn("join_token_ring: set_mode(NORMAL)"); // XXX
     set_mode(mode::NORMAL);
 
     if (get_token_metadata().sorted_tokens().empty()) {
