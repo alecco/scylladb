@@ -179,8 +179,8 @@ class TestSuite(ABC):
         finally:
             self.pending_test_count -= 1
             self.n_failed += int(not test.success)
-            if self.pending_test_count == 0 and self.n_failed == 0:
-                await TestSuite.artifacts.cleanup_after_suite(self)
+            if self.pending_test_count == 0:
+                await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
         return test
 
     def junit_tests(self):
@@ -337,7 +337,7 @@ class PythonTestSuite(TestSuite):
             if not self.options.save_log_on_success:
                 # If a test fails, we might want to keep the data dir.
                 self.artifacts.add_suite_artifact(self, server.uninstall_artifact)
-            self.artifacts.add_exit_artifact(server.stop_artifact)
+            self.artifacts.add_exit_artifact(self, server.stop_artifact)
             return server
 
         if class_name.lower() == "simple":
@@ -947,7 +947,7 @@ async def run_all_tests(signaled, options):
             console.print_progress(result)
     console.print_start_blurb()
     try:
-        TestSuite.artifacts.add_exit_artifact(TestSuite.hosts.cleanup)
+        TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
         for test in TestSuite.tests():
             # +1 for 'signaled' event
             if len(pending) > options.jobs:

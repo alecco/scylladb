@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 from typing import Protocol
-from typing import Callable, Awaitable, List, Dict
+from typing import Callable, Awaitable, List, Dict, Optional
 import asyncio
 import logging
 
@@ -23,30 +23,42 @@ class ArtifactRegistry:
     reprsented in the artifact registry. """
 
     def __init__(self) -> None:
-        self.suite_artifacts: Dict[Suite, List[Artifact]] = {}
-        self.exit_artifacts: List[Artifact] = []
+        self.suite_artifacts: Dict[str, List[Artifact]] = {}
+        self.exit_artifacts: Dict[str, List[Artifact]] = {}
 
     async def cleanup_before_exit(self) -> None:
         logging.info("Cleaning up before exit...")
-        for suite_key in self.suite_artifacts:
-            for artifact in self.suite_artifacts[suite_key]:
+        for key in self.suite_artifacts:
+            for artifact in self.suite_artifacts[key]:
                 artifact.close()  # type: ignore
-            await asyncio.gather(*self.suite_artifacts[suite_key], return_exceptions=True)
+            await asyncio.gather(*self.suite_artifacts[key], return_exceptions=True)
         self.suite_artifacts = {}
-        if self.exit_artifacts:
-            await asyncio.gather(*self.exit_artifacts)
-            self.exit_artifacts = []
+        for key in self.exit_artifacts:
+            await asyncio.gather(*self.exit_artifacts[key], return_exceptions=True)
+        self.exit_artifacts = {}
         logging.info("Done cleaning up before exit...")
 
-    async def cleanup_after_suite(self, suite: Suite) -> None:
-        logging.info("Cleaning up after suite %s...", suite.suite_key)
-        if suite in self.suite_artifacts:
-            await asyncio.gather(*self.suite_artifacts[suite])
-            del self.suite_artifacts[suite]
-        logging.info("Done cleaning up after suite %s...", suite.suite_key)
+    async def cleanup_after_suite(self, suite: Suite, failed: bool) -> None:
+        """At the end of the suite, delete all suite artifacts, if the suite
+        succeeds, and, in all cases, delete all exit artifacts produced by
+        the suite. Executing exit artifacts right away is a good idea
+        because it kills running processes and frees their resources
+        early."""
+        key = suite.suite_key
+        logging.info("Cleaning up after suite %s...", key)
+        # Only drop suite artifacts if the suite executed successfully.
+        if not failed and key in self.suite_artifacts:
+            await asyncio.gather(*self.suite_artifacts[key])
+            del self.suite_artifacts[key]
+        if key in self.exit_artifacts:
+            await asyncio.gather(*self.exit_artifacts[key])
+            del self.exit_artifacts[key]
+        logging.info("Done cleaning up after suite %s...", key)
 
     def add_suite_artifact(self, suite: Suite, artifact: Callable[[], Artifact]) -> None:
-        self.suite_artifacts.setdefault(suite, []).append(artifact())
+        key = suite.suite_key
+        self.suite_artifacts.setdefault(key, []).append(artifact())
 
-    def add_exit_artifact(self, artifact: Callable[[], Artifact]):
-        self.exit_artifacts.append(artifact())
+    def add_exit_artifact(self, suite: Optional[Suite], artifact: Callable[[], Artifact]):
+        key = suite.suite_key if suite else "__exit__"
+        self.exit_artifacts.setdefault(key, []).append(artifact())
