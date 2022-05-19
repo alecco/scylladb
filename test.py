@@ -87,6 +87,7 @@ class TestSuite(ABC):
         self.cfg = cfg
         self.options = options
         self.mode = mode
+        self.suite_key = os.path.join(path, mode)
         self.tests = []
         self.pending_test_count = 0
         # The number of failed tests

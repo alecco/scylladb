@@ -12,7 +12,7 @@ Artifact = Awaitable
 
 
 class Suite(Protocol):
-    name: str
+    suite_key: str
 
 
 class ArtifactRegistry:
@@ -28,10 +28,10 @@ class ArtifactRegistry:
 
     async def cleanup_before_exit(self) -> None:
         logging.info("Cleaning up before exit...")
-        for name in self.suite_artifacts:
-            for artifact in self.suite_artifacts[name]:
+        for suite_key in self.suite_artifacts:
+            for artifact in self.suite_artifacts[suite_key]:
                 artifact.close()  # type: ignore
-            await asyncio.gather(*self.suite_artifacts[name], return_exceptions=True)
+            await asyncio.gather(*self.suite_artifacts[suite_key], return_exceptions=True)
         self.suite_artifacts = {}
         if self.exit_artifacts:
             await asyncio.gather(*self.exit_artifacts)
@@ -39,11 +39,11 @@ class ArtifactRegistry:
         logging.info("Done cleaning up before exit...")
 
     async def cleanup_after_suite(self, suite: Suite) -> None:
-        logging.info("Cleaning up after suite %s...", suite.name)
+        logging.info("Cleaning up after suite %s...", suite.suite_key)
         if suite in self.suite_artifacts:
             await asyncio.gather(*self.suite_artifacts[suite])
             del self.suite_artifacts[suite]
-        logging.info("Done cleaning up after suite %s...", suite.name)
+        logging.info("Done cleaning up after suite %s...", suite.suite_key)
 
     def add_suite_artifact(self, suite: Suite, artifact: Callable[[], Artifact]) -> None:
         self.suite_artifacts.setdefault(suite, []).append(artifact())
