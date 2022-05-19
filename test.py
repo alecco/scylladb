@@ -633,6 +633,8 @@ class PythonTest(Test):
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
         self.server_log = None
+        self.is_pre_check_ok = False
+        self.is_post_check_ok = False
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["-o", "junit_family=xunit2",
                      "--junit-xml={}".format(self.xmlout),
@@ -648,11 +650,22 @@ class PythonTest(Test):
     async def run(self, options):
         async with self.suite.clusters.instance() as cluster:
             self.args.insert(0, "--host={}".format(cluster[0].host))
-            cluster[0].take_log_savepoint()
-            self.success = await run_test(self, options)
-            if not self.success:
+            try:
+                cluster.pre_check()
+                self.is_pre_check_ok = True
+                cluster[0].take_log_savepoint()
+                code = await run_test(self, options)
+                cluster.post_check()
+                self.is_post_check_ok = True
+                self.success = code
+            except Exception as e:
                 self.server_log = cluster[0].read_log()
-        logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
+                if self.is_pre_check_ok is False:
+                    print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                    print("Server log  of the first server:\n{}".format(self.server_log))
+                    # Don't try to continue if the cluster is broken
+                    raise
+            logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
 
 
