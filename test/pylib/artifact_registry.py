@@ -29,9 +29,9 @@ class ArtifactRegistry:
     async def cleanup_before_exit(self) -> None:
         logging.info("Cleaning up before exit...")
         for name in self.suite_artifacts:
-            tasks = map(asyncio.create_task, self.suite_artifacts[name])
-            map(lambda t: t.cancel(), tasks)
-            await asyncio.gather(*tasks, return_exceptions=True)
+            for artifact in self.suite_artifacts[name]:
+                artifact.close()  # type: ignore
+            await asyncio.gather(*self.suite_artifacts[name], return_exceptions=True)
         self.suite_artifacts = {}
         if self.exit_artifacts:
             await asyncio.gather(*self.exit_artifacts)
