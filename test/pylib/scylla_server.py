@@ -170,7 +170,11 @@ class ScyllaServer:
         self.tmpdir = pathlib.Path(os.getenv('TMPDIR', '/tmp'))
         self.tmpdir = self.tmpdir / ('scylla-'+str(self.hostname))
 
+        # Delete the remains of the previous run
+
         # Cleanup any remains of the previously running server in this path
+        if self.workdir.exists() and self.workdir.is_symlink():
+            shutil.rmtree(os.readlink(self.workdir), ignore_errors=True)
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         self.workdir.unlink(missing_ok=True)
 
