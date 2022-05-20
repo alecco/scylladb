@@ -351,6 +351,11 @@ Check the log files:
         await self.host_registry.release_host(self.hostname)
         self.hostname = ""
 
+    def write_log_marker(self, msg) -> None:
+        self.log_file.seek(0, 2)  # seek to file end
+        self.log_file.write(msg.encode())
+        self.log_file.flush()
+
 
 class ScyllaCluster:
     def __init__(self, replicas: int,
@@ -385,7 +390,7 @@ class ScyllaCluster:
         keyspace_count = int(rows.one()[0])
         return keyspace_count
 
-    def pre_check(self) -> None:
+    def pre_check(self, name) -> None:
         """Check that  the cluster is ready for a test. If
         there was a start error, throw it here - the server is
         started when it's added to the pool, which can't be attributed
@@ -395,10 +400,15 @@ class ScyllaCluster:
             raise self.start_exception
         self.keyspace_count = self._get_keyspace_count()
 
-    def post_check(self) -> None:
+        for server in self.cluster:
+            server.write_log_marker("------ Starting test {} ------\n".format(name))
+
+    def post_check(self, name) -> None:
         """Check that the cluster is still alive and the test
         hasn't left any garbage."""
         assert(self.start_exception is None)
         if self._get_keyspace_count() != self.keyspace_count:
             raise RuntimeError("Test post-condition failed, "
                                "the test must drop all keyspaces it creates.")
+        for server in self.cluster:
+            server.write_log_marker("------ Ending test {} ------\n".format(name))

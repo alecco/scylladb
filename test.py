@@ -547,11 +547,11 @@ class CQLApprovalTest(Test):
             # If pre-check fails, e.g. because Scylla failed to start
             # or crashed between two tests, fail entire test.py
             try:
-                cluster.pre_check()
+                cluster.pre_check(self.uname)
                 self.is_pre_check_ok = True
                 cluster[0].take_log_savepoint()
                 self.is_executed_ok = await run_test(self, options, env=self.env)
-                cluster.post_check()
+                cluster.post_check(self.uname)
                 self.is_post_check_ok = True
 
                 if self.is_executed_ok is False:
@@ -654,11 +654,11 @@ class PythonTest(Test):
         async with self.suite.clusters.instance() as cluster:
             self.args.insert(0, "--host={}".format(cluster[0].host))
             try:
-                cluster.pre_check()
+                cluster.pre_check(self.uname)
                 self.is_pre_check_ok = True
                 cluster[0].take_log_savepoint()
                 code = await run_test(self, options)
-                cluster.post_check()
+                cluster.post_check(self.uname)
                 self.is_post_check_ok = True
                 self.success = code
             except Exception as e:
