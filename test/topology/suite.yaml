@@ -5,3 +5,6 @@ topology:
     replication_factor: 3
 disable:
     - test_null
+extra_scylla_cmdline_options:
+    - --logger-log-level
+    - raft=trace
