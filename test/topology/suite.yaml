@@ -5,3 +5,7 @@ topology:
     replication_factor: 3
 disable:
     - test_null
+    - test_cassandra_10250
+extra_scylla_cmdline_options:
+    - --logger-log-level
+    - raft=trace
