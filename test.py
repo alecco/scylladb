@@ -323,13 +323,16 @@ class PythonTestSuite(TestSuite):
     def topology_for_class(self, class_name, cfg):
 
         def create_server(cluster_name, seed):
+            cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
+            if type(cmdline_options) == str:
+                cmdline_options = [cmdline_options]
             server = ScyllaServer(
                 exe=self.scylla_exe,
                 vardir=os.path.join(self.options.tmpdir, self.mode),
                 host_registry=self.hosts,
                 cluster_name=cluster_name,
                 seed=seed,
-                cmdline_options=self.cfg.get("extra_scylla_cmdline_options", []))
+                cmdline_options=cmdline_options)
 
             # Suite artifacts are removed when
             # the entire suite ends successfully.
