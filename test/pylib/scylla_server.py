@@ -387,19 +387,23 @@ class ScyllaCluster:
         self.create_server = create_server
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
+        self.last_seed: str = None     # id as IP Address like '127.1.2.3'
 
     async def install_and_start(self) -> None:
         try:
             for i in range(self.replicas):
-                seed = self.cluster[-1].host if self.cluster else None
-                server = self.create_server(self.name, seed)
-                self.cluster.append(server)
-                await server.install_and_start()
+                await self.add_server()
             self.keyspace_count = self._get_keyspace_count()
         except (RuntimeError, NoHostAvailable, InvalidRequest) as e:
             # If start fails, swallow the error to throw later,
             # at test time.
             self.start_exception = e
+
+    async def add_server(self) -> None:
+        server = self.create_server(self.name, self.last_seed)
+        await server.install_and_start()
+        self.cluster.append(server)
+        self.last_seed = server.host
 
     def __getitem__(self, i: int) -> ScyllaServer:
         return self.cluster[i]
