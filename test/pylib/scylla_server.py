@@ -471,20 +471,26 @@ class ScyllaCluster:
 
     async def cluster_node_stop(self, request):
         node_id = request.match_info['id']
+        print(f"ScyllaCluster node_stop {node_id} 1 START")  # XXX
         server = self.cluster.get(node_id, None)
         if server is None:
+            print(f"ScyllaCluster node_stop {node_id} not found")  # XXX
             return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        print(f"ScyllaCluster node_stop {node_id} 2 stopping")  # XXX
         await server.stop()
+        self.update_last_seed(server.host)
         print(f"ScyllaCluster node_stop {node_id} DONE")  # XXX
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_start(self, request):
         node_id = request.match_info['id']
+        print(f"ScyllaCluster node_start {node_id} 1")  # XXX
         server = self.cluster.get(node_id, None)
         if server is None:
             return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
         server.seeds = self.last_seed
         await server.start()
+        print(f"ScyllaCluster node_start {node_id} DONE")  # XXX
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_restart(self, request):
