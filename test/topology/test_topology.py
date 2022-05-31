@@ -21,13 +21,14 @@ from sys import stderr
 async def test_stop_node_add_column(cql, cluster, tables):
     """Add a node, stop an original node, add a column"""
     nodes = await cluster.nodes()
-    table = await tables.add_table(ncolumns=5)
-    await cluster.node_add()
+    #table = await tables.add_table(ncolumns=5)
+    #await cluster.node_add()
     await cluster.node_stop(nodes[1])
-    nodes = await cluster.nodes()
-    asyncio.sleep(10)
-    await table.add_column()
-    await tables.verify_schema()
+    await cluster.node_start(nodes[1])
+    #nodes = await cluster.nodes()
+    #asyncio.sleep(10)
+    #await table.add_column()
+    #await tables.verify_schema()
 
 
 #@pytest.mark.asyncio
