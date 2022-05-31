@@ -376,7 +376,7 @@ class ScyllaCluster:
         self.create_server = create_server
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
-        self.last_seed: str = None     # id as IP Address like '127.1.2.3'
+        self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
         self.app = aiohttp.web.Application()
         self.setup_routes()
         self.runner = aiohttp.web.AppRunner(self.app)
@@ -437,6 +437,10 @@ class ScyllaCluster:
         for server in self.cluster.values():
             server.write_log_marker("------ Ending test {} ------\n".format(name))
 
+    def update_last_seed(self, host: str):
+        if self.last_seed == host:
+            self.last_seed = next(iter(self.cluster.values)).host if self.cluster else None
+
     def setup_routes(self):
         self.app.router.add_get('/', self.index)
         self.app.router.add_get('/cluster/nodes', self.cluster_nodes)
@@ -479,6 +483,7 @@ class ScyllaCluster:
         server = self.cluster.get(node_id, None)
         if server is None:
             return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        server.seeds = self.last_seed
         await server.start()
         return aiohttp.web.Response(text="OK")
 
@@ -501,6 +506,7 @@ class ScyllaCluster:
         if server is None:
             return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
         await server.stop()
+        self.update_last_seed(server.host)
         await server.uninstall()
         del self.cluster[node_id]
         return aiohttp.web.Response(text="OK")
