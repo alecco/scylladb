@@ -9,7 +9,7 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-async def table1(cql, test_keyspace):
+async def table1(cql, keyspace):
     table = test_keyspace + "." + unique_name()
     await cql.run_async(f"CREATE TABLE {table} (p text, c text, v text, primary key (p, c))")
     yield table
