@@ -18,6 +18,7 @@ from cassandra.cluster import Session, ResponseFuture                    # type:
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from test.pylib.util import unique_name                                  # type: ignore
 import pytest
+import pytest_asyncio                                                    # type: ignore
 import ssl
 
 
@@ -139,10 +140,10 @@ def this_dc(cql):
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
-@pytest.fixture(scope="session")
-def test_keyspace(cql, this_dc):
+@pytest_asyncio.fixture(scope="session")
+async def test_keyspace(cql, this_dc):
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
+    await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
                 this_dc + "' : 1 }")
     yield name
-    cql.execute("DROP KEYSPACE " + name)
+    await cql.run_async("DROP KEYSPACE " + name)
