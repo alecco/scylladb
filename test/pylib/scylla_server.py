@@ -21,6 +21,7 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 import sys  # XXX
+from time import ctime  # XXX
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -260,7 +261,7 @@ class ScyllaServer:
 
         # Add suite-specific command line options
         scylla_args = SCYLLA_CMDLINE_OPTIONS + self.cmdline_options
-        print(f"XXX ScyllaServer start() {self.hostname}", file=sys.stderr)  # XXX
+        print(f"XXX ScyllaServer start() {self.hostname} {ctime()} - 1", file=sys.stderr)  # XXX
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
         self.cmd = await asyncio.create_subprocess_exec(
@@ -324,6 +325,27 @@ Check the log files:
 
         try:
             self.cmd.kill()
+        except ProcessLookupError:
+            pass
+        else:
+            await self.cmd.wait()
+        finally:
+            if self.cmd:
+                logging.info("stopped server at host %s", hostname)
+            self.cmd = None
+            self.control_connection = None
+
+    async def stop_graceful(self) -> None:
+        """Stop a running server. No-op if not running. Uses SIGTERM to
+        stop. Waits for the process to exit before return."""
+        # Preserve for logging
+        hostname = self.hostname
+        logging.info("stopping server at host %s", hostname)
+        if not self.cmd:
+            return
+
+        try:
+            self.cmd.term()
         except ProcessLookupError:
             pass
         else:
@@ -443,6 +465,9 @@ class ScyllaCluster:
     def update_last_seed(self, host: str):
         if self.last_seed == host:
             self.last_seed = next(iter(self.started.values)).host if self.started else None
+            print(f"XXX ScyllaCluster update_last_seed() {host} -> {self.last_seed} ------")  # XXX
+        else:  # XXX
+            print(f"XXX ScyllaCluster update_last_seed() {host} != {self.last_seed} ------")  # XXX
 
     def setup_routes(self):
         self.app.router.add_get('/', self.index)
@@ -505,8 +530,14 @@ class ScyllaCluster:
         server = self.started.get(node_id, None)
         if server is None:
             return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
-        await server.stop()
+        print(f"ScyllaCluster node_restart {node_id} 1 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")  # XXX
+        await server.stop_graceful()
+        await asyncio.sleep(.5)  # XXX
+        print(f"ScyllaCluster node_restart {node_id} 2 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")  # XXX
+        self.update_last_seed(server.host)
+        print(f"ScyllaCluster node_restart {node_id} 3 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")  # XXX
         await server.start()
+        print(f"ScyllaCluster node_restart {node_id} 4 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")  # XXX
         return aiohttp.web.Response(text="OK")
 
     async def cluster_node_add(self, request):
