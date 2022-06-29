@@ -9,6 +9,7 @@ import logging
 import os
 import pathlib
 import shutil
+import tempfile
 import time
 import uuid
 from typing import Optional, List, Callable
@@ -18,6 +19,7 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
+from test.pylib.host_registry import HostRegistry
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -366,7 +368,6 @@ Check the log files:
             return
         logging.info("Uninstalling server at %s", self.workdir)
 
-        shutil.rmtree(self.workdir)
         self.log_filename.unlink(missing_ok=True)
 
         await self.host_registry.release_host(self.hostname)
@@ -379,15 +380,29 @@ Check the log files:
 
 
 class ScyllaCluster:
-    def __init__(self, replicas: int,
-                 create_server: Callable[[str, Optional[str]], ScyllaServer]) -> None:
+    def __init__(self, scylla_exe: str, replicas: int, test_base_dir: str,
+                 cmdline_options: List[str], host_registry: HostRegistry) -> None:
         self.name = str(uuid.uuid1())
+        self.scylla_exe = scylla_exe
         self.replicas = replicas
+        self.cluster_dir = tempfile.mkdtemp(prefix="cluster-", dir=test_base_dir)
+        self.cmdline_options = cmdline_options
+        self.host_registry = host_registry
         self.cluster: List[ScyllaServer] = []
-        self.create_server = create_server
+        self.is_running: bool = True
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
         self.last_seed: str = None     # id as IP Address like '127.1.2.3'
+
+        async def stop_cluster() -> None:
+            if self.is_running:
+                await self.stop_gracefully()
+
+        async def uninstall_cluster() -> None:
+            await self.uninstall()
+
+        self.stop_artifact = stop_cluster
+        self.uninstall_artifact = uninstall_cluster
 
     async def install_and_start(self) -> None:
         try:
@@ -399,10 +414,37 @@ class ScyllaCluster:
             # at test time.
             self.start_exception = e
 
-    async def add_server(self) -> None:
-        server = self.create_server(self.name, self.last_seed)
-        await server.install_and_start()
+    async def uninstall(self) -> None:
+        """Stop running servers, uninstall all servers, and remove API socket"""
+        logging.info("Uninstalling cluster")
+        await self.stop_gracefully()
+        await asyncio.gather(*(server.uninstall() for server in self.cluster))
+        shutil.rmtree(self.cluster_dir)
+
+    async def stop(self) -> None:
+        """Stop all running servers ASAP"""
+        if self.is_running:
+            await asyncio.gather(*(server.stop() for server in self.cluster))
+        self.last_seed = None
+        self.is_running = False
+
+    async def stop_gracefully(self) -> None:
+        """Stop all running servers in a clean way"""
+        if self.is_running:
+            await asyncio.gather(*(server.stop_gracefully() for server in self.cluster))
+        self.is_running = False
+        self.last_seed = None
+
+    async def add_server(self):
+        server = ScyllaServer(
+            exe=self.scylla_exe,
+            vardir=self.cluster_dir,
+            host_registry=self.host_registry,
+            cluster_name=self.name,
+            seed=self.last_seed,
+            cmdline_options=self.cmdline_options)
         self.cluster.append(server)
+        await server.install_and_start()
         self.last_seed = server.host
 
     def __getitem__(self, i: int) -> ScyllaServer:
