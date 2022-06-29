@@ -34,7 +34,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
-from test.pylib.scylla_server import ScyllaServer, ScyllaCluster
+from test.pylib.scylla_server import ScyllaCluster
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable
 
 output_is_a_tty = sys.stdout.isatty()
@@ -331,34 +331,30 @@ class PythonTestSuite(TestSuite):
 
         self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
 
+        self.test_base_dir = os.path.join(self.options.tmpdir, self.mode)
+        if not os.path.exists(self.test_base_dir):
+            os.path.mkdir(self.test_base_dir)
+
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
 
-        def create_server(cluster_name, seed):
-            cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
-            if type(cmdline_options) == str:
-                cmdline_options = [cmdline_options]
-            server = ScyllaServer(
-                exe=self.scylla_exe,
-                vardir=os.path.join(self.options.tmpdir, self.mode),
-                host_registry=self.hosts,
-                cluster_name=cluster_name,
-                seed=seed,
-                cmdline_options=cmdline_options)
-
-            # Suite artifacts are removed when
-            # the entire suite ends successfully.
-            self.artifacts.add_suite_artifact(self, server.stop_artifact)
-            if not self.options.save_log_on_success:
-                # If a test fails, we might want to keep the data dir.
-                self.artifacts.add_suite_artifact(self, server.uninstall_artifact)
-            self.artifacts.add_exit_artifact(self, server.stop_artifact)
-            return server
+        cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
+        if type(cmdline_options) == str:
+            cmdline_options = [cmdline_options]
+        replication_factor = int(cfg["replication_factor"])
 
         if class_name.lower() == "simple":
             async def create_cluster():
-                cluster = ScyllaCluster(int(cfg["replication_factor"]),
-                                        create_server)
+                cluster = ScyllaCluster(self.scylla_exe, replication_factor, self.test_base_dir,
+                                        cmdline_options, self.hosts)
                 await cluster.install_and_start()
+
+                # Suite artifacts are removed when
+                # the entire suite ends successfully.
+                self.artifacts.add_suite_artifact(self, cluster.stop_artifact)
+                if not self.options.save_log_on_success:
+                    # If a test fails, we might want to keep the data dir.
+                    self.artifacts.add_suite_artifact(self, cluster.uninstall_artifact)
+                self.artifacts.add_exit_artifact(self, cluster.stop_artifact)
                 return cluster
 
             return create_cluster
