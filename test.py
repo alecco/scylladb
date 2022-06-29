@@ -356,6 +356,7 @@ class PythonTestSuite(TestSuite):
                 cluster = ScyllaCluster(int(cfg["replication_factor"]),
                                         create_server)
                 await cluster.install_and_start()
+                self.artifacts.add_exit_artifact(self, cluster.stop_artifact)
                 return cluster
 
             return create_cluster

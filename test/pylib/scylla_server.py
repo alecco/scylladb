@@ -384,10 +384,21 @@ class ScyllaCluster:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.cluster: List[ScyllaServer] = []
+        self.is_running: bool = True
         self.create_server = create_server
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
         self.last_seed: str = None     # id as IP Address like '127.1.2.3'
+
+        async def stop_cluster() -> None:
+            if self.is_running:
+                await self.stop_gracefully()
+
+        async def uninstall_cluster() -> None:
+            await self.uninstall()
+
+        self.stop_artifact = stop_cluster
+        self.uninstall_artifact = uninstall_cluster
 
     async def install_and_start(self) -> None:
         try:
@@ -399,7 +410,27 @@ class ScyllaCluster:
             # at test time.
             self.start_exception = e
 
-    async def add_server(self) -> None:
+    async def uninstall(self) -> None:
+        """Stop running servers, uninstall all servers, and remove API socket"""
+        logging.info("Uninstalling cluster")
+        await self.stop_gracefully()
+        await asyncio.gather(*(server.uninstall() for server in self.cluster))
+
+    async def stop(self) -> None:
+        """Stop all running servers ASAP"""
+        if self.is_running:
+            await asyncio.gather(*(server.stop() for server in self.cluster))
+        self.last_seed = None
+        self.is_running = False
+
+    async def stop_gracefully(self) -> None:
+        """Stop all running servers in a clean way"""
+        if self.is_running:
+            await asyncio.gather(*(server.stop_gracefully() for server in self.cluster))
+        self.is_running = False
+        self.last_seed = None
+
+    async def add_server(self):
         server = self.create_server(self.name, self.last_seed)
         await server.install_and_start()
         self.cluster.append(server)
