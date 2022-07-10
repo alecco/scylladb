@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+"""Scylla clusters and management for Python tests"""
+
 import aiohttp
 import asyncio
 import logging
@@ -11,7 +13,7 @@ import pathlib
 import shutil
 import time
 import uuid
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Awaitable
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -19,6 +21,8 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+from test.pylib.pool import Pool
+from test.pylib.host_registry import HostRegistry
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -472,3 +476,51 @@ class ScyllaCluster:
                                "the test must drop all keyspaces it creates.")
         for server in self.cluster:
             server.write_log_marker("------ Ending test {} ------\n".format(name))
+
+
+class Harness:
+    # XXX docstring
+    def __init__(self, scylla_exe: str, replicas: int, pool_size, test_base_dir: str,
+                 cmdline_options: List[str], host_registry: HostRegistry,
+                 topology: dict) -> None:
+        self.scylla_exe = scylla_exe
+        self.replicas = replicas
+        self.pool_size = pool_size
+        self.test_base_dir = test_base_dir
+        self.cmdline_options = cmdline_options
+        self.host_registry = host_registry
+        self.create_cluster = self.topology_for_class(topology["class"], topology) # XXX must go into Harness
+        self.clusters = Pool(pool_size, self.create_cluster)
+
+    def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
+        """Create an async function to build a cluster for topology"""
+
+        def create_server(cluster_name, seed):
+            cmdline_options = self.cmdline_options
+            if type(cmdline_options) == str:
+                cmdline_options = [cmdline_options]
+            server = ScyllaServer(
+                exe=self.scylla_exe,
+                vardir=self.test_base_dir,
+                host_registry=self.host_registry,
+                cluster_name=cluster_name,
+                seed=seed,
+                cmdline_options=cmdline_options)
+
+            if not self.options.save_log_on_success:
+                # If a test fails, we might want to keep the data dir.
+                self.artifacts.add_suite_artifact(self, server.uninstall_artifact)
+            self.artifacts.add_exit_artifact(self, server.stop_artifact)
+            return server
+
+        if class_name.lower() == "simple":
+            async def create_cluster():
+                cluster = ScyllaCluster(int(cfg["replication_factor"]),
+                                        create_server)
+                await cluster.install_and_start()
+                return cluster
+
+            return create_cluster
+        else:
+            raise RuntimeError("Unsupported topology name")
+
