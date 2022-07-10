@@ -3,15 +3,18 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+"""Scylla clusters and management for Python tests"""
+
 import aiohttp
 import asyncio
 import logging
 import os
 import pathlib
 import shutil
+import tempfile
 import time
 import uuid
-from typing import Optional, Dict, List, Callable
+from typing import Optional, Dict, List, Callable, Awaitable
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -19,6 +22,9 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+from test.pylib.pool import Pool
+from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.host_registry import HostRegistry
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -122,16 +128,6 @@ class ScyllaServer:
         self.control_connection: Optional[Session] = None
         self.authenticator: str = config_options["authenticator"]
         self.authorizer: str = config_options["authorizer"]
-
-        async def stop_server() -> None:
-            if self.is_running:
-                await self.stop()
-
-        async def uninstall_server() -> None:
-            await self.uninstall()
-
-        self.stop_artifact = stop_server
-        self.uninstall_artifact = uninstall_server
 
     async def install_and_start(self) -> None:
         await self.install()
@@ -417,15 +413,28 @@ Check the log files:
 
 
 class ScyllaCluster:
-    def __init__(self, replicas: int,
-                 create_server: Callable[[str, Optional[str]], ScyllaServer]) -> None:
+    def __init__(self, scylla_exe: str, replicas: int, test_base_dir: str,
+                 cmdline_options: List[str], host_registry: HostRegistry) -> None:
         self.name = str(uuid.uuid1())
+        self.scylla_exe = scylla_exe
         self.replicas = replicas
+        self.cluster_dir = tempfile.mkdtemp(prefix="cluster-", dir=test_base_dir)
+        self.cmdline_options = cmdline_options
+        self.host_registry = host_registry
         self.cluster: List[ScyllaServer] = []
-        self.create_server = create_server
+        self.is_running: bool = True
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
-        self.last_seed: str = None     # id as IP Address like '127.1.2.3'
+        self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
+
+        async def stop_cluster() -> None:
+            await self.stop()
+
+        async def uninstall_cluster() -> None:
+            await self.uninstall()
+
+        self.stop_artifact = stop_cluster
+        self.uninstall_artifact = uninstall_cluster
 
     async def install_and_start(self) -> None:
         try:
@@ -438,8 +447,35 @@ class ScyllaCluster:
             self.start_exception = e
         logging.info("Created cluster %s", self)
 
+    async def uninstall(self) -> None:
+        """Stop running servers, uninstall all servers, and remove API socket"""
+        logging.info("Uninstalling cluster")
+        await self.stop_gracefully()
+        await asyncio.gather(*(server.uninstall() for server in self.cluster))
+        shutil.rmtree(self.cluster_dir)
+
+    async def stop(self) -> None:
+        """Stop all running servers ASAP"""
+        if self.is_running:
+            await asyncio.gather(*(server.stop() for server in self.cluster))
+        self.last_seed = None
+        self.is_running = False
+
+    async def stop_gracefully(self) -> None:
+        """Stop all running servers in a clean way"""
+        if self.is_running:
+            await asyncio.gather(*(server.stop_gracefully() for server in self.cluster))
+        self.is_running = False
+        self.last_seed = None
+
     async def add_server(self) -> None:
-        server = self.create_server(self.name, self.last_seed)
+        server = ScyllaServer(
+            exe=self.scylla_exe,
+            vardir=self.cluster_dir,
+            host_registry=self.host_registry,
+            cluster_name=self.name,
+            seed=self.last_seed,
+            cmdline_options=self.cmdline_options)
         self.cluster.append(server)
         try:
             await server.install_and_start()
@@ -484,3 +520,40 @@ class ScyllaCluster:
                                "the test must drop all keyspaces it creates.")
         for server in self.cluster:
             server.write_log_marker("------ Ending test {} ------\n".format(name))
+
+
+class Harness:
+    """Manages a pool of Scylla clusters for running test cases against"""
+    def __init__(self, scylla_exe: str, pool_size, test_base_dir: str, cmdline_options: List[str],
+                 topology: dict, save_log: bool, host_registry: HostRegistry,
+                 artifacts: ArtifactRegistry) -> None:
+        self.scylla_exe = scylla_exe
+        self.pool_size = pool_size
+        self.test_base_dir = test_base_dir
+        if isinstance(cmdline_options, str):
+            cmdline_options = [cmdline_options]
+        self.cmdline_options = cmdline_options
+        self.host_registry = host_registry
+        self.artifacts = artifacts
+        self.save_log = save_log
+        self.create_cluster = self.topology_for_class(topology["class"], topology)
+        self.clusters = Pool(pool_size, self.create_cluster)
+
+    def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
+        """Create an async function to build a cluster for topology"""
+
+        if class_name.lower() == "simple":
+            async def create_cluster():
+                cluster = ScyllaCluster(self.scylla_exe, int(cfg["replication_factor"]),
+                                        self.test_base_dir, self.cmdline_options,
+                                        self.host_registry)
+                await cluster.install_and_start()
+                if not self.save_log:
+                    # If a test fails, we might want to keep the data dir.
+                    self.artifacts.add_suite_artifact(self, cluster.uninstall_artifact)
+                self.artifacts.add_exit_artifact(self, cluster.stop_artifact)
+                return cluster
+
+            return create_cluster
+        else:
+            raise RuntimeError("Unsupported topology name")
