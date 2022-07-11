@@ -11,6 +11,7 @@
 #
 #
 import asyncio
+from functools import partial
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
@@ -21,16 +22,15 @@ import pytest
 import ssl
 from typing import AsyncGenerator
 from test.pylib.random_tables import RandomTables                        # type: ignore
+from test.pylib.harness_cli import HarnessCli
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-                     help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-                     help='CQL server port to connect to')
+    parser.addoption('--api', action='store', required=True,
+                     help='Harness unix socket path')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
 
@@ -75,7 +75,7 @@ def run_async(self, *args, **kwargs) -> asyncio.Future:
 Session.run_async = run_async
 
 
-def cluster_con(request):
+def cluster_con(hosts: List[str], port: int, ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     profile = ExecutionProfile(
@@ -107,29 +107,26 @@ def cluster_con(request):
                    )
 
 
-# "cql" fixture: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by the --host and
-# --port options, and defaults to localhost and 9042, respectively.
-# We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
-def cql(request):
-    cluster = cluster_con(request)
-    yield cluster.connect()
-    cluster.shutdown()
+async def harness_internal(request):
+    """Session fixture to set up client object for communicating with the Cluster API.
+       Pass the Unix socket path where the Harness server API is listening.
+       Pass a function to create driver connections.
+       Test cases (functions) should not use this fixture.
+    """
+    sock_path = request.config.getoption('api')
+    cluster_con_ssl = partial(cluster_con, ssl=request.config.getoption('ssl'))
+    cli = HarnessCli(sock_path, cluster_con_ssl)
+    yield cli
 
 
-# A function-scoped autouse=True fixture allows us to test after every test
-# that the CQL connection is still alive - and if not report the test which
-# crashed Scylla and stop running any more tests.
-@pytest.fixture(scope="function", autouse=True)
-def cql_test_connection(cql, request):
-    yield
-    try:
-        # We want to run a do-nothing CQL command. "use system" is the
-        # closest to do-nothing I could find...
-        cql.execute("use system")
-    except:     # noqa: E722
-        pytest.exit(f"Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}")
+@pytest.fixture(scope="function")
+async def harness(request, harness_internal):
+    """Per test fixture to notify Harness client object when tests begin so it can
+    perform checks for cluster state.
+    """
+    harness_internal.start_test(request.node.name)
+    yield harness_internal
 
 
 # Until Cassandra 4, NetworkTopologyStrategy did not support the option
@@ -139,23 +136,23 @@ def cql_test_connection(cql, request):
 # syntax that needs to specify a DC name explicitly. For this, will have
 # a "this_dc" fixture to figure out the name of the current DC, so it can be
 # used in NetworkTopologyStrategy.
-@pytest.fixture(scope="session")
-def this_dc(cql):
-    yield cql.execute("SELECT data_center FROM system.local").one()[0]
+@pytest.fixture()
+def this_dc(harness):
+    yield harness.cql.execute("SELECT data_center FROM system.local").one()[0]
 
 # While the raft-based schema modifications are still experimental and only
 # optionally enabled some tests are expected to fail on Scylla without this
 # option enabled, and pass with it enabled (and also pass on Cassandra).
 # These tests should use the "fails_without_raft" fixture. When Raft mode
 # becomes the default, this fixture can be removed.
-@pytest.fixture(scope="session")
-async def check_pre_raft(cql):
+@pytest.fixture()
+async def check_pre_raft(harness):
     # If not running on Scylla, return false.
-    names = [row.table_name for row in await cql.run_async("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    names = [row.table_name for row in await harness.cql.run_async("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     if not any('scylla' in name for name in names):
         return False
     # In Scylla, we check Raft mode by inspecting the configuration via CQL.
-    experimental_features = list(await cql.run_async("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
+    experimental_features = list(await harness.cql.run_async("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
     return not '"raft"' in experimental_features
 
 
@@ -169,19 +166,19 @@ async def fails_without_raft(request, check_pre_raft):
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
-@pytest.fixture(scope="session")
-async def keyspace(cql, this_dc):
+@pytest.fixture()
+async def keyspace(harness, this_dc):
     name = unique_name()
-    await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 1 }")
+    await harness.cql.run_async(f"CREATE KEYSPACE {name} WITH REPLICATION = "
+                                f"{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }")
     yield name
-    await cql.run_async("DROP KEYSPACE " + name)
+    await harness.cql.run_async("DROP KEYSPACE " + name)
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
-@pytest.fixture(scope="function")
-async def random_tables(request, cql, keyspace) -> AsyncGenerator:
-    tables = RandomTables(request.node.name, cql, keyspace)
+@pytest.fixture()
+async def random_tables(request, harness, keyspace) -> AsyncGenerator:
+    tables = RandomTables(request.node.name, harness.cql, keyspace)
     yield tables
     await tables.drop_all_tables()

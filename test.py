@@ -176,6 +176,9 @@ class TestSuite(ABC):
     async def add_test(self, shortname: str) -> None:
         pass
 
+    async def install_and_start(self) -> None:
+        pass
+
     async def run(self, test: 'Test', options: argparse.Namespace):
         try:
             for i in range(1, self.FLAKY_RETRIES):
@@ -334,6 +337,9 @@ class PythonTestSuite(TestSuite):
         self.harness = Harness(self.scylla_exe, pool_size, test_base_dir,
                                cmdline_options, topology, self.options.save_log_on_success,
                                self.hosts, self.artifacts)
+
+    async def install_and_start(self) -> None:
+        await self.harness.install_and_start()
 
     async def add_test(self, shortname) -> None:
         test = PythonTest(self.next_id, shortname, self)
@@ -585,7 +591,7 @@ class CQLApprovalTest(Test):
 
         async with self.suite.harness.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(1, "--host={}".format(cluster[0].host))
+            self.args.insert(1, f"--api={self.suite.harness.sock_path}")
             # If pre-check fails, e.g. because Scylla failed to start
             # or crashed between two tests, fail entire test.py
             try:
@@ -724,7 +730,7 @@ class PythonTest(Test):
 
         async with self.suite.harness.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(0, "--host={}".format(cluster[0].host))
+            self.args.insert(0, f"--api={self.suite.harness.sock_path}")
             try:
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
@@ -1025,6 +1031,7 @@ async def find_tests(options: argparse.Namespace) -> None:
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
                 suite = TestSuite.opt_create(f, options, mode)
+                await suite.install_and_start()
                 await suite.add_test_list()
 
     if not TestSuite.test_count():

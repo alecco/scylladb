@@ -5,7 +5,9 @@
 #
 """Scylla clusters and management for Python tests"""
 
+import itertools
 import aiohttp
+import aiohttp.web
 import asyncio
 import logging
 import os
@@ -14,7 +16,7 @@ import shutil
 import tempfile
 import time
 import uuid
-from typing import Optional, List, Callable, Awaitable
+from typing import Optional, Dict, List, Callable, Awaitable
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -527,6 +529,22 @@ class Harness:
         self.create_cluster = self.topology_for_class(topology["class"], topology)
         self.clusters = Pool(pool_size, self.create_cluster)
 
+        self.app = aiohttp.web.Application()
+        self.setup_routes()
+        self.runner = aiohttp.web.AppRunner(self.app)
+        self.sock_path = f"{self.test_base_dir}/harness"
+
+    async def start(self) -> None:
+        await self.runner.setup()
+        site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
+        await site.start()
+
+    def setup_routes(self) -> None:
+        # XXX  difference harness is up
+        self.app.router.add_get('/', self.index)
+        self.app.router.add_get('/up', self.harness_up)
+        self.app.router.add_get('/cluster/up', self.cluster_up)
+
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
         """Create an async function to build a cluster for topology"""
 
@@ -545,3 +563,11 @@ class Harness:
             return create_cluster
         else:
             raise RuntimeError("Unsupported topology name")
+
+    async def index(self, request) -> aiohttp.web.Response:
+        return aiohttp.web.Response(text="OK")
+
+    async def cluster_up(self, request) -> aiohttp.web.Response:
+        """Is cluster running"""
+        # XXX check if the cluster is ready
+        return aiohttp.web.Response(text=f"{self.is_running}")
