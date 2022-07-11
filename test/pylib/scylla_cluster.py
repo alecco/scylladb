@@ -388,7 +388,7 @@ Check the log files:
             await self.cmd.wait()
         finally:
             if self.cmd:
-                logging.info("stopped server at host %s", hostname)
+                logging.info("gracefully stopped server at host %s", hostname)
             self.cmd = None
 
     async def uninstall(self) -> None:
@@ -433,6 +433,9 @@ class ScyllaCluster:
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
         self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
+        self.cql_port: int = cql_port            # numeric TCP port for CQL connections
+        self.sock_path: str = f"{self.cluster_dir}/api_sock"
+        self.site: Optional[aiohttp.web.UnixSite] = None
 
     async def install_and_start(self) -> None:
         try:
@@ -448,7 +451,7 @@ class ScyllaCluster:
     async def uninstall(self) -> None:
         """Stop running servers, uninstall all servers, and remove API socket"""
         logging.info("Uninstalling cluster")
-        await self.stop_gracefully()
+        await self.stop()
         await asyncio.gather(*(server.uninstall() for server in self.stopped.values()))
         shutil.rmtree(self.cluster_dir)
 
@@ -611,6 +614,84 @@ class ScyllaCluster:
         self.removed.add(old_node_id)
         return await self.add_server()
 
+    def update_last_seed(self, removed_host: str) -> None:
+        """Update last seed when removing a host"""
+        if self.last_seed == removed_host:
+            self.last_seed = next(iter(self.started.keys())) if self.started else None
+
+    async def node_stop(self, node_id: str, gracefully: bool) -> bool:
+        """Stop a server. No-op if already stopped."""
+        self.dirty = True
+        logging.info("Cluster %s stopping server %s", self, node_id)
+        if node_id in self.stopped or node_id in self.removed:
+            return True
+        if node_id not in self.started:
+            return False
+        server = self.started.pop(node_id)
+        if gracefully:
+            await server.stop_gracefully()
+        else:
+            await server.stop()
+        self.update_last_seed(server.host)
+        self.stopped[node_id] = server
+        return True
+
+    async def node_start(self, node_id: str) -> bool:
+        """Start a stopped node"""
+        self.dirty = True
+        logging.info("Cluster %s starting server", self)
+        server = self.stopped.pop(node_id, None)
+        if server is None:
+            return False
+        if self.last_seed is None:
+            self.last_seed = server.host
+        server.seed = self.last_seed
+        await server.start()
+        self.started[node_id] = server
+        return True
+
+    async def node_restart(self, node_id: str) -> bool:
+        """Restart a running node"""
+        self.dirty = True
+        logging.info("Cluster %s restarting server %s", self, node_id)
+        server = self.started.get(node_id, None)
+        if server is None:
+            return False
+        await server.stop_gracefully()
+        await server.start()
+        return True
+
+    async def node_remove(self, node_id: str) -> bool:
+        """Remove a specified server"""
+        self.dirty = True
+        logging.info("Cluster %s removing server %s", self, node_id)
+        if node_id in self.started:
+            server = self.started.pop(node_id)
+            await server.stop_gracefully()
+            self.update_last_seed(server.host)
+        elif node_id in self.stopped:
+            server = self.stopped.pop(node_id)
+        else:
+            return False
+        await server.uninstall()
+        self.removed.add(node_id)
+        return True
+
+    async def node_replace(self, old_node_id) -> Optional[str]:
+        """Replace a specified server with a new one"""
+        self.dirty = True
+        logging.info("Cluster %s replacing server %s", self, node_id)
+        if old_node_id in self.started:
+            server = self.started.pop(old_node_id)
+            await server.stop_gracefully()
+            self.update_last_seed(server.host)
+        elif old_node_id in self.stopped:
+            server = self.stopped.pop(old_node_id)
+        else:
+            return None
+        await server.uninstall()
+        self.removed.add(old_node_id)
+        return await self.add_server()
 
 class Harness:
     """Manages a pool of Scylla clusters for running test cases against"""

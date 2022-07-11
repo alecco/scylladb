@@ -136,7 +136,6 @@ async def harness(request, harness_internal):
 async def cql(request, harness):
     yield harness.cql
 
-
 # Until Cassandra 4, NetworkTopologyStrategy did not support the option
 # replication_factor (https://issues.apache.org/jira/browse/CASSANDRA-14303).
 # We want to allow these tests to run on Cassandra 3.* (for the convenience
@@ -177,8 +176,8 @@ async def fails_without_raft(request, check_pre_raft):
 @pytest.fixture(scope="function")
 async def keyspace(harness, cql, this_dc):
     name = unique_name()
-    await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 1 }")
+    await cql.run_async(f"CREATE KEYSPACE {name} WITH REPLICATION = "
+                        f"{{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}")
     yield name
     await cql.run_async("DROP KEYSPACE " + name)
 
@@ -186,7 +185,7 @@ async def keyspace(harness, cql, this_dc):
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
 @pytest.fixture(scope="function")
-async def random_tables(request, cql, keyspace) -> AsyncGenerator:
+async def random_tables(request, harness, cql, keyspace) -> AsyncGenerator:
     tables = RandomTables(request.node.name, cql, keyspace)
     yield tables
     await tables.drop_all_tables()
