@@ -38,6 +38,7 @@ import uuid
 from typing import Optional, Type, List, Set, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from cassandra.cluster import Session as CassandraSession            # type: ignore
+from sys import stderr  # XXX
 
 
 logger = logging.getLogger('random_tables')
@@ -167,6 +168,7 @@ class RandomTable():
         """Drop this table"""
         cql_stmt = f"DROP TABLE {self.full_name}"
         logger.debug(cql_stmt)
+        print(f"XXX table.drop {self.full_name}", file=stderr)  # XXX
         return await self.cql.run_async(cql_stmt)
 
     async def add_column(self, name: str = None, ctype: Type[ValueType] = None, column: Column = None):
@@ -282,6 +284,7 @@ class RandomTables():
     async def drop_all_tables(self) -> None:
         """Drop all active managed tables"""
         await asyncio.gather(*(t.drop() for t in self.tables))
+        print(f"XXX drop_all_tables DONE", file=stderr)  # XXX
         self.removed_tables.extend(self.tables)
 
     async def verify_schema(self, table: Union[RandomTable, str] = None) -> None:
