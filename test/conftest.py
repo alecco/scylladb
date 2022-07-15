@@ -164,6 +164,7 @@ async def keyspace(cql, this_dc):
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
+@pytest.mark.asyncio
 @pytest.fixture(scope="function")
 async def random_tables(request, cql, keyspace) -> AsyncGenerator:
     tables = RandomTables(request.node.name, cql, keyspace)
