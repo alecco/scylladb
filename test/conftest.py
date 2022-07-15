@@ -132,6 +132,7 @@ def this_dc(cql):
 # option enabled, and pass with it enabled (and also pass on Cassandra).
 # These tests should use the "fails_without_raft" fixture. When Raft mode
 # becomes the default, this fixture can be removed.
+@pytest.mark.asyncio
 @pytest.fixture(scope="session")
 async def check_pre_raft(cql):
     # If not running on Scylla, return false.
@@ -143,6 +144,7 @@ async def check_pre_raft(cql):
     return not '"raft"' in experimental_features
 
 
+@pytest.mark.asyncio
 @pytest.fixture(scope="function")
 async def fails_without_raft(request, check_pre_raft):
     if check_pre_raft:
@@ -153,6 +155,7 @@ async def fails_without_raft(request, check_pre_raft):
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
+@pytest.mark.asyncio
 @pytest.fixture(scope="session")
 async def keyspace(cql, this_dc):
     name = unique_name()
@@ -164,6 +167,7 @@ async def keyspace(cql, this_dc):
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
+@pytest.mark.asyncio
 @pytest.fixture(scope="function")
 async def random_tables(request, cql, keyspace) -> AsyncGenerator:
     tables = RandomTables(request.node.name, cql, keyspace)
