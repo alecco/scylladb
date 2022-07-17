@@ -172,7 +172,7 @@ async def keyspace(cql, this_dc):
     await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
                 this_dc + "' : 1 }")
     yield name
-    await cql.run_async("DROP KEYSPACE " + name)
+    cql.execute("DROP KEYSPACE " + name)  # XXX synchronous
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
