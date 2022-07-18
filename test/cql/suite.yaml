@@ -1,3 +1,6 @@
 type: Approval
+extra_scylla_config_options:
+    authenticator: AllowAllAuthenticator
+    authorizer: AllowAllAuthorizer
 flaky:
     - cdc_with_lwt_test
