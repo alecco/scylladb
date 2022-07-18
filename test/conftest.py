@@ -11,7 +11,6 @@
 #
 #
 import asyncio
-from cassandra.auth import PlainTextAuthProvider                         # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
@@ -95,8 +94,6 @@ def cql(request):
                       # different versions. If we drop this setting completely, it will
                       # mean pick the latest version supported by the client and the server.
                       protocol_version=4,
-                      # Use the default superuser credentials, which work for both Scylla and Cassandra
-                      auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
                       )
     yield cluster.connect()
     cluster.shutdown()
