@@ -12,6 +12,9 @@ import sys
 from test.pylib.random_tables import RandomTables                        # type: ignore
 import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
+from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
+from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
+from cassandra.policies import RoundRobinPolicy                          # type: ignore
 
 # Add test.pylib to the search path
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
@@ -56,6 +59,34 @@ def run_async(self, *args, **kwargs) -> asyncio.Future:
 
 
 Session.run_async = run_async
+
+
+# "cql" fixture: set up client object for communicating with the CQL API.
+# The host/port combination of the server are determined by the --host and
+# --port options, and defaults to localhost and 9042, respectively.
+# We use scope="session" so that all tests will reuse the same client object.
+@pytest.fixture(scope="session")
+def cql(request):
+    profile = ExecutionProfile(
+        load_balancing_policy=RoundRobinPolicy(),
+        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+        # The default timeout (in seconds) for execute() commands is 10, which
+        # should have been more than enough, but in some extreme cases with a
+        # very slow debug build running on a very busy machine and a very slow
+        # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
+        # 10 seconds may not be enough, so let's increase it. See issue #7838.
+        request_timeout=120)
+    cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+                      contact_points=[request.config.getoption('host')],
+                      port=int(request.config.getoption('port')),
+                      # TODO: make the protocol version an option, to allow testing with
+                      # different versions. If we drop this setting completely, it will
+                      # mean pick the latest version supported by the client and the server.
+                      protocol_version=4,
+                      )
+    yield cluster.connect()
+    cluster.shutdown()
 
 
 # While the raft-based schema modifications are still experimental and only
