@@ -337,7 +337,7 @@ class PythonTestSuite(TestSuite):
 
         self.harness = Harness(self.scylla_exe, pool_size, test_base_dir,
                                cmdline_options, topology, self.options.save_log_on_success,
-                               self.hosts, self.artifacts)
+                               self.hosts)
 
     def build_test_list(self) -> List[str]:
         """For pytest, search for directories recursively"""
