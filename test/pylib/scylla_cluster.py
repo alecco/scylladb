@@ -414,7 +414,8 @@ Check the log files:
 
 class ScyllaCluster:
     def __init__(self, scylla_exe: str, replicas: int, test_base_dir: str,
-                 cmdline_options: List[str], host_registry: HostRegistry) -> None:
+                 cmdline_options: List[str], host_registry: HostRegistry,
+                 cql_port: int = 9042) -> None:
         self.name = str(uuid.uuid1())
         self.scylla_exe = scylla_exe
         self.replicas = replicas
@@ -526,7 +527,7 @@ class Harness:
     """Manages a pool of Scylla clusters for running test cases against"""
     def __init__(self, scylla_exe: str, pool_size, test_base_dir: str, cmdline_options: List[str],
                  topology: dict, save_log: bool, host_registry: HostRegistry,
-                 artifacts: ArtifactRegistry) -> None:
+                 artifacts: ArtifactRegistry, cql_port: int = 9042) -> None:
         self.scylla_exe = scylla_exe
         self.pool_size = pool_size
         self.test_base_dir = test_base_dir
@@ -537,6 +538,7 @@ class Harness:
         self.artifacts = artifacts
         self.save_log = save_log
         self.create_cluster = self.topology_for_class(topology["class"], topology)
+        self.cql_port = cql_port
         self.clusters = Pool(pool_size, self.create_cluster)
         self.cluster: Optional[ScyllaCluster] = None  # Current cluster
         self.is_before_test_ok: bool = False
@@ -573,7 +575,7 @@ class Harness:
             async def create_cluster():
                 cluster = ScyllaCluster(self.scylla_exe, int(cfg["replication_factor"]),
                                         self.test_base_dir, self.cmdline_options,
-                                        self.host_registry)
+                                        self.host_registry, self.cql_port)
                 await cluster.install_and_start()
                 if not self.save_log:
                     # If a test fails, we might want to keep the data dir.
