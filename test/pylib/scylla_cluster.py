@@ -674,6 +674,8 @@ class Harness:
             raise RuntimeError("Unsupported topology name")
 
     async def before_test(self, test_name: str) -> None:
+        if self.cluster is not None and self.cluster.is_dirty:
+            await self._cluster_finish()
         if self.cluster is None:
             await self._get_cluster()
         assert self.cluster is not None
