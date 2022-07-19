@@ -594,60 +594,59 @@ class CQLApprovalTest(Test):
             if self.server_log:
                 logging.info("Server log:\n%s", self.server_log)
 
-        async with self.suite.harness.clusters.instance() as cluster:
-            logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(1, "--host={}".format(cluster[0].host))
-            # If pre-check fails, e.g. because Scylla failed to start
-            # or crashed between two tests, fail entire test.py
-            try:
-                cluster.before_test(self.uname)
-                self.is_before_test_ok = True
-                cluster[0].take_log_savepoint()
-                self.is_executed_ok = await run_test(self, options, env=self.env)
-                cluster.after_test(self.uname)
-                self.is_after_test_ok = True
+        await self.suite.harness.start()  # Start Harness if not already started by another test
+        await self.suite.harness.before_test(self.uname)  # XXX
+        self.args.insert(1, "--host={}".format(self.suite.harness.cluster[0].host))
+        # If pre-check fails, e.g. because Scylla failed to start
+        # or crashed between two tests, fail entire test.py
+        try:
+            # Harness client will request cluster(s) from Harness server
+            self.is_executed_ok = await run_test(self, options, env=self.env)
 
-                if self.is_executed_ok is False:
-                    set_summary("""returned non-zero return status.\n
-Check test log at {}.""".format(self.log_filename))
-                elif not os.path.isfile(self.tmpfile):
-                    set_summary("failed: no output file")
-                elif not os.path.isfile(self.result):
-                    set_summary("failed: no result file")
-                    self.is_new = True
+            if self.is_executed_ok is False:
+                set_summary("returned non-zero return status.\n "
+                            f"Check test log at {self.log_filename}.")
+            elif not os.path.isfile(self.tmpfile):
+                set_summary("failed: no output file")
+            elif not os.path.isfile(self.result):
+                set_summary("failed: no result file")
+                self.is_new = True
+            else:
+                self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
+                if self.is_equal_result is False:
+                    self.unidiff = format_unidiff(self.result, self.tmpfile)
+                    set_summary("failed: test output does not match expected result")
+                    assert self.unidiff is not None
+                    logging.info("\n{}".format(palette.nocolor(self.unidiff)))
                 else:
-                    self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
-                    if self.is_equal_result is False:
-                        self.unidiff = format_unidiff(self.result, self.tmpfile)
-                        set_summary("failed: test output does not match expected result")
-                        assert self.unidiff is not None
-                        logging.info("\n{}".format(palette.nocolor(self.unidiff)))
-                    else:
-                        self.success = True
-                        set_summary("succeeded")
-            except Exception as e:
-                # Server log bloats the output if we produce it in all
-                # cases. So only grab it when it's relevant:
-                # 1) failed pre-check, e.g. start failure
-                # 2) failed test execution.
-                if self.is_executed_ok is False:
-                    self.server_log = cluster[0].read_log()
-                    if self.is_before_test_ok is False:
-                        set_summary("pre-check failed: {}".format(e))
-                        print("Test {} {}".format(self.name, self.summary))
-                        print("Server log  of the first server:\n{}".format(self.server_log))
-                        # Don't try to continue if the cluster is broken
-                        raise
-                set_summary("failed: {}".format(e))
-            finally:
-                if self.is_new or self.is_equal_result is False:
-                    # Put a copy of the .reject file close to the .result file
-                    # so that it's easy to analyze the diff or overwrite .result
-                    # with .reject. Preserve the original .reject file: in
-                    # multiple modes the copy .reject file may be overwritten.
-                    shutil.copyfile(self.tmpfile, self.reject)
-                elif os.path.exists(self.tmpfile):
-                    pathlib.Path(self.tmpfile).unlink()
+                    self.success = True
+                    set_summary("succeeded")
+        except Exception as e:
+            # Server log bloats the output if we produce it in all
+            # cases. So only grab it when it's relevant:
+            # 1) failed pre-check, e.g. start failure
+            # 2) failed test execution.
+            if self.is_executed_ok is False:
+                self.server_log = self.suite.harness.cluster[0].read_log()
+                if self.suite.harness.is_before_test_ok is False:
+                    set_summary("pre-check failed: {}".format(e))
+                    print("Test {} {}".format(self.name, self.summary))
+                    print("Server log  of the first server:\n{}".format(self.server_log))
+                    # Don't try to continue if the cluster is broken
+                    raise
+            set_summary("failed: {}".format(e))
+        finally:
+            await self.suite.harness.after_test(self.uname)
+            if self.is_new or self.is_equal_result is False:
+                # Put a copy of the .reject file close to the .result file
+                # so that it's easy to analyze the diff or overwrite .result
+                # with .reject. Preserve the original .reject file: in
+                # multiple modes the copy .reject file may be overwritten.
+                shutil.copyfile(self.tmpfile, self.reject)
+            elif os.path.exists(self.tmpfile):
+                pathlib.Path(self.tmpfile).unlink()
+
+        await self.suite.harness.stop()
 
         return self
 
@@ -733,25 +732,22 @@ class PythonTest(Test):
 
     async def run(self, options: argparse.Namespace) -> Test:
 
-        async with self.suite.harness.clusters.instance() as cluster:
-            logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(0, "--host={}".format(cluster[0].host))
-            try:
-                cluster.before_test(self.uname)
-                self.is_before_test_ok = True
-                cluster[0].take_log_savepoint()
-                status = await run_test(self, options)
-                cluster.after_test(self.uname)
-                self.is_after_test_ok = True
-                self.success = status
-            except Exception as e:
-                self.server_log = cluster[0].read_log()
-                if self.is_before_test_ok is False:
-                    print("Test {} pre-check failed: {}".format(self.name, str(e)))
-                    print("Server log of the first server:\n{}".format(self.server_log))
-                    # Don't try to continue if the cluster is broken
-                    raise
-            logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        await self.suite.harness.start()  # Start Harness if not already started by another test
+        await self.suite.harness.before_test(self.uname)
+        self.args.insert(0, "--host={}".format(self.suite.harness.cluster[0].host))
+        try:
+            self.success = await run_test(self, options)
+        except Exception as e:
+            self.server_log = self.suite.harness.cluster[0].read_log()
+            if self.suite.harness.is_before_test_ok is False:
+                print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                print("Server log of the first server:\n{}".format(self.server_log))
+                # Don't try to continue if the cluster is broken
+                raise
+        await self.suite.harness.after_test(self.uname)
+        logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        await self.suite.harness.stop()
+
         return self
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:

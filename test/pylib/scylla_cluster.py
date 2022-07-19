@@ -538,6 +538,33 @@ class Harness:
         self.save_log = save_log
         self.create_cluster = self.topology_for_class(topology["class"], topology)
         self.clusters = Pool(pool_size, self.create_cluster)
+        self.cluster: Optional[ScyllaCluster] = None  # Current cluster
+        self.is_before_test_ok: bool = False
+        self.is_after_test_ok: bool = False
+        self.is_running: bool = False
+
+    async def start(self) -> None:
+        """Start Harness, setup API, start first cluster"""
+        if not self.is_running:
+            await self._get_cluster()
+            self.is_running = True
+
+    async def stop(self) -> None:
+        """Stop Harness, stops last cluster if present"""
+        await self._cluster_finish()
+        self.is_running = False
+
+    async def _get_cluster(self) -> None:
+        assert self.cluster is None, "Previous cluster should be stopped"
+        self.cluster = await self.clusters.get()
+        self.is_before_test_ok = False
+        self.is_after_test_ok = False
+
+    async def _cluster_finish(self) -> None:
+        if self.cluster is not None:
+            await self.cluster.stop()
+            await self.cluster.uninstall()
+            self.cluster = None
 
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
         """Create an async function to build a cluster for topology"""
@@ -557,3 +584,18 @@ class Harness:
             return create_cluster
         else:
             raise RuntimeError("Unsupported topology name")
+
+    async def before_test(self, test_name: str) -> None:
+        if self.cluster is None:
+            await self._get_cluster()
+        assert self.cluster is not None
+        # TODO: should we do this for all servers?
+        self.cluster[0].take_log_savepoint()
+        self.cluster.before_test(test_name)
+        self.is_before_test_ok = True
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
+
+    async def after_test(self, test_name: str) -> None:
+        assert self.cluster is not None
+        self.cluster.after_test(test_name)
+        self.is_after_test_ok = True
