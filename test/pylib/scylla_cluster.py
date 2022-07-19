@@ -25,7 +25,6 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
-from test.pylib.artifact_registry import ArtifactRegistry
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -433,15 +432,6 @@ class ScyllaCluster:
         self.keyspace_count = 0
         self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
 
-        async def stop_cluster() -> None:
-            await self.stop()
-
-        async def uninstall_cluster() -> None:
-            await self.uninstall()
-
-        self.stop_artifact = stop_cluster
-        self.uninstall_artifact = uninstall_cluster
-
     async def install_and_start(self) -> None:
         try:
             for i in range(self.replicas):
@@ -626,7 +616,7 @@ class Harness:
     """Manages a pool of Scylla clusters for running test cases against"""
     def __init__(self, scylla_exe: str, pool_size, test_base_dir: str, cmdline_options: List[str],
                  topology: dict, save_log: bool, host_registry: HostRegistry,
-                 artifacts: ArtifactRegistry, cql_port: int = 9042) -> None:
+                 cql_port: int = 9042) -> None:
         self.scylla_exe = scylla_exe
         self.pool_size = pool_size
         self.test_base_dir = test_base_dir
@@ -634,7 +624,6 @@ class Harness:
             cmdline_options = [cmdline_options]
         self.cmdline_options = cmdline_options
         self.host_registry = host_registry
-        self.artifacts = artifacts
         self.save_log = save_log
         self.create_cluster = self.topology_for_class(topology["class"], topology)
         self.cql_port = cql_port
@@ -664,7 +653,9 @@ class Harness:
     async def _cluster_finish(self) -> None:
         if self.cluster is not None:
             await self.cluster.stop()
-            await self.cluster.uninstall()
+            if not self.save_log:
+                # If a test fails, we might want to keep the data dir.
+                await self.cluster.uninstall()
             self.cluster = None
 
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
@@ -676,10 +667,6 @@ class Harness:
                                         self.test_base_dir, self.cmdline_options,
                                         self.host_registry, self.cql_port)
                 await cluster.install_and_start()
-                if not self.save_log:
-                    # If a test fails, we might want to keep the data dir.
-                    self.artifacts.add_suite_artifact(self, cluster.uninstall_artifact)
-                self.artifacts.add_exit_artifact(self, cluster.stop_artifact)
                 return cluster
 
             return create_cluster
