@@ -428,6 +428,7 @@ class ScyllaCluster:
         self.stopped: Dict[str, ScyllaServer] = {}
         self.removed: Set[str] = set()
         self.is_running: bool = True
+        self.dirty: bool = False
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
         self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
@@ -672,6 +673,8 @@ class Harness:
             raise RuntimeError("Unsupported topology name")
 
     async def before_test(self, test_name: str) -> None:
+        if self.cluster is not None and self.cluster.dirty:
+            await self._cluster_finish()
         if self.cluster is None:
             await self._get_cluster()
         assert self.cluster is not None
