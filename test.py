@@ -596,7 +596,7 @@ class CQLApprovalTest(Test):
 
         await self.suite.harness.start()  # Start Harness if not already started by another test
         await self.suite.harness.before_test(self.uname)  # XXX
-        self.args.insert(1, "--host={}".format(self.suite.harness.cluster[0].host))
+        self.args.insert(1, "--host={}".format(self.suite.harness.started[0].host))
         # If pre-check fails, e.g. because Scylla failed to start
         # or crashed between two tests, fail entire test.py
         try:
@@ -733,8 +733,7 @@ class PythonTest(Test):
     async def run(self, options: argparse.Namespace) -> Test:
 
         await self.suite.harness.start()  # Start Harness if not already started by another test
-        await self.suite.harness.before_test(self.uname)
-        self.args.insert(0, "--host={}".format(self.suite.harness.cluster[0].host))
+        self.args.insert(0, f"--api={self.suite.harness.sock_path}")
         try:
             self.success = await run_test(self, options)
         except Exception as e:
@@ -744,7 +743,6 @@ class PythonTest(Test):
                 print("Server log of the first server:\n{}".format(self.server_log))
                 # Don't try to continue if the cluster is broken
                 raise
-        await self.suite.harness.after_test(self.uname)
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         await self.suite.harness.stop()
 
