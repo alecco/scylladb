@@ -733,6 +733,8 @@ class PythonTest(Test):
     async def run(self, options: argparse.Namespace) -> Test:
 
         await self.suite.harness.start()  # Start Harness if not already started by another test
+        from sys import stderr
+        print(f"\nXXX run harness started {self.uname}\n", file=stderr)   # XXX
         self.args.insert(0, f"--api={self.suite.harness.sock_path}")
         try:
             self.success = await run_test(self, options)
@@ -744,6 +746,7 @@ class PythonTest(Test):
                 # Don't try to continue if the cluster is broken
                 raise
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        print(f"\nXXX run harness started {self.uname} succeeded, stopping harness\n", file=stderr)   # XXX
         await self.suite.harness.stop()
 
         return self
