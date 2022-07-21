@@ -9,6 +9,8 @@
 # be set up only once - while still allowing the user to run individual tests
 # and automatically setting up the fixtures they need.
 
+import asyncio
+import sys 
 import pytest
 
 from cassandra.cluster import Cluster
@@ -16,33 +18,59 @@ from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import ssl
 
 from util import unique_name, new_test_table, cql_session
+# Use pylib libraries
+sys.path.insert(1, sys.path[0] + '/../pylib')
+from harness_cli import HarnessCli
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-        help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-        help='CQL server port to connect to')
+    parser.addoption('--api', action='store', required=True,
+                     help='Harness unix socket path')
     parser.addoption('--ssl', action='store_true',
         help='Connect to CQL via an encrypted TLSv1.2 connection')
 
-# "cql" fixture: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by the --host and
-# --port options, and defaults to localhost and 9042, respectively.
-# We use scope="session" so that all tests will reuse the same client object.
+
+# Change default pytest-asyncio event_loop fixture scope to session to
+# allow async fixtures with scope larger than function. (e.g. keyspace fixture)
+# See https://github.com/pytest-dev/pytest-asyncio/issues/68
 @pytest.fixture(scope="session")
-def cql(request):
+def event_loop(request):
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(scope="session")
+def harness(request, event_loop):
+    """Session fixture to set up client object for communicating with the Cluster API.
+       Pass the Unix socket path where the Harness server API is listening.
+    """
+    yield HarnessCli(request.config.getoption('api'))
+
+
+# We use scope="session" so that all tests will reuse the same client object.
+@pytest.mark.asyncio
+@pytest.fixture(scope="session")
+async def cql(request, harness):
     # Use the default superuser credentials, which work for both Scylla and Cassandra
-    with cql_session(request.config.getoption('host'),
-        request.config.getoption('port'),
+    host = (await harness.nodes())[0]
+    port = await harness.cql_port()
+    from sys import stderr    # XXX
+    print(f"XXX host {host} port {port}", file=stderr)  # XXX
+    print(f"XXX calling before_test", file=stderr)  # XXX
+    await harness.before_test(request.node.name)
+    with cql_session(host,
+        port,
         request.config.getoption('ssl'),
         username="cassandra",
         password="cassandra"
     ) as session:
         yield session
         session.shutdown()
+    print(f"XXX calling after_test", file=stderr)  # XXX
+    await harness.after_test(request.node.name)
 
 # A function-scoped autouse=True fixture allows us to test after every test
 # that the CQL connection is still alive - and if not report the test which
@@ -75,8 +103,11 @@ def this_dc(cql):
 @pytest.fixture(scope="session")
 def test_keyspace(cql, this_dc):
     name = unique_name()
+    from sys import stderr
+    print(f"XXX CREATE KEYSPACE {name}", file=stderr)  # XXX
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     yield name
+    print(f"XXX DROP KEYSPACE {name}", file=stderr)  # XXX
     cql.execute("DROP KEYSPACE " + name)
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,

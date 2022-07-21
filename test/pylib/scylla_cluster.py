@@ -701,6 +701,8 @@ class Harness:
         self.cluster.before_test(test_name)
         self.is_before_test_ok = True
         logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
+        from sys import stderr  # XXX
+        print(f"Leasing Scylla cluster {self.cluster} for test {test_name}", file=stderr)  # XXX
 
     async def after_test(self, test_name: str) -> None:
         assert self.cluster is not None
