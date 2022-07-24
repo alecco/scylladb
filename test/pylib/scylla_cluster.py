@@ -9,9 +9,13 @@ import logging
 import os
 import pathlib
 import shutil
+import tempfile
 import time
 import uuid
-from typing import Optional, Dict, List, Callable
+from typing import Optional, Dict, List
+from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.host_registry import HostRegistry
+from test.pylib.pool import Pool
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -127,16 +131,6 @@ class ScyllaServer:
         self.control_connection: Optional[Session] = None
         self.authenticator: str = config_options["authenticator"]
         self.authorizer: str = config_options["authorizer"]
-
-        async def stop_server() -> None:
-            if self.is_running:
-                await self.stop()
-
-        async def uninstall_server() -> None:
-            await self.uninstall()
-
-        self.stop_artifact = stop_server
-        self.uninstall_artifact = uninstall_server
 
     async def install_and_start(self) -> None:
         await self.install()
@@ -423,16 +417,32 @@ Check the log files:
 
 
 class ScyllaCluster:
-    def __init__(self, replicas: int, create_server: Callable[[str, Optional[str]], ScyllaServer],
-                 cql_port: int = 9042) -> None:
+    def __init__(self, scylla_exe: str, replicas: int, test_base_dir: str,
+                 cmdline_options: List[str], host_registry: HostRegistry, 
+                 artifact_registry: ArtifactRegistry, cql_port: int = 9042) -> None:
         self.name = str(uuid.uuid1())
+        self.scylla_exe = scylla_exe
         self.replicas = replicas
         self.cql_port: int = cql_port
+
+        self.cluster_dir = tempfile.mkdtemp(prefix="cluster-", dir=test_base_dir)
+        self.cmdline_options = cmdline_options
+        self.host_registry = host_registry
+        self.artifact_registry = artifact_registry
         self.cluster: List[ScyllaServer] = []
-        self.create_server = create_server
+        self.is_running: bool = False
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
-        self.last_seed: str = None     # id as IP Address like '127.1.2.3'
+        self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
+
+        async def stop_cluster() -> None:
+            await self.stop()
+
+        async def uninstall_cluster() -> None:
+            await self.uninstall()
+
+        self.stop_artifact = stop_cluster
+        self.uninstall_artifact = uninstall_cluster
 
     async def install_and_start(self) -> None:
         try:
@@ -445,8 +455,36 @@ class ScyllaCluster:
             self.start_exception = e
         logging.info("Created cluster %s", self)
 
+    async def uninstall(self) -> None:
+        """Stop running servers, uninstall all servers, and remove API socket"""
+        logging.info("Uninstalling cluster")
+        await self.stop()
+        await asyncio.gather(*(server.uninstall() for server in self.cluster))
+        shutil.rmtree(self.cluster_dir)
+
+    async def stop(self) -> None:
+        """Stop all running servers ASAP"""
+        if self.is_running:
+            await asyncio.gather(*(server.stop() for server in self.cluster))
+        self.last_seed = None
+        self.is_running = False
+
+    async def stop_gracefully(self) -> None:
+        """Stop all running servers in a clean way"""
+        if self.is_running:
+            await asyncio.gather(*(server.stop_gracefully() for server in self.cluster))
+        self.is_running = False
+        self.last_seed = None
+
     async def add_server(self) -> None:
-        server = self.create_server(self.name, self.last_seed)
+        server = ScyllaServer(
+            exe=self.scylla_exe,
+            vardir=self.cluster_dir,
+            host_registry=self.host_registry,
+            cluster_name=self.name,
+            seed=self.last_seed,
+            cmdline_options=self.cmdline_options,
+            cql_port=self.cql_port)
         self.cluster.append(server)
         try:
             await server.install_and_start()
@@ -481,6 +519,7 @@ class ScyllaCluster:
 
         for server in self.cluster:
             server.write_log_marker("------ Starting test {} ------\n".format(name))
+            server.take_log_savepoint()
 
     def after_test(self, name) -> None:
         """Check that the cluster is still alive and the test
@@ -491,3 +530,44 @@ class ScyllaCluster:
                                "the test must drop all keyspaces it creates.")
         for server in self.cluster:
             server.write_log_marker("------ Ending test {} ------\n".format(name))
+
+
+class Harness:
+    """Manages a pool of Scylla clusters for running test cases"""
+    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster]) -> None:
+        self.test_name: str = test_name
+        self.clusters: Pool[ScyllaCluster] = clusters
+        self.cluster: Optional[ScyllaCluster] = None  # Current cluster
+        self.is_before_test_ok: bool = False
+        self.is_after_test_ok: bool = False
+        self.is_running: bool = False
+
+    async def start(self) -> None:
+        """Start Harness, setup API, start first cluster"""
+        if not self.cluster:
+            await self._get_cluster()
+        self._before_test()
+        self.is_running = True
+
+    def _before_test(self) -> None:
+        assert self.cluster is not None, "Missing cluster before test"
+        self.cluster.before_test(self.test_name)
+        self.is_before_test_ok = True
+
+    async def stop(self) -> None:
+        """Stop Harness, cycle last cluster if not dirty and present"""
+        if self.cluster is not None:
+            self.cluster.after_test(self.test_name)
+            await self._return_cluster()
+        self.is_after_test_ok = False
+        self.is_running = False
+
+    async def _get_cluster(self) -> None:
+        assert self.cluster is None, "Previous cluster should be stopped"
+        self.cluster = await self.clusters.get()
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.test_name)
+
+    async def _return_cluster(self) -> None:
+        if self.cluster is not None:
+            await self.clusters.put(self.cluster)
+            self.cluster = None
