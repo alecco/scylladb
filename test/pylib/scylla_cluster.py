@@ -639,12 +639,15 @@ class Harness:
 
     async def start(self) -> None:
         """Start Harness, setup API, start first cluster"""
-        if not self.cluster:
-            await self._get_cluster()
-        self._before_test()
+        await self._before_test()
         self.is_running = True
 
-    def _before_test(self) -> None:
+    async def _before_test(self) -> None:
+        if self.cluster is not None and self.cluster.is_dirty:
+            await self.cluster.stop()
+            self.cluster = None
+        if self.cluster is None:
+            await self._get_cluster()
         assert self.cluster is not None, "Missing cluster before test"
         logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.test_name)
         self.cluster.before_test(self.test_name)
