@@ -12,6 +12,7 @@ import shutil
 import time
 import uuid
 from typing import Optional, Dict, List, Callable
+from test.pylib.pool import Pool
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -484,3 +485,29 @@ class ScyllaCluster:
                                "the test must drop all keyspaces it creates.")
         for server in self.cluster:
             server.write_log_marker("------ Ending test {} ------\n".format(name))
+
+class ScyllaClusterManager:
+    """Manages a Scylla cluster for running test cases"""
+    cluster: ScyllaCluster
+
+    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster]) -> None:
+        self.test_name: str = test_name
+        self.clusters: Pool[ScyllaCluster] = clusters
+
+    async def start(self) -> None:
+        """Start, start first cluster"""
+        await self._get_cluster()
+
+    async def stop(self) -> None:
+        """Stop, cycle last cluster if not dirty and present"""
+        self.cluster.after_test(self.test_name)
+        await self._return_cluster()
+
+    async def _get_cluster(self) -> None:
+        self.cluster = await self.clusters.get()
+        logging.info("Getting new Scylla cluster %s", self.cluster)
+
+    async def _return_cluster(self) -> None:
+        logging.info("Returning Scylla cluster %s", self.cluster)
+        await self.clusters.put(self.cluster)
+        del self.cluster
