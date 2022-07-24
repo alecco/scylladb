@@ -17,7 +17,8 @@ from cassandra.cluster import Session, ResponseFuture                    # type:
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from test.pylib.util import unique_name                                  # type: ignore
 import pytest
-from typing import AsyncGenerator
+from typing import List, AsyncGenerator
+from test.pylib.manager_cli import ManagerCli
 from test.pylib.random_tables import RandomTables                        # type: ignore
 
 
@@ -25,10 +26,8 @@ from test.pylib.random_tables import RandomTables                        # type:
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-                     help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-                     help='CQL server port to connect to')
+    parser.addoption('--manager-api', action='store', required=True,
+                     help='Manager unix socket path')
 
 
 def _wrap_future(f: ResponseFuture) -> asyncio.Future:
@@ -61,9 +60,10 @@ def run_async(self, *args, **kwargs) -> asyncio.Future:
 Session.run_async = run_async
 
 
-def cluster_con(request):
+def cluster_con(hosts: List[str], port: int):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
+    assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -75,8 +75,8 @@ def cluster_con(request):
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout=120)
     return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                   contact_points=[request.config.getoption('host')],
-                   port=int(request.config.getoption('port')),
+                   contact_points=hosts,
+                   port=port,
                    # TODO: make the protocol version an option, to allow testing with
                    # different versions. If we drop this setting completely, it will
                    # mean pick the latest version supported by the client and the server.
@@ -84,13 +84,34 @@ def cluster_con(request):
                    )
 
 
-# "cql" fixture: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by the --host and
-# --port options, and defaults to localhost and 9042, respectively.
-# We use scope="session" so that all tests will reuse the same client object.
+# Change default pytest-asyncio event_loop fixture scope to session to
+# allow async fixtures with scope larger than function. (e.g. manager fixture)
+# See https://github.com/pytest-dev/pytest-asyncio/issues/68
 @pytest.fixture(scope="session")
-def cql(request):
-    cluster = cluster_con(request)
+def event_loop(request):
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.mark.asyncio
+@pytest.fixture(scope="session")
+async def manager(event_loop, request):
+    """Session fixture to set up client object for communicating with the Cluster API.
+       Pass the Unix socket path where the Manager server API is listening.
+       Test cases (functions) should not use this fixture.
+    """
+    manager_int = ManagerCli(request.config.getoption('manager_api'))
+    await manager_int.start()
+    yield manager_int
+
+# "cql" fixture: set up client object for communicating with the CQL API.
+# The host/port combination of the server are determined by manager
+# We use scope="session" so that all tests will reuse the same client object.
+@pytest.mark.asyncio
+@pytest.fixture(scope="session")
+async def cql(event_loop, manager):
+    cluster = cluster_con(await manager.servers(), 9042)
     yield cluster.connect()
     cluster.shutdown()
 
