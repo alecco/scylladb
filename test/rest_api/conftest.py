@@ -34,6 +34,8 @@ def pytest_addoption(parser):
         help='Connect to CQL via an encrypted TLSv1.2 connection')
     parser.addoption('--api-port', action='store', default='10000',
         help='server REST API port to connect to')
+    parser.addoption('--harness-api', action='store', required=True,
+                     help='Harness unix socket path')
 
 class RestApiSession:
     def __init__(self, host, port):
