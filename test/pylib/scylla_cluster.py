@@ -621,6 +621,14 @@ class ScyllaClusterManager:
         """Start, start first cluster"""
         await self._get_cluster()
 
+    async def _before_test(self) -> None:
+        if self.cluster.is_dirty:
+            await self.cluster.stop()
+            await self._get_cluster()
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.test_name)
+        self.cluster.before_test(self.test_name)
+        self.is_before_test_ok = True
+
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
         self.cluster.after_test(self.test_name)
