@@ -5,6 +5,7 @@
 #
 import aiohttp
 import asyncio
+import itertools
 import logging
 import os
 import pathlib
@@ -12,7 +13,7 @@ import shutil
 import tempfile
 import time
 import uuid
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Set, Tuple
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
@@ -422,8 +423,11 @@ class ScyllaCluster:
         self.config_options = config_options
         self.host_registry = host_registry
         self.artifact_registry = artifact_registry
-        self.cluster: List[ScyllaServer] = []
+        self.running: Dict[str, ScyllaServer] = {}
+        self.stopped: Dict[str, ScyllaServer] = {}
+        self.removed: Set[str] = set()
         self.is_running: bool = False
+        self.is_dirty: bool = False
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
         self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
@@ -450,26 +454,37 @@ class ScyllaCluster:
 
     async def uninstall(self) -> None:
         """Stop running servers, uninstall all servers, and remove API socket"""
+        self.is_dirty = True
         logging.info("Uninstalling cluster")
         await self.stop()
-        await asyncio.gather(*(server.uninstall() for server in self.cluster))
+        await asyncio.gather(*(server.uninstall() for server in self.stopped.values()))
         # Note: self.cluster_dir is removed by suite when all tests pass
 
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
         if self.is_running:
-            await asyncio.gather(*(server.stop() for server in self.cluster))
-        self.last_seed = None
-        self.is_running = False
+            logging.info("Cluster %s stopping", self)
+            self.is_dirty = True
+            # If self.running is empty, no-op
+            await asyncio.gather(*(server.stop() for server in self.running.values()))
+            self.stopped.update(self.running)
+            self.running.clear()
+            self.last_seed = None
+            self.is_running = False
 
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
         if self.is_running:
-            await asyncio.gather(*(server.stop_gracefully() for server in self.cluster))
-        self.is_running = False
-        self.last_seed = None
+            logging.info("Cluster %s stopping gracefully", self)
+            self.is_dirty = True
+            # If self.running is empty, no-op
+            await asyncio.gather(*(server.stop_gracefully() for server in self.running.values()))
+            self.stopped.update(self.running)
+            self.running.clear()
+            self.is_running = False
+            self.last_seed = None
 
-    async def add_server(self) -> None:
+    async def add_server(self) -> str:
         server = ScyllaServer(
             exe=self.scylla_exe,
             vardir=self.cluster_dir,
@@ -478,41 +493,44 @@ class ScyllaCluster:
             seed=self.last_seed,
             cmdline_options=self.cmdline_options,
             config_options=self.config_options)
-        self.cluster.append(server)
         try:
+            logging.info("Cluster %s adding server", server)
             await server.install_and_start()
         except Exception as e:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
                           server.hostname, server.workdir.name, str(e))
+        self.running[server.host] = server
         self.last_seed = server.host
+        return server.host
 
     def __getitem__(self, i: int) -> ScyllaServer:
-        return self.cluster[i]
+        assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
+        return list(self.running.values())[i]
 
     def __str__(self):
         path = pathlib.PurePath(self.cluster_dir)
-        return f"{{{path.name}: {', '.join(str(c) for c in self.cluster)}}}"
+        return f"{{{path.name}: {', '.join(str(c) for c in self.running)}}}"
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert(self.start_exception is None)
-        assert self.cluster[0].control_connection is not None
-        rows = self.cluster[0].control_connection.execute(
-            "select count(*) as c from system_schema.keyspaces")
+        assert self[0].control_connection is not None
+        rows = self[0].control_connection.execute(
+               "select count(*) as c from system_schema.keyspaces")
         keyspace_count = int(rows.one()[0])
         return keyspace_count
 
     def before_test(self, name) -> None:
         """Check that  the cluster is ready for a test. If
         there was a start error, throw it here - the server is
-        started when it's added to the pool, which can't be attributed
+        running when it's added to the pool, which can't be attributed
         to any specific test, throwing it here would stop a specific
         test."""
         if self.start_exception:
             raise self.start_exception
 
-        for server in self.cluster:
-            server.write_log_marker("------ Starting test {} ------\n".format(name))
+        for server in self.running.values():
+            server.write_log_marker(f"------ Starting test {name} ------\n")
             server.take_log_savepoint()
 
     def after_test(self, name) -> None:
@@ -522,8 +540,86 @@ class ScyllaCluster:
         if self._get_keyspace_count() != self.keyspace_count:
             raise RuntimeError("Test post-condition failed, "
                                "the test must drop all keyspaces it creates.")
-        for server in self.cluster:
-            server.write_log_marker("------ Ending test {} ------\n".format(name))
+        for server in itertools.chain(self.running.values(), self.stopped.values()):
+            server.write_log_marker(f"------ Ending test {name} ------\n")
+
+    def update_last_seed(self, removed_host: str) -> None:
+        """Update last seed when removing a host"""
+        if self.last_seed == removed_host:
+            self.last_seed = list(self.running.keys())[0] if self.running else None
+
+    async def server_stop(self, server_id: str, gracefully: bool) -> Tuple[bool, str]:
+        """Stop a server. No-op if already stopped."""
+        logging.info("Cluster %s stopping server %s", self, server_id)
+        if server_id in self.stopped:
+            return True, f"Server {server_id} already stopped"
+        if server_id in self.removed:
+            return False, f"Server {server_id} removed"
+        if server_id not in self.running:
+            return False, f"Server {server_id} unknown"
+        self.is_dirty = True
+        server = self.running.pop(server_id)
+        if gracefully:
+            await server.stop_gracefully()
+        else:
+            await server.stop()
+        self.update_last_seed(server.host)
+        self.stopped[server_id] = server
+        return True, f"Server {server_id} stopped"
+
+    async def server_start(self, server_id: str) -> Tuple[bool, str]:
+        """Start a stopped server"""
+        logging.info("Cluster %s starting server", self)
+        if server_id in self.running:
+            return True, f"Server {server_id} already started"
+        if server_id in self.removed:
+            return False, f"Server {server_id} removed"
+        if server_id not in self.stopped:
+            return False, f"Server {server_id} unknown"
+        self.is_dirty = True
+        server = self.stopped.pop(server_id)
+        if self.last_seed is None:
+            self.last_seed = server.host
+        server.seed = self.last_seed
+        await server.start()
+        self.running[server_id] = server
+        return True, f"Server {server_id} started"
+
+    async def server_restart(self, server_id: str) -> Tuple[bool, str]:
+        """Restart a running server"""
+        logging.info("Cluster %s restarting server %s", self, server_id)
+        if server_id in self.running:
+            self.is_dirty = True
+            server = self.running.pop(server_id)
+            await server.stop_gracefully()
+            await server.start()
+            self.running[server_id] = server
+            return True, f"Server {server_id} restarted"
+        if server_id in self.stopped:
+            self.is_dirty = True
+            server = self.stopped.pop(server_id)
+            await server.start()
+            self.running[server_id] = server
+            return True, f"Server {server_id} started"
+        if server_id in self.removed:
+            return False, f"Server {server_id} removed"
+        return False, f"Server {server_id} unknown"
+
+    async def server_remove(self, server_id: str) -> Tuple[bool, str]:
+        """Remove a specified server"""
+        self.is_dirty = True
+        logging.info("Cluster %s removing server %s", self, server_id)
+        if server_id in self.running:
+            server = self.running.pop(server_id)
+            await server.stop_gracefully()
+            self.update_last_seed(server.host)
+        elif server_id in self.stopped:
+            server = self.stopped.pop(server_id)
+        else:
+            return False, f"Server {server_id} unknown"
+        await server.uninstall()
+        self.removed.add(server_id)
+        return True, f"Server {server_id} removed"
 
 
 class Harness:
