@@ -452,7 +452,7 @@ class ScyllaCluster:
     async def install_and_start(self) -> None:
         try:
             for i in range(self.replicas):
-                await self.add_server()
+                await self.add_server(mark_dirty=False)
             self.keyspace_count = self._get_keyspace_count()
         except (RuntimeError, NoHostAvailable, InvalidRequest, OperationTimedOut) as e:
             # If start fails, swallow the error to throw later,
@@ -492,7 +492,10 @@ class ScyllaCluster:
             self.is_running = False
             self.last_seed = None
 
-    async def add_server(self) -> str:
+    async def add_server(self, mark_dirty:bool=True) -> str:
+        """Add a new server to the cluster"""
+        if mark_dirty:
+            self.is_dirty = True
         server = ScyllaServer(
             exe=self.scylla_exe,
             vardir=self.cluster_dir,
