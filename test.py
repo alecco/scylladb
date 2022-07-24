@@ -591,7 +591,9 @@ class CQLApprovalTest(Test):
         self.reject = suite.suite_path / (self.shortname + ".reject")
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[str] = None
-        self.harness = Harness(shortname, suite.clusters)
+        self.harness: Harness = Harness(shortname,
+                                        os.path.join(self.suite.options.tmpdir, self.mode),
+                                        suite.clusters)
         CQLApprovalTest._reset(self)
 
     def _reset(self) -> None:
@@ -630,7 +632,7 @@ class CQLApprovalTest(Test):
         # or crashed between two tests, fail entire test.py
         try:
             await self.harness.start()
-            self.args.insert(1, "--host={}".format(self.harness.cluster[0].host))
+            self.args.insert(1, f"--api={self.harness.sock_path}")
             self.is_executed_ok = await run_test(self, options, env=self.env)
             await self.harness.stop()
 
@@ -740,7 +742,9 @@ class PythonTest(Test):
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[str] = None
-        self.harness: Harness = Harness(shortname, suite.clusters)
+        self.harness: Harness = Harness(shortname,
+                                        os.path.join(self.suite.options.tmpdir, self.mode),
+                                        suite.clusters)
         PythonTest._reset(self)
 
     def _reset(self) -> None:
@@ -768,7 +772,7 @@ class PythonTest(Test):
 
         try:
             await self.harness.start()
-            self.args.insert(0, "--host={}".format(self.harness.cluster[0].host))
+            self.args.insert(0, f"--api={self.harness.sock_path}")
             self.success = await run_test(self, options)
             await self.harness.stop()
         except Exception as e:
