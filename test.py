@@ -34,7 +34,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
-from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster
+from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, ScyllaClusterManager
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable
 
 output_is_a_tty = sys.stdout.isatty()
@@ -407,6 +407,24 @@ class CQLApprovalTestSuite(PythonTestSuite):
     @property
     def pattern(self) -> str:
         return "*test.cql"
+
+
+class TopologyTestSuite(PythonTestSuite):
+    """A collection of Python pytests against Scylla instances dealing with topology changes"""
+
+    def build_test_list(self) -> List[str]:
+        """Build list of Topology python tests"""
+        return TestSuite.build_test_list(self)
+
+    async def add_test(self, shortname: str) -> None:
+        """Add test to suite"""
+        test = TopologyTest(self.next_id, shortname, self)
+        self.tests.append(test)
+
+    @property
+    def pattern(self) -> str:
+        """Python pattern"""
+        return "test_*.py"
 
 
 class RunTestSuite(TestSuite):
@@ -808,6 +826,45 @@ class PythonTest(Test):
         if self.server_log_filename is not None:
             system_err = ET.SubElement(xml_res, 'system-err')
             system_err.text = read_log(self.server_log_filename)
+
+
+class TopologyTest(PythonTest):
+    """Run a pytest collection of cases against Scylla clusters handling topology changes"""
+    manager: ScyllaClusterManager
+    is_before_test_ok: bool
+    is_after_test_ok: bool
+    status: bool
+
+    def __init__(self, test_no: int, shortname: str, suite) -> None:
+        super().__init__(test_no, shortname, suite)
+        self.manager: ScyllaClusterManager = ScyllaClusterManager(shortname, suite.clusters)
+
+    async def run(self, options: argparse.Namespace) -> Test:
+
+        await self.manager.start()
+        self.args.insert(0, "--host={}".format(self.manager.cluster[0].host))
+        logging.info("Leasing Scylla cluster %s for test %s", self.manager.cluster, self.uname)
+
+        try:
+            self.manager.cluster.before_test(self.uname)
+            self.is_before_test_ok = True
+            self.manager.cluster[0].take_log_savepoint()
+            status = await run_test(self, options)
+            self.manager.cluster.after_test(self.uname)
+            self.is_after_test_ok = True
+            self.success = status
+        except Exception as e:
+            self.server_log = self.manager.cluster[0].read_log()
+            self.server_log_filename = self.manager.cluster[0].log_filename
+            if self.is_before_test_ok is False:
+                print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                print("Server log of the first server:\n{}".format(self.server_log))
+                # Don't try to continue if the cluster is broken
+                raise
+        finally:
+            await self.manager.stop()
+        logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        return self
 
 
 class TabularConsoleOutput:
