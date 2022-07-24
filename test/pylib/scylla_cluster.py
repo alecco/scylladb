@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-import aiohttp
 import asyncio
 import itertools
 import logging
@@ -24,6 +23,8 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+import aiohttp
+import aiohttp.web
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -635,17 +636,30 @@ class ScyllaCluster:
 
 class Harness:
     """Manages a pool of Scylla clusters for running test cases"""
-    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster]) -> None:
+    def __init__(self, test_name: str, base_dir: str, clusters: Pool[ScyllaCluster]) -> None:
         self.test_name: str = test_name
         self.clusters: Pool[ScyllaCluster] = clusters
         self.cluster: Optional[ScyllaCluster] = None  # Current cluster
         self.is_before_test_ok: bool = False
         self.is_after_test_ok: bool = False
         self.is_running: bool = False
+        # API
+        self.base_dir: str = base_dir
+        self.harness_dir: Optional[str] = None
+        self.app = aiohttp.web.Application()
+        self._setup_routes()
+        self.runner = aiohttp.web.AppRunner(self.app)
+        self.site: Optional[aiohttp.web.UnixSite] = None
 
     async def start(self) -> None:
         """Start Harness, setup API, start first cluster"""
         await self._before_test()
+        await self.runner.setup()
+        # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
+        self.harness_dir = tempfile.mkdtemp(prefix="harness-", dir=self.base_dir)
+        self.sock_path: str = f"{self.harness_dir}/api"
+        self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
+        await self.site.start()
         self.is_running = True
 
     async def _before_test(self) -> None:
@@ -659,9 +673,14 @@ class Harness:
 
     async def stop(self) -> None:
         """Stop Harness, cycle last cluster if not dirty and present"""
+        if self.site is not None:
+            await self.site.stop()
+            self.site = None
         if self.cluster is not None:
             self.cluster.after_test(self.test_name)
             await self._return_cluster()
+        if os.path.exists(self.harness_dir):
+            shutil.rmtree(self.harness_dir)
         self.is_after_test_ok = False
         self.is_running = False
 
@@ -674,3 +693,42 @@ class Harness:
         if self.cluster is not None:
             await self.clusters.put(self.cluster)
             self.cluster = None
+
+    def _setup_routes(self) -> None:
+        self.app.router.add_get('/up', self._harness_up)
+        self.app.router.add_get('/cluster/up', self._cluster_up)
+        self.app.router.add_get('/cluster/is-dirty', self._is_dirty)
+        self.app.router.add_get('/cluster/port', self._cluster_cql_port)
+        self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
+        self.app.router.add_get('/cluster/nodes', self._cluster_nodes)
+
+    async def _harness_up(self, request) -> aiohttp.web.Response:
+        return aiohttp.web.Response(text=f"{self.is_running}")
+
+    async def _cluster_up(self, request) -> aiohttp.web.Response:
+        """Is cluster running"""
+        return aiohttp.web.Response(text=f"{self.cluster is not None and self.cluster.is_running}")
+
+    async def _is_dirty(self, request) -> aiohttp.web.Response:
+        """Report if current cluster is dirty"""
+        if self.cluster is None:
+            return aiohttp.web.Response(status=500, text="No cluster active")
+        return aiohttp.web.Response(text=f"{self.cluster.is_dirty}")
+
+    async def _cluster_cql_port(self, request) -> aiohttp.web.Response:
+        """Return cluster's configured CQL TCP port"""
+        if self.cluster is None:
+            return aiohttp.web.Response(status=500, text="No cluster active")
+        return aiohttp.web.Response(text=f"{self.cluster.cql_port}")
+
+    async def _cluster_replicas(self, request) -> aiohttp.web.Response:
+        """Return cluster's configured number of replicas (replication factor)"""
+        if self.cluster is None:
+            return aiohttp.web.Response(status=500, text="No cluster active")
+        return aiohttp.web.Response(text=f"{self.cluster.replicas}")
+
+    async def _cluster_nodes(self, request) -> aiohttp.web.Response:
+        """Return a list of active server ids (IPs)"""
+        if self.cluster is None:
+            return aiohttp.web.Response(status=500, text="No cluster active")
+        return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.started.keys()))}")

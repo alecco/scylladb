@@ -17,7 +17,8 @@ from cassandra.cluster import Session, ResponseFuture                    # type:
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from test.pylib.util import unique_name                                  # type: ignore
 import pytest
-from typing import AsyncGenerator
+from typing import List, AsyncGenerator
+from test.pylib.harness_cli import HarnessCli
 from test.pylib.random_tables import RandomTables                        # type: ignore
 
 
@@ -25,10 +26,8 @@ from test.pylib.random_tables import RandomTables                        # type:
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-                     help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-                     help='CQL server port to connect to')
+    parser.addoption('--api', action='store', required=True,
+                     help='Harness unix socket path')
 
 
 # Change default pytest-asyncio event_loop fixture scope to session to
@@ -71,9 +70,10 @@ def run_async(self, *args, **kwargs) -> asyncio.Future:
 Session.run_async = run_async
 
 
-def cluster_con(request):
+def cluster_con(hosts: List[str], port: int):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
+    assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -85,8 +85,8 @@ def cluster_con(request):
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout=120)
     return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                   contact_points=[request.config.getoption('host')],
-                   port=int(request.config.getoption('port')),
+                   contact_points=hosts,
+                   port=port,
                    # TODO: make the protocol version an option, to allow testing with
                    # different versions. If we drop this setting completely, it will
                    # mean pick the latest version supported by the client and the server.
@@ -94,13 +94,22 @@ def cluster_con(request):
                    )
 
 
-# "cql" fixture: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by the --host and
-# --port options, and defaults to localhost and 9042, respectively.
-# We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
-def cql(request):
-    cluster = cluster_con(request)
+def harness(request):
+    """Session fixture to set up client object for communicating with the Cluster API.
+       Pass the Unix socket path where the Harness server API is listening.
+       Test cases (functions) should not use this fixture.
+    """
+    harness_int = HarnessCli(request.config.getoption('api'))
+    yield harness_int
+
+# "cql" fixture: set up client object for communicating with the CQL API.
+# The host/port combination of the server are determined by harness
+# We use scope="session" so that all tests will reuse the same client object.
+@pytest.mark.asyncio
+@pytest.fixture(scope="session")
+async def cql(event_loop, harness):
+    cluster = cluster_con(await harness.nodes(), await harness.cql_port())
     yield cluster.connect()
     cluster.shutdown()
 
