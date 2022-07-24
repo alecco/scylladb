@@ -28,6 +28,9 @@ from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 SCYLLA_CONF_TEMPLATE = """cluster_name: {cluster_name}
 developer_mode: true
 
+# Port for the CQL native transport to listen for clients on
+native_transport_port: {cql_port}
+
 # Allow testing experimental features. Following issue #9467, we need
 # to add here specific experimental features as they are introduced.
 
@@ -107,13 +110,15 @@ class ScyllaServer:
                  host_registry,
                  cluster_name: str, seed: Optional[str],
                  cmdline_options: List[str],
-                 config_options: Dict[str, str]) -> None:
+                 config_options: Dict[str, str],
+                 cql_port: int = 9042) -> None:
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
         self.host_registry = host_registry
         self.cmdline_options = cmdline_options
         self.cluster_name = cluster_name
         self.hostname = ""
+        self.cql_port: int = cql_port
         self.seed = seed
         self.cmd: Optional[asyncio.subprocess.Process] = None
         self.log_savepoint = 0
@@ -192,6 +197,7 @@ class ScyllaServer:
               "cluster_name": self.cluster_name,
               "host": self.hostname,
               "seeds": self.seed,
+              "cql_port": self.cql_port,
               "workdir": self.workdir,
               "authenticator": self.authenticator,
               "authorizer": self.authorizer
@@ -416,10 +422,11 @@ Check the log files:
 
 
 class ScyllaCluster:
-    def __init__(self, replicas: int,
-                 create_server: Callable[[str, Optional[str]], ScyllaServer]) -> None:
+    def __init__(self, replicas: int, create_server: Callable[[str, Optional[str]], ScyllaServer],
+                 cql_port: int = 9042) -> None:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
+        self.cql_port: int = cql_port
         self.cluster: List[ScyllaServer] = []
         self.create_server = create_server
         self.start_exception: Optional[Exception] = None
