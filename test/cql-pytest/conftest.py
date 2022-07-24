@@ -27,6 +27,8 @@ def pytest_addoption(parser):
         help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
         help='Connect to CQL via an encrypted TLSv1.2 connection')
+    parser.addoption('--harness-api', action='store', required=True,
+                     help='Harness unix socket path')
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
