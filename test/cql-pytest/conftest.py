@@ -9,6 +9,8 @@
 # be set up only once - while still allowing the user to run individual tests
 # and automatically setting up the fixtures they need.
 
+import asyncio
+import sys
 import pytest
 
 from cassandra.cluster import Cluster
@@ -16,27 +18,48 @@ from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import ssl
 
 from util import unique_name, new_test_table, cql_session
+# Use pylib libraries
+sys.path.insert(1, sys.path[0] + '/../pylib')
+from harness_cli import HarnessCli
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-        help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-        help='CQL server port to connect to')
+    parser.addoption('--api', action='store', required=True,
+                     help='Harness unix socket path')
     parser.addoption('--ssl', action='store_true',
         help='Connect to CQL via an encrypted TLSv1.2 connection')
+
+# Change default pytest-asyncio event_loop fixture scope to session to
+# allow async fixtures with scope larger than function. (e.g. keyspace fixture)
+# See https://github.com/pytest-dev/pytest-asyncio/issues/68
+@pytest.fixture(scope="session")
+def event_loop(request):
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(scope="session")
+def harness(request):
+    """Session fixture to set up client object for communicating with the Cluster API.
+       Pass the Unix socket path where the Harness server API is listening.
+       Test cases (functions) should not use this fixture.
+    """
+    harness_int = HarnessCli(request.config.getoption('api'))
+    yield harness_int
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
 # --port options, and defaults to localhost and 9042, respectively.
 # We use scope="session" so that all tests will reuse the same client object.
+@pytest.mark.asyncio
 @pytest.fixture(scope="session")
-def cql(request):
+async def cql(request, event_loop, harness):
     # Use the default superuser credentials, which work for both Scylla and Cassandra
-    with cql_session(request.config.getoption('host'),
-        request.config.getoption('port'),
+    with cql_session((await harness.nodes())[0],
+        await harness.cql_port(),
         request.config.getoption('ssl'),
         username="cassandra",
         password="cassandra"
