@@ -837,15 +837,15 @@ class TopologyTest(PythonTest):
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
-        self.manager: ScyllaClusterManager = ScyllaClusterManager(shortname, suite.clusters)
+        self.manager = ScyllaClusterManager(shortname, suite.clusters,
+                                            os.path.join(self.suite.options.tmpdir, self.mode))
 
     async def run(self, options: argparse.Namespace) -> Test:
 
         await self.manager.start()
-        self.args.insert(0, "--host={}".format(self.manager.cluster[0].host))
+        self.args.insert(0, "--manager-api={}".format(self.manager.sock_path))
 
         logging.info("Leasing Scylla cluster %s for test %s", self.manager.cluster, self.uname)
-        self.args.insert(0, "--host={}".format(self.manager.cluster[0].host))
         try:
             self.manager.cluster.before_test(self.uname)
             self.is_before_test_ok = True
