@@ -127,3 +127,61 @@ class HarnessCli():
         self.dirty = True
         await self._request_and_check("http://localhost/cluster/mark-dirty",
                                       "Could not mark cluster dirty")
+
+    async def node_stop(self, node_id: str) -> bool:
+        """Stop specified node"""
+        self.dirty = True
+        ret = await self._request_and_check(f"http://localhost/cluster/node/{node_id}/stop",
+                                            f"Error stopping server {node_id}")
+        return ret == "OK"
+
+    async def node_stop_gracefully(self, node_id: str) -> bool:
+        """Stop specified node gracefully"""
+        self.dirty = True
+        ret = await self._request_and_check(f"http://localhost/cluster/node/{node_id}/stop_gracefully",
+                                            f"Error stopping server {node_id}")
+        return ret == "OK"
+
+    async def node_start(self, node_id: str) -> bool:
+        """Start specified node"""
+        self.dirty = True
+        ret = await self._request_and_check(f"http://localhost/cluster/node/{node_id}/start",
+                                            f"Error starting server {node_id}")
+        return ret == "OK"
+
+    async def node_restart(self, node_id: str) -> bool:
+        """Restart specified node"""
+        self.dirty = True
+        ret = await self._request_and_check(f"http://localhost/cluster/node/{node_id}/restart",
+                                            f"Error restarting server {node_id}")
+        self._driver_update()
+        return ret == "OK"
+
+    async def node_add(self) -> str:
+        """Add a new node"""
+        self.dirty = True
+        node_id = await self._request_and_check("http://localhost/cluster/addnode",
+                                                "Error adding server")
+        self._driver_update()
+        return node_id
+
+    async def node_remove(self, node_id: str) -> None:
+        """Remove a specified node"""
+        self.dirty = True
+        await self._request_and_check(f"http://localhost/cluster/removenode/{node_id}",
+                                     f"Failed to remove node {node_id}")
+        self._driver_update()
+
+    async def node_decommission(self, node_id: str) -> None:
+        """Decommission a specified node"""
+        self.dirty = True
+        await self._request_and_check(f"http://localhost/cluster/decommission/{node_id}",
+                                     f"Failed to decommission node {node_id}")
+        self._driver_update()
+
+    async def node_replace(self, node_id: str) -> None:
+        """Replace a specified node with a new one"""
+        self.dirty = True
+        await self._request_and_check(f"http://localhost/cluster/replace/{node_id}",
+                                     f"Failed to replace node {node_id}")
+        self._driver_update()
