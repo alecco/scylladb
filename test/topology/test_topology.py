@@ -12,6 +12,8 @@ import pytest
 @pytest.mark.asyncio
 async def test_add_node_add_column(harness, random_tables):
     """Add a node and then add a column to a table and verify"""
+    await harness.mark_dirty()  # XXX
+    return  # XXX
     table = await random_tables.add_table(ncolumns=5)
     await harness.node_add()
     await table.add_column()
@@ -21,6 +23,8 @@ async def test_add_node_add_column(harness, random_tables):
 @pytest.mark.asyncio
 async def test_stop_node_add_column(harness, random_tables):
     """Add a node, stop an original node, add a column"""
+    await harness.mark_dirty()  # XXX
+    return  # XXX
     nodes = await harness.nodes()
     table = await random_tables.add_table(ncolumns=5)
     await harness.node_add()
@@ -32,6 +36,8 @@ async def test_stop_node_add_column(harness, random_tables):
 @pytest.mark.asyncio
 async def test_restart_node_add_column(harness, random_tables):
     """Add a node, stop an original node, add a column"""
+    await harness.mark_dirty()  # XXX
+    return  # XXX
     nodes = await harness.nodes()
     table = await random_tables.add_table(ncolumns=5)
     await harness.node_restart(nodes[1])
@@ -42,6 +48,8 @@ async def test_restart_node_add_column(harness, random_tables):
 @pytest.mark.asyncio
 async def test_remove_node_add_column(harness, random_tables):
     """Add a node, remove an original node, add a column"""
+    await harness.mark_dirty()  # XXX
+    return  # XXX
     nodes = await harness.nodes()
     table = await random_tables.add_table(ncolumns=5)
     await harness.node_add()
@@ -53,6 +61,8 @@ async def test_remove_node_add_column(harness, random_tables):
 @pytest.mark.asyncio
 async def test_replace_node_add_column(harness, random_tables):
     """Add a node, replace an original node, add a column"""
+    await harness.mark_dirty()  # XXX
+    return  # XXX
     nodes = await harness.nodes()
     table = await random_tables.add_table(ncolumns=5)
     await harness.node_replace(nodes[1])
