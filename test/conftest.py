@@ -97,24 +97,24 @@ def cluster_con(hosts: List[str], port: int):
                    )
 
 
-@pytest.fixture(scope="session")
-def harness(request):
-    """Session fixture to set up client object for communicating with the Cluster API.
-       Pass the Unix socket path where the Harness server API is listening.
-       Test cases (functions) should not use this fixture.
-    """
-    harness_int = HarnessCli(request.config.getoption('harness_api'))
-    yield harness_int
-
-# "cql" fixture: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by harness
-# We use scope="session" so that all tests will reuse the same client object.
 @pytest.mark.asyncio
 @pytest.fixture(scope="session")
-async def cql(event_loop, harness):
-    cluster = cluster_con(await harness.nodes(), await harness.cql_port())
-    yield cluster.connect()
-    cluster.shutdown()
+async def harness(event_loop, request):
+    """Session fixture to set up client object for communicating with the Cluster API.
+       Pass the Unix socket path where the Harness server API is listening.
+       Pass a function to create driver connections.
+       Test cases (functions) should not use this fixture.
+    """
+    harness_int = HarnessCli(request.config.getoption('harness_api'), cluster_con)
+    await harness_int.driver_connect()
+    yield harness_int
+    harness_int.driver_close()   # Close after last test case
+
+# "cql" fixture: set up client object for communicating with the CQL API.
+# We use scope="session" so that all tests will reuse the same client object.
+@pytest.fixture(scope="session")
+def cql(harness):
+    yield harness.cql
 
 
 # A function-scoped autouse=True fixture allows us to test after every test
