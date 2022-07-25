@@ -102,21 +102,20 @@ def cluster_con(hosts: List[str], port: int):
 async def manager(event_loop, request):
     """Session fixture to set up client object for communicating with the Cluster API.
        Pass the Unix socket path where the Manager server API is listening.
+       Pass a function to create driver connections.
        Test cases (functions) should not use this fixture.
     """
-    manager_int = ManagerCli(request.config.getoption('manager_api'))
+    manager_int = ManagerCli(request.config.getoption('manager_api'), cluster_con)
     await manager_int.start()
+    await manager_int.driver_connect()
     yield manager_int
+    manager_int.driver_close()   # Close after last test case
 
 # "cql" fixture: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by manager
 # We use scope="session" so that all tests will reuse the same client object.
-@pytest.mark.asyncio
 @pytest.fixture(scope="session")
-async def cql(event_loop, manager):
-    cluster = cluster_con(await manager.servers(), 9042)
-    yield cluster.connect()
-    cluster.shutdown()
+def cql(manager):
+    yield manager.cql
 
 
 # A function-scoped autouse=True fixture allows us to test after every test
