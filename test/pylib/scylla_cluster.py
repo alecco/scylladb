@@ -452,7 +452,8 @@ class ScyllaCluster:
         return self.cluster[i]
 
     def __str__(self):
-        return "{" + ", ".join(str(c) for c in self.cluster) + "}"
+        path = pathlib.PurePath(self.cluster_dir)
+        return f"{{{path.name}: {', '.join(str(c) for c in self.cluster)}}}"
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
