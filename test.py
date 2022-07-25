@@ -844,10 +844,8 @@ class TopologyTest(PythonTest):
 
         logging.info("Leasing Scylla cluster %s for test %s", self.manager.cluster, self.uname)
         try:
-            self.manager.cluster.before_test(self.uname)
             self.manager.cluster[0].take_log_savepoint()
             status = await run_test(self, options)
-            self.manager.cluster.after_test(self.uname)
             self.success = status
         except Exception as e:
             self.server_log = self.manager.cluster[0].read_log()
