@@ -120,6 +120,43 @@ class ManagerCli():
     async def mark_dirty(self) -> None:
         """Manually mark current cluster dirty.
            To be used when a server was modified outside of this API."""
-        self.dirty = True
         await self._request_and_check("http://localhost/cluster/mark-dirty",
                                       "Could not mark cluster dirty")
+
+    async def server_stop(self, server_id: str) -> bool:
+        """Stop specified node"""
+        ret = await self._request_and_check(f"http://localhost/cluster/node/{server_id}/stop",
+                                            f"Error stopping server {server_id}")
+        return ret == "OK"
+
+    async def server_stop_gracefully(self, server_id: str) -> bool:
+        """Stop specified node gracefully"""
+        ret = await self._request_and_check(f"http://localhost/cluster/node/{server_id}/stop_gracefully",
+                                            f"Error stopping server {server_id}")
+        return ret == "OK"
+
+    async def server_start(self, server_id: str) -> bool:
+        """Start specified node"""
+        ret = await self._request_and_check(f"http://localhost/cluster/node/{server_id}/start",
+                                            f"Error starting server {server_id}")
+        return ret == "OK"
+
+    async def server_restart(self, server_id: str) -> bool:
+        """Restart specified node"""
+        ret = await self._request_and_check(f"http://localhost/cluster/node/{server_id}/restart",
+                                            f"Error restarting server {server_id}")
+        self._driver_update()
+        return ret == "OK"
+
+    async def server_add(self) -> str:
+        """Add a new node"""
+        server_id = await self._request_and_check("http://localhost/cluster/addnode",
+                                                "Error adding server")
+        self._driver_update()
+        return server_id
+
+    async def server_remove(self, server_id: str) -> None:
+        """Remove a specified node"""
+        await self._request_and_check(f"http://localhost/cluster/removenode/{server_id}",
+                                     f"Failed to remove node {server_id}")
+        self._driver_update()
