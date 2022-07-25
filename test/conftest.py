@@ -20,6 +20,7 @@ import pytest
 from typing import List, AsyncGenerator
 from test.pylib.harness_cli import HarnessCli
 from test.pylib.random_tables import RandomTables                        # type: ignore
+from sys import stderr  # XXX
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
@@ -117,12 +118,14 @@ async def harness(request, harness_internal):
     await harness_internal.before_test(request.node.name)
     yield harness_internal
     await harness_internal.after_test(request.node.name)
+    print("XXX harness DONE", file=stderr)  # XXX
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="function")
 def cql(harness):
     yield harness.cql
+    print("XXX cql DONE", file=stderr)  # XXX
 
 
 # A function-scoped autouse=True fixture allows us to test after every test
@@ -184,7 +187,9 @@ async def keyspace(cql, this_dc):
     await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
                 this_dc + "' : 1 }")
     yield name
+    print("XXX keyspace dropping...", file=stderr)  # XXX
     await cql.run_async("DROP KEYSPACE " + name)
+    print("XXX keyspace dropping... DONE", file=stderr)  # XXX
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
@@ -194,4 +199,6 @@ async def keyspace(cql, this_dc):
 async def random_tables(request, cql, keyspace) -> AsyncGenerator:
     tables = RandomTables(request.node.name, cql, keyspace)
     yield tables
+    print("XXX random_tables dropping...", file=stderr)  # XXX
     await tables.drop_all_tables()
+    print("XXX random_tables dropping... DONE", file=stderr)  # XXX

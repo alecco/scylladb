@@ -428,6 +428,8 @@ class ScyllaCluster:
         self.cql_port: int = cql_port
 
         self.cluster_dir = tempfile.mkdtemp(prefix="cluster-", dir=test_base_dir)
+        from sys import stderr
+        print(f"XXX ScyllaCluster __init__ {self.cluster_dir}", file=stderr)  # XXX
         self.cmdline_options = cmdline_options
         self.config_options = config_options
         self.host_registry = host_registry
@@ -468,6 +470,8 @@ class ScyllaCluster:
         logging.info("Uninstalling cluster")
         await self.stop()
         await asyncio.gather(*(server.uninstall() for server in self.stopped.values()))
+        from sys import stderr
+        print(f"XXX ScyllaCluster uninstall {self.cluster_dir}", file=stderr)  # XXX
         shutil.rmtree(self.cluster_dir)
 
     async def stop(self) -> None:
@@ -694,6 +698,8 @@ class Harness:
     async def _get_cluster(self, test_name: str) -> None:
         assert self.cluster is None, "Previous cluster should be stopped"
         self.cluster = await self.clusters.get()
+        from sys import stderr
+        print(f"XXX Harness _get_cluster {self.cluster.cluster_dir} for {test_name}", file=stderr)  # XXX
         logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
 
     async def _cluster_dispose(self) -> None:
