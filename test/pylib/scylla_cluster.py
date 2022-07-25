@@ -697,6 +697,7 @@ class Harness:
         self.app.router.add_get('/cluster/servers', self._cluster_servers)
         self.app.router.add_get('/cluster/before_test/{test_name}', self._before_test_req)
         self.app.router.add_get('/cluster/after_test/{test_name}', self._after_test)
+        self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
 
     async def _harness_up(self, request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -733,3 +734,9 @@ class Harness:
         self.cluster.after_test(test_name)
         self.is_after_test_ok = True
         return aiohttp.web.Response(text="True")
+
+    async def _mark_dirty(self, request) -> aiohttp.web.Response:
+        """Mark current cluster dirty"""
+        assert self.cluster
+        self.cluster.is_dirty = True
+        return aiohttp.web.Response(text="OK")
