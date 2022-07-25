@@ -97,22 +97,30 @@ def cluster_con(hosts: List[str], port: int):
                    )
 
 
-@pytest.mark.asyncio
 @pytest.fixture(scope="session")
-async def harness(event_loop, request):
+def harness_internal(request):
     """Session fixture to set up client object for communicating with the Cluster API.
        Pass the Unix socket path where the Harness server API is listening.
        Pass a function to create driver connections.
        Test cases (functions) should not use this fixture.
     """
     harness_int = HarnessCli(request.config.getoption('harness_api'), cluster_con)
-    await harness_int.driver_connect()
     yield harness_int
     harness_int.driver_close()   # Close after last test case
 
+@pytest.mark.asyncio
+@pytest.fixture(scope="function")
+async def harness(request, harness_internal):
+    """Per test fixture to notify Harness client object when tests begin so it can
+    perform checks for cluster state.
+    """
+    await harness_internal.before_test(request.node.name)
+    yield harness_internal
+    await harness_internal.after_test(request.node.name)
+
 # "cql" fixture: set up client object for communicating with the CQL API.
 # We use scope="session" so that all tests will reuse the same client object.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def cql(harness):
     yield harness.cql
 
@@ -138,7 +146,7 @@ def cql_test_connection(cql, request):
 # syntax that needs to specify a DC name explicitly. For this, will have
 # a "this_dc" fixture to figure out the name of the current DC, so it can be
 # used in NetworkTopologyStrategy.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
@@ -148,7 +156,7 @@ def this_dc(cql):
 # These tests should use the "fails_without_raft" fixture. When Raft mode
 # becomes the default, this fixture can be removed.
 @pytest.mark.asyncio
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 async def check_pre_raft(cql):
     # If not running on Scylla, return false.
     names = [row.table_name for row in await cql.run_async("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
@@ -168,10 +176,9 @@ async def fails_without_raft(request, check_pre_raft):
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
-# and automatically deleted at the end. We use scope="session" so that all
-# tests will reuse the same keyspace.
+# and automatically deleted at the end.
 @pytest.mark.asyncio
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 async def keyspace(cql, this_dc):
     name = unique_name()
     await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
