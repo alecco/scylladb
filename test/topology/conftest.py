@@ -9,7 +9,7 @@
 import asyncio
 import pathlib
 import sys
-+from typing import List
+from typing import List
 from test.pylib.random_tables import RandomTables                        # type: ignore
 from test.pylib.manager_cli import ManagerCli
 import pytest
@@ -96,21 +96,20 @@ def cluster_con(hosts: List[str], port: int):
 async def manager(event_loop, request):
     """Session fixture to set up client object for communicating with the Cluster API.
        Pass the Unix socket path where the Manager server API is listening.
+       Pass a function to create driver connections.
        Test cases (functions) should not use this fixture.
     """
-    manager_int = ManagerCli(request.config.getoption('manager_api'))
+    manager_int = ManagerCli(request.config.getoption('manager_api'), cluster_con)
     await manager_int.start()
+    await manager_int.driver_connect()
     yield manager_int
+    manager_int.driver_close()   # Close after last test case
 
 # "cql" fixture: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by the --host and
-# --port options, and defaults to localhost and 9042, respectively.
 # We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
-def cql(request):
-    cluster = cluster_con(request)
-    yield cluster.connect()
-    cluster.shutdown()
+def cql(manager):
+    yield manager.cql
 
 # While the raft-based schema modifications are still experimental and only
 # optionally enabled some tests are expected to fail on Scylla without this
