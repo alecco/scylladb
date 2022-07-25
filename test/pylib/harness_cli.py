@@ -120,3 +120,10 @@ class HarnessCli():
         host_list = await self._request_and_check("http://localhost/cluster/nodes",
                                                   "Error getting list of nodes")
         return host_list.split(',')
+
+    async def mark_dirty(self) -> None:
+        """Manually mark current cluster dirty.
+           To be used when a server was modified outside of this API."""
+        self.dirty = True
+        await self._request_and_check("http://localhost/cluster/mark-dirty",
+                                      "Could not mark cluster dirty")
