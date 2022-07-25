@@ -700,6 +700,15 @@ class Harness:
         self.app.router.add_get('/cluster/before_test/{test_name}', self._before_test_req)
         self.app.router.add_get('/cluster/after_test/{test_name}', self._after_test)
         self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
+        self.app.router.add_get('/cluster/node/{id}/stop', self._cluster_node_stop)
+        self.app.router.add_get('/cluster/node/{id}/stop_gracefully',
+                                self._cluster_node_stop_gracefully)
+        self.app.router.add_get('/cluster/node/{id}/start', self._cluster_node_start)
+        self.app.router.add_get('/cluster/node/{id}/restart', self._cluster_node_restart)
+        self.app.router.add_get('/cluster/addnode', self._cluster_node_add)
+        self.app.router.add_get('/cluster/removenode/{id}', self._cluster_node_remove)
+        self.app.router.add_get('/cluster/decommission/{id}', self._cluster_node_decommission)
+        self.app.router.add_get('/cluster/replacenode/{id}', self._cluster_node_replace)
 
     async def _harness_up(self, request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -742,3 +751,66 @@ class Harness:
         assert self.cluster
         self.cluster.is_dirty = True
         return aiohttp.web.Response(text="OK")
+
+    async def _node_stop(self, request: aiohttp.web.Request, gracefully: bool) \
+                        -> aiohttp.web.Response:
+        """Stop a server. No-op if already stopped."""
+        assert self.cluster
+        node_id = request.match_info['id']
+        if not await self.cluster.node_stop(node_id, gracefully):
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        return aiohttp.web.Response(text="OK")
+
+    async def _cluster_node_stop(self, request) -> aiohttp.web.Response:
+        """Stop a specified server"""
+        assert self.cluster
+        return await self._node_stop(request, gracefully = False)
+
+    async def _cluster_node_stop_gracefully(self, request) -> aiohttp.web.Response:
+        """Stop a specified server gracefully"""
+        assert self.cluster
+        return await self._node_stop(request, gracefully = True)
+
+    async def _cluster_node_start(self, request) -> aiohttp.web.Response:
+        """Start a specified server (must be stopped)"""
+        assert self.cluster
+        node_id = request.match_info['id']
+        if not await self.cluster.node_start(node_id):
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        return aiohttp.web.Response(text="OK")
+
+    async def _cluster_node_restart(self, request) -> aiohttp.web.Response:
+        """Restart a specified server (must be already started)"""
+        assert self.cluster
+        node_id = request.match_info['id']
+        if not await self.cluster.node_restart(node_id):
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        return aiohttp.web.Response(text="OK")
+
+    async def _cluster_node_add(self, request) -> aiohttp.web.Response:
+        """Add a new server"""
+        assert self.cluster
+        node_id = await self.cluster.add_server()
+        return aiohttp.web.Response(text=node_id)
+
+    async def _cluster_node_remove(self, request) -> aiohttp.web.Response:
+        """Remove a specified server"""
+        assert self.cluster
+        node_id = request.match_info['id']
+        if not await self.cluster.node_remove(node_id):
+            return aiohttp.web.Response(status=500, text=f"Host {node_id} not found")
+        return aiohttp.web.Response(text="OK")
+
+    async def _cluster_node_decommission(self, request) -> aiohttp.web.Response:
+        """Deactivate a selected node by streaming its data to the next node in the ring."""
+        assert self.cluster
+        return aiohttp.web.Response(status=500, text="Not implemented")
+
+    async def _cluster_node_replace(self, request) -> aiohttp.web.Response:
+        """Replace a specified server with a new one"""
+        assert self.cluster
+        old_node_id = request.match_info['id']
+        new_node_id = self.cluster.node_replace(old_node_id)
+        if new_node_id is None:
+            return aiohttp.web.Response(status=500, text=f"Host {old_node_id} not found")
+        return aiohttp.web.Response(text=f"{new_node_id}")
