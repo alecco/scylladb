@@ -657,17 +657,20 @@ class Harness:
 
     async def start(self) -> None:
         """Start Harness, setup API, start first cluster"""
-        await self._before_test()
+        await self._before_test(self.test_name)  # Call with pytest name
         await self.runner.setup()
         self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
         await self.site.start()
         self.is_running = True
 
-    async def _before_test(self) -> None:
+    async def _before_test(self, test_name: str) -> None:
         if self.cluster is not None and self.cluster.is_dirty:
-            await self._return_cluster()
+            await self._cluster_dispose()
+            await self._get_cluster(test_name)
         if self.cluster is None:
-            await self._get_cluster()
+            # TODO: if cluster startup takes too long and HTTP timeouts, return immediately
+            # (i.e. large clusters with many servers)
+            await self._get_cluster(test_name)
         assert self.cluster is not None, "Missing cluster before test"
         self.cluster.before_test(self.test_name)
         self.is_before_test_ok = True
@@ -679,20 +682,24 @@ class Harness:
             self.site = None
         if self.cluster is not None:
             self.cluster.after_test(self.test_name)
-            await self._return_cluster()
+            if self.cluster.is_dirty:
+                await self._cluster_dispose()
+            else:
+                await self.clusters.put(self.cluster)  # Return
         if os.path.exists(self.harness_dir):
             shutil.rmtree(self.harness_dir)
         self.is_after_test_ok = False
         self.is_running = False
 
-    async def _get_cluster(self) -> None:
+    async def _get_cluster(self, test_name: str) -> None:
         assert self.cluster is None, "Previous cluster should be stopped"
         self.cluster = await self.clusters.get()
-        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.test_name)
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
 
-    async def _return_cluster(self) -> None:
+    async def _cluster_dispose(self) -> None:
         if self.cluster is not None:
-            await self.clusters.put(self.cluster)
+            await self.cluster.stop()
+            await self.cluster.uninstall()
             self.cluster = None
 
     def _setup_routes(self) -> None:
@@ -702,6 +709,8 @@ class Harness:
         self.app.router.add_get('/cluster/port', self._cluster_cql_port)
         self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
         self.app.router.add_get('/cluster/nodes', self._cluster_nodes)
+        self.app.router.add_get('/cluster/before_test/{test_name}', self._before_test_req)
+        self.app.router.add_get('/cluster/after_test/{test_name}', self._after_test)
 
     async def _harness_up(self, request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -733,3 +742,14 @@ class Harness:
         if self.cluster is None:
             return aiohttp.web.Response(status=500, text="No cluster active")
         return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.started.keys()))}")
+
+    async def _before_test_req(self, request) -> aiohttp.web.Response:
+        await self._before_test(request.match_info['test_name'])
+        return aiohttp.web.Response(text="OK")
+
+    async def _after_test(self, request) -> aiohttp.web.Response:
+        test_name = request.match_info['test_name']
+        assert self.cluster is not None
+        self.cluster.after_test(test_name)
+        self.is_after_test_ok = True
+        return aiohttp.web.Response(text="True")
