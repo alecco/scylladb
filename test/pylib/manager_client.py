@@ -61,6 +61,23 @@ class ManagerClient():
         if self.ccluster is not None:
             self.ccluster.control_connection.refresh_node_list_and_token_map()
 
+    async def before_test(self, test_name: str) -> None:
+        """Before a test starts check if cluster needs cycling and update driver connection"""
+        dirty = await self.is_dirty()
+        if dirty:
+            self.driver_close()  # Close driver connection to old cluster
+        await self._request(f"http://localhost/cluster/before-test/{test_name}",
+                            f"Could not get a new cluster for test {test_name}")
+        if self.cql is None:
+            # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
+            # await self._wait_for_cluster()
+            await self.driver_connect()  # Connect driver to new cluster
+
+    async def after_test(self, test_name: str) -> None:
+        """Tell harness this test finished"""
+        await self._request(f"http://localhost/cluster/after-test/{test_name}",
+                            f"Could not tell harness test {test_name} ended")
+
     async def _request(self, url: str, msg: str) -> str:
         resp = await self.session.get(url)
         if resp.status >= 500:
