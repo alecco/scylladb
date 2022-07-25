@@ -830,8 +830,6 @@ class PythonTest(Test):
 class TopologyTest(PythonTest):
     """Run a pytest collection of cases against Scylla clusters handling topology changes"""
     manager: ScyllaClusterManager
-    is_before_test_ok: bool
-    is_after_test_ok: bool
     status: bool
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
@@ -847,16 +845,14 @@ class TopologyTest(PythonTest):
         logging.info("Leasing Scylla cluster %s for test %s", self.manager.cluster, self.uname)
         try:
             self.manager.cluster.before_test(self.uname)
-            self.is_before_test_ok = True
             self.manager.cluster[0].take_log_savepoint()
             status = await run_test(self, options)
             self.manager.cluster.after_test(self.uname)
-            self.is_after_test_ok = True
             self.success = status
         except Exception as e:
             self.server_log = self.manager.cluster[0].read_log()
             self.server_log_filename = self.manager.cluster[0].log_filename
-            if self.is_before_test_ok is False:
+            if self.manager.is_before_test_ok is False:
                 print("Test {} pre-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
                 # Don't try to continue if the cluster is broken
