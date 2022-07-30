@@ -116,17 +116,6 @@ def cql_test_connection(cql, request):
         pytest.exit(f"Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}")
 
 
-# Until Cassandra 4, NetworkTopologyStrategy did not support the option
-# replication_factor (https://issues.apache.org/jira/browse/CASSANDRA-14303).
-# We want to allow these tests to run on Cassandra 3.* (for the convenience
-# of developers who happen to have it installed), so we'll use the older
-# syntax that needs to specify a DC name explicitly. For this, will have
-# a "this_dc" fixture to figure out the name of the current DC, so it can be
-# used in NetworkTopologyStrategy.
-@pytest.fixture(scope="session")
-def this_dc(cql):
-    yield cql.execute("SELECT data_center FROM system.local").one()[0]
-
 # While the raft-based schema modifications are still experimental and only
 # optionally enabled some tests are expected to fail on Scylla without this
 # option enabled, and pass with it enabled (and also pass on Cassandra).
@@ -154,12 +143,12 @@ async def fails_without_raft(request, check_pre_raft):
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-async def keyspace(cql, this_dc):
+async def keyspace(cql):
     name = unique_name()
-    await cql.run_async("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" +
-                this_dc + "' : 1 }")
+    await cql.run_async(f"CREATE KEYSPACE {name} WITH REPLICATION = "
+                        "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     yield name
-    await cql.run_async("DROP KEYSPACE " + name)
+    await cql.run_async(f"DROP KEYSPACE {name}")
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
