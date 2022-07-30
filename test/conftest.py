@@ -32,16 +32,6 @@ def pytest_addoption(parser):
                      help='CQL server port to connect to')
 
 
-# Change default pytest-asyncio event_loop fixture scope to session to
-# allow async fixtures with scope larger than function. (e.g. keyspace fixture)
-# See https://github.com/pytest-dev/pytest-asyncio/issues/68
-@pytest.fixture(scope="session")
-def event_loop(request):
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
 def _wrap_future(f: ResponseFuture) -> asyncio.Future:
     """Wrap a cassandra Future into an asyncio.Future object.
 
@@ -140,9 +130,8 @@ async def fails_without_raft(request, check_pre_raft):
 
 # "keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
-# and automatically deleted at the end. We use scope="session" so that all
-# tests will reuse the same keyspace.
-@pytest.fixture(scope="session")
+# and automatically deleted at the end.
+@pytest.fixture(scope="function")
 async def keyspace(cql):
     name = unique_name()
     await cql.run_async(f"CREATE KEYSPACE {name} WITH REPLICATION = "
@@ -152,10 +141,10 @@ async def keyspace(cql):
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
-# used in tests to make schema changes. Tables are dropped after finished.
-@pytest.mark.asyncio
+# used in tests to make schema changes. A keyspace is created for it and it is
+# dropped once the fixture is done.
 @pytest.fixture(scope="function")
-async def random_tables(request, cql, keyspace) -> AsyncGenerator:
-    tables = RandomTables(request.node.name, cql, keyspace)
+def random_tables(request, cql):
+    tables = RandomTables(request.node.name, cql, unique_name())
     yield tables
-    await tables.drop_all_tables()
+    tables.drop_all()
