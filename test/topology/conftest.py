@@ -16,6 +16,7 @@ from cassandra.cluster import Session, ResponseFuture                    # type:
 
 # Add test.pylib to the search path
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+from test.pylib.util import unique_name                                  # type: ignore
 
 
 # Change default pytest-asyncio event_loop fixture scope to session to
@@ -88,3 +89,15 @@ async def random_tables(request, cql, keyspace) -> AsyncGenerator:
     tables = RandomTables(request.node.name, cql, keyspace)
     yield tables
     await tables.drop_all_tables()
+
+# "keyspace" fixture: Creates and returns a temporary keyspace to be
+# used in tests that need a keyspace. The keyspace is created with RF=1,
+# and automatically deleted at the end. We use scope="session" so that all
+# tests will reuse the same keyspace.
+@pytest.fixture(scope="session")
+def keyspace(cql):
+    name = unique_name()
+    cql.execute(f"CREATE KEYSPACE {name} WITH REPLICATION = "
+                "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+    yield name
+    cql.execute(f"DROP KEYSPACE {name}")
