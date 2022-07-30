@@ -9,7 +9,6 @@
 import asyncio
 import pathlib
 import sys
-from typing import AsyncGenerator
 from test.pylib.random_tables import RandomTables                        # type: ignore
 import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
@@ -85,19 +84,7 @@ def fails_without_raft(request, check_pre_raft):
 # used in tests to make schema changes. Tables are dropped after finished.
 @pytest.mark.asyncio
 @pytest.fixture(scope="function")
-async def random_tables(request, cql, keyspace) -> AsyncGenerator:
-    tables = RandomTables(request.node.name, cql, keyspace)
+def random_tables(request, cql):
+    tables = RandomTables(request.node.name, cql, unique_name())
     yield tables
-    await tables.drop_all_tables()
-
-# "keyspace" fixture: Creates and returns a temporary keyspace to be
-# used in tests that need a keyspace. The keyspace is created with RF=1,
-# and automatically deleted at the end. We use scope="session" so that all
-# tests will reuse the same keyspace.
-@pytest.fixture(scope="session")
-def keyspace(cql):
-    name = unique_name()
-    cql.execute(f"CREATE KEYSPACE {name} WITH REPLICATION = "
-                "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
-    yield name
-    cql.execute(f"DROP KEYSPACE {name}")
+    tables.drop_all()
