@@ -88,3 +88,15 @@ def random_tables(request, cql):
     tables = RandomTables(request.node.name, cql, unique_name())
     yield tables
     tables.drop_all()
+
+# "keyspace" fixture: Creates and returns a temporary keyspace to be
+# used in tests that need a keyspace. The keyspace is created with RF=1,
+# and automatically deleted at the end. We use scope="session" so that all
+# tests will reuse the same keyspace.
+@pytest.fixture(scope="session")
+def keyspace(cql):
+    name = unique_name()
+    cql.execute(f"CREATE KEYSPACE {name} WITH REPLICATION = "
+                "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+    yield name
+    cql.execute(f"DROP KEYSPACE {name}")
