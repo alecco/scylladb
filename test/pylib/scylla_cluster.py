@@ -446,6 +446,7 @@ class ScyllaCluster:
             # at test time.
             self.start_exception = e
         logging.info("Created cluster %s", self)
+        self.is_dirty = False
 
     async def uninstall(self) -> None:
         """Stop running servers, uninstall all servers, and remove API socket"""
@@ -481,6 +482,7 @@ class ScyllaCluster:
     async def add_server(self) -> str:
         """Add a new server to the cluster"""
         server = self.create_server(self.name, self.last_seed)
+        self.is_dirty = True
         try:
             logging.info("Cluster %s adding server", server)
             await server.install_and_start()
