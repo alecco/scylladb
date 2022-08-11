@@ -31,6 +31,7 @@ from cassandra.cluster import Session           # pylint: disable=no-name-in-mod
 from cassandra.cluster import ExecutionProfile  # pylint: disable=no-name-in-module
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+import sys  # XXX
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -306,6 +307,8 @@ class ScyllaServer:
     async def start(self) -> None:
         """Start an installed server. May be used for restarts."""
 
+        raise RuntimeError("XXX debug")  # XXX
+
         # Add suite-specific command line options
         scylla_args = SCYLLA_CMDLINE_OPTIONS + self.cmdline_options
         env = os.environ.copy()
@@ -472,6 +475,8 @@ class ScyllaCluster:
         self.is_dirty: bool = False
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
+        # If a server failed to start keep it for reporting
+        self.failed_to_start: Optional[ScyllaServer] = None
 
     async def install_and_start(self) -> None:
         """Setup initial servers and start them.
@@ -481,6 +486,7 @@ class ScyllaCluster:
                 await self.add_server()
             self.keyspace_count = self._get_keyspace_count()
         except (RuntimeError, NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
+            print(f"XXX Cluster install_and_start caught {exc}", file=sys.stderr)  # XXX
             # If start fails, swallow the error to throw later,
             # at test time.
             self.start_exception = exc
@@ -494,6 +500,8 @@ class ScyllaCluster:
         logging.info("Uninstalling cluster")
         await self.stop()
         await asyncio.gather(*(server.uninstall() for server in self.stopped.values()))
+        if self.failed_to_start is not None:
+            await self.failed_to_start.uninstall()
 
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
@@ -528,6 +536,7 @@ class ScyllaCluster:
             logging.info("Cluster %s adding server", server)
             await server.install_and_start()
         except Exception as exc:
+            self.failed_to_start = server          # Keep it for log reporting
             logging.error("Failed to start Scylla server at host %s in %s: %s",
                           server.hostname, server.workdir.name, str(exc))
             raise
