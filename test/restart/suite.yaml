@@ -1,0 +1,8 @@
+type: Topology
+pool_size: 1
+topology:
+    class: Simple
+    replication_factor: 1
+extra_scylla_config_options:
+    authenticator: AllowAllAuthenticator
+    authorizer: AllowAllAuthorizer
