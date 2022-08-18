@@ -38,10 +38,15 @@ class ManagerClient():
         self.sock_path = sock_path
         self.sock_name = os.path.basename(sock_path)
 
-    async def start(self):
+    async def start(self) -> None:
         """Setup connection to Manager server"""
         self.conn = aiohttp.UnixConnector(path=self.sock_path)
         self.session = aiohttp.ClientSession(connector=self.conn)
+
+    async def stop(self) -> None:
+        """End connection to Manager server"""
+        await self.session.close()
+        del self.session
 
     async def driver_connect(self) -> None:
         """Connect to cluster"""

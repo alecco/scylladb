@@ -124,6 +124,7 @@ async def manager_internal(event_loop, request):
     await manager_int.start()
     yield manager_int
     manager_int.driver_close()   # Close after last test case
+    await manager_int.stop()
 
 @pytest.fixture(scope="function")
 async def manager(request, manager_internal):
