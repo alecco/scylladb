@@ -46,6 +46,8 @@ class ManagerClient():
     async def driver_connect(self) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
+            import sys  # XXX
+            print(f"XXX driver_connect({await self.servers()}", file=sys.stderr)  # XXX
             self.ccluster = self.con_gen(await self.servers(), self.port, self.ssl)
             self.cql = self.ccluster.connect()
 
@@ -89,6 +91,14 @@ class ManagerClient():
         resp = await self._get(resource)
         return await resp.text()
 
+    async def _get_with_driver_refresh(self, resource: str) -> None:
+        """Helper for topology change with down host.
+           Always gets a fresh driver to avoid waiting for timeouts.
+        """
+        self.driver_close()
+        await self._get_text(resource)
+        await self.driver_connect()
+
     async def _put_json(self, resource: str, json: dict) -> aiohttp.ClientResponse:
         return await self.session.request(method='PUT', url=self._resource_uri(resource), json=json)
 
@@ -127,11 +137,11 @@ class ManagerClient():
 
     async def server_stop(self, server_id: str) -> None:
         """Stop specified server"""
-        await self._get_text(f"/cluster/server/{server_id}/stop")
+        await self._get_with_driver_refresh(f"/cluster/server/{server_id}/stop")
 
     async def server_stop_gracefully(self, server_id: str) -> None:
         """Stop specified server gracefully"""
-        await self._get_text(f"/cluster/server/{server_id}/stop_gracefully")
+        await self._get_with_driver_refresh(f"/cluster/server/{server_id}/stop_gracefully")
 
     async def server_start(self, server_id: str) -> None:
         """Start specified server"""
@@ -140,8 +150,7 @@ class ManagerClient():
 
     async def server_restart(self, server_id: str) -> None:
         """Restart specified server"""
-        await self._get_text(f"/cluster/server/{server_id}/restart")
-        self._driver_update()
+        await self._get_with_driver_refresh(f"/cluster/server/{server_id}/restart")
 
     async def server_add(self) -> str:
         """Add a new server"""
@@ -151,8 +160,7 @@ class ManagerClient():
 
     async def server_remove(self, server_id: str) -> None:
         """Remove a specified server"""
-        await self._get_text(f"/cluster/removeserver/{server_id}")
-        self._driver_update()
+        await self._get_with_driver_refresh(f"/cluster/removeserver/{server_id}")
 
     async def start_stopped(self) -> None:
         """Start all previously stopped servers"""
