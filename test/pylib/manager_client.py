@@ -84,8 +84,9 @@ class ManagerClient():
     async def _request(self, resource: str) -> str:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html
         # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
-        resp = await self.session.get(f"http+unix://{self.sock_name}{resource}")
-        return await resp.text()
+        async with self.session.get(f"http+unix://{self.sock_name}{resource}") as resp:
+            text = await resp.text()
+        return text
 
     async def is_manager_up(self) -> bool:
         """Check if Manager server is up"""
