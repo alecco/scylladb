@@ -63,7 +63,7 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
 
 
 def run_async(self, *args, **kwargs) -> asyncio.Future:
-    return _wrap_future(self.execute_async(*args, **kwargs))
+    return _wrap_future(self.execute_async(*args, **kwargs, timeout=60.0))
 
 
 Session.run_async = run_async
