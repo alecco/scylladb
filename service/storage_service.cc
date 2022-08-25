@@ -220,7 +220,7 @@ future<> storage_service::snitch_reconfigured() {
             auto my_addr = ss.get_broadcast_address();
             auto dr = locator::endpoint_dc_rack {
                 .dc = snitch->get_datacenter(my_addr),
-                .rack = snitch->get_rack(my_addr),
+                .rack = snitch->get_rack(),
             };
             tmptr->update_topology(my_addr, std::move(dr));
             return make_ready_future<>();
