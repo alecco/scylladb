@@ -1310,7 +1310,7 @@ sstring topology::get_datacenter() const {
 }
 
 sstring topology::get_datacenter(inet_address ep) const {
-    return i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(ep);
+    return get_location(ep).dc;
 }
 
 std::function<bool(inet_address)> topology::get_local_dc_filter() const noexcept {
