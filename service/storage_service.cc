@@ -213,7 +213,19 @@ bool storage_service::should_bootstrap() {
 }
 
 future<> storage_service::snitch_reconfigured() {
-    return update_topology(utils::fb_utilities::get_broadcast_address());
+    return container().invoke_on(0, [] (auto& ss) {
+        return ss.mutate_token_metadata([&ss] (mutable_token_metadata_ptr tmptr) mutable {
+            // re-read local rack and DC info
+            auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+            auto my_addr = ss.get_broadcast_address();
+            auto dr = locator::endpoint_dc_rack {
+                .dc = snitch->get_datacenter(my_addr),
+                .rack = snitch->get_rack(my_addr),
+            };
+            tmptr->update_topology(my_addr, std::move(dr));
+            return make_ready_future<>();
+        });
+    });
 }
 
 /* Broadcasts the chosen tokens through gossip,
@@ -3253,21 +3265,6 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     return container().invoke_on(0, [reason = std::move(reason)] (auto& ss) mutable {
         return ss.update_pending_ranges(reason, acquire_merge_lock::no).handle_exception([reason = std::move(reason)] (auto ep) {
             slogger.warn("Failure to update pending ranges for {} ignored", reason);
-        });
-    });
-}
-
-future<> storage_service::update_topology(inet_address endpoint) {
-    return container().invoke_on(0, [endpoint] (auto& ss) {
-        return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
-            // re-read local rack and DC info
-            auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-            auto dr = locator::endpoint_dc_rack {
-                .dc = snitch->get_datacenter(endpoint),
-                .rack = snitch->get_rack(endpoint),
-            };
-            tmptr->update_topology(endpoint, std::move(dr));
-            return make_ready_future<>();
         });
     });
 }
