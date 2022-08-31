@@ -74,6 +74,7 @@ raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_servic
         gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
+    , _gossiper(gossiper)
     , _address_map(seastar::make_shared<raft_address_map<>>())
     , _direct_fd(fd)
     , _direct_fd_proxy(make_shared<direct_fd_proxy>(gossiper.get_direct_fd_pinger(), *_address_map))
@@ -224,6 +225,7 @@ seastar::future<> raft_group_registry::start() {
 
     _direct_fd_subscription.emplace(co_await _direct_fd.register_listener(*_direct_fd_proxy,
         direct_fd_clock::base::duration{std::chrono::seconds{1}}.count()));
+    _gossiper.register_(_address_map);
 }
 
 seastar::future<> raft_group_registry::stop() {
@@ -232,6 +234,7 @@ seastar::future<> raft_group_registry::stop() {
     }
     co_await drain_on_shutdown();
     co_await uninit_rpc_verbs();
+    co_await _gossiper.unregister_(_address_map);
 }
 
 seastar::future<> raft_group_registry::drain_on_shutdown() noexcept {

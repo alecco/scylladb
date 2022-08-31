@@ -52,6 +52,7 @@ private:
     bool _is_enabled;
 
     netw::messaging_service& _ms;
+    gms::gossiper& _gossiper;
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;

@@ -9,6 +9,7 @@
 
 #include "gms/inet_address.hh"
 #include "gms/inet_address_serializer.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
 #include "raft/raft.hh"
 
 #include <seastar/core/lowres_clock.hh>
@@ -33,7 +34,7 @@ static constexpr raft_ticker_type::duration raft_tick_interval = std::chrono::mi
 // This class provides an abstraction of expirable server address mappings
 // used by the raft rpc module to store connection info for servers in a raft group.
 template <typename Clock = seastar::lowres_clock>
-class raft_address_map {
+class raft_address_map: public gms::i_endpoint_state_change_subscriber {
 
     // Expiring mappings stay in the cache for 1 hour (if not accessed during this time period)
     static constexpr std::chrono::hours default_expiry_period{1};
@@ -350,6 +351,48 @@ public:
     raft::server_address get_server_address(raft::server_id id) const {
         return raft::server_address{id, ser::serialize_to_buffer<bytes>(get_inet_address(id))};
     }
+
+    ///////////////// i_endpoint_state_change_subscriber ///////////////////////////////
+
+    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+
+        return make_ready_future<>();
+    }
+
+    virtual future<> before_change(gms::inet_address endpoint,
+        gms::endpoint_state current_state, gms::application_state new_statekey,
+        const gms::versioned_value& newvalue)  {
+
+        return make_ready_future<>();
+    }
+
+    virtual future<> on_change(gms::inet_address endpoint, gms::application_state state,
+        const gms::versioned_value& value) {
+
+        return make_ready_future<>();
+    }
+
+    virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
+
+        return make_ready_future<>();
+    }
+
+    virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
+
+        return make_ready_future<>();
+    }
+
+    virtual future<> on_remove(gms::inet_address endpoint) {
+
+        return make_ready_future<>();
+    }
+
+    virtual future<> on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
+
+        return make_ready_future<>();
+    }
+
+    ///////////////// i_endpoint_state_change_subscriber ///////////////////////////////
 };
 
 } // end of namespace service
