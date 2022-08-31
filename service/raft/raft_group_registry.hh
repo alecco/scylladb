@@ -56,7 +56,7 @@ private:
     // Currently ticking every 100ms.
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;
     // inet_address:es for remote raft servers known to us
-    raft_address_map<> _srv_address_mappings;
+    seastar::shared_ptr<raft_address_map<>> _address_map;
 
     direct_failure_detector::failure_detector& _direct_fd;
     // Listens to notifications from direct failure detector.
@@ -104,7 +104,7 @@ public:
     future<> start_server_for_group(raft_server_for_group grp);
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
-    raft_address_map<>& address_map() { return _srv_address_mappings; }
+    raft_address_map<>& address_map() { return *_address_map; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
 
     // Is the RAFT local feature enabled?

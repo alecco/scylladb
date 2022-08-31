@@ -74,8 +74,9 @@ raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_servic
         gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
+    , _address_map(seastar::make_shared<raft_address_map<>>())
     , _direct_fd(fd)
-    , _direct_fd_proxy(make_shared<direct_fd_proxy>(gossiper.get_direct_fd_pinger(), _srv_address_mappings))
+    , _direct_fd_proxy(make_shared<direct_fd_proxy>(gossiper.get_direct_fd_pinger(), *_address_map))
 {
 }
 
@@ -90,7 +91,7 @@ void raft_group_registry::init_rpc_verbs() {
             auto& rpc = self.get_rpc(gid);
             // The address learnt from a probably unknown server should
             // eventually expire
-            self._srv_address_mappings.set(from, std::move(addr), true);
+            self._address_map->set(from, std::move(addr), true);
             // Execute the actual message handling code
             return handler(rpc);
         });
