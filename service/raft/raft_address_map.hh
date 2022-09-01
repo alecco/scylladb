@@ -287,7 +287,7 @@ public:
     // This means that we cannot remap the entry's actual inet_address but
     // nonetheless the function can be used to promote the entry from
     // expiring to permanent or vice versa.
-    void set(raft::server_id id, gms::inet_address addr, bool expiring) {
+    void set(raft::server_id id, gms::inet_address addr, bool expiring, bool allow_override = true) {
         auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
         if (set_it == _set.end()) {
             auto entry = new timestamped_entry(_set, std::move(id), std::move(addr), expiring);
@@ -304,8 +304,12 @@ public:
 
         // Don't allow to remap to a different address
         if (set_it->_addr != addr) {
-            on_internal_error(rslog, format("raft_address_map: expected to get inet_address {} for raft server id {} (got {})",
-                set_it->_addr, id, addr));
+            if (allow_override) {
+                set_it->_addr = addr;
+            } else {
+                on_internal_error(rslog, format("raft_address_map: expected to get inet_address {} for raft server id {} (got {})",
+                        set_it->_addr, id, addr));
+            }
         }
 
         if (set_it->expiring()) {
@@ -356,6 +360,7 @@ public:
 
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
 
+        rslog.error("on_join{} {} {}", endpoint, ep_state);
         return make_ready_future<>();
     }
 
@@ -363,32 +368,39 @@ public:
         gms::endpoint_state current_state, gms::application_state new_statekey,
         const gms::versioned_value& newvalue)  {
 
+        rslog.error("before_change {} {} {}", endpoint, current_state, new_statekey);
         return make_ready_future<>();
     }
 
     virtual future<> on_change(gms::inet_address endpoint, gms::application_state state,
         const gms::versioned_value& value) {
 
+        rslog.error("on_change {} {}", endpoint, state);
+
         return make_ready_future<>();
     }
 
     virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
 
+        rslog.error("on_alive{} {}", endpoint, state);
         return make_ready_future<>();
     }
 
     virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
 
+        rslog.error("on_dead{} {}", endpoint, state);
         return make_ready_future<>();
     }
 
     virtual future<> on_remove(gms::inet_address endpoint) {
 
+        rslog.error("on_remove{}", endpoint);
         return make_ready_future<>();
     }
 
     virtual future<> on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
 
+        rslog.error("on_restart{} {}", endpoint, state);
         return make_ready_future<>();
     }
 
