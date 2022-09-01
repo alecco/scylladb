@@ -9,13 +9,13 @@
 
 namespace service {
 
-void check_peer(const raft::server_address& peer) {
-    if (!peer.info.size()) {
+void check_peer(const discovery_peer& peer) {
+    if (peer.ip == gms::inet_address{}) {
         throw std::logic_error("Discovery requires peer internet address to be set");
     }
 }
 
-discovery::discovery(raft::server_address self, const peer_list& seeds)
+discovery::discovery(discovery_peer self, const peer_list& seeds)
     : _self(std::move(self)) {
 
     // self must have a non-empty Internet address
@@ -40,7 +40,7 @@ void discovery::step(const peer_list& peers) {
 
     for (const auto& addr : peers) {
         // peer must have a non-empty Internet address
-        if (addr.info == _self.info) {
+        if (addr.ip == _self.ip) {
             // do not include _self into _peers
             continue;
         }
@@ -111,7 +111,7 @@ std::optional<discovery::peer_list> discovery::request(const peer_list& peers) {
     return _peer_list;
 }
 
-void discovery::response(raft::server_address from, const peer_list& peers) {
+void discovery::response(discovery_peer from, const peer_list& peers) {
     assert(_peers.contains(from));
     _responded.emplace(from);
     step(peers);

@@ -352,9 +352,6 @@ public:
         }
         return *it;
     }
-    raft::server_address get_server_address(raft::server_id id) const {
-        return raft::server_address{id, ser::serialize_to_buffer<bytes>(get_inet_address(id))};
-    }
 
     ///////////////// i_endpoint_state_change_subscriber ///////////////////////////////
 
