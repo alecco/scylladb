@@ -289,10 +289,10 @@ class RandomTables():
         self.removed_tables.append(table)
         return table
 
-    def drop_all(self) -> None:
+    async def drop_all(self) -> None:
         """Drop keyspace (and tables)"""
         assert self.m.cql is not None
-        self.m.cql.execute(f"DROP KEYSPACE {self.keyspace}")
+        await self.m.cql.run_async(f"DROP KEYSPACE {self.keyspace}")
 
     async def verify_schema(self, table: Union[RandomTable, str] = None) -> None:
         """Verify schema of all active managed random tables"""
