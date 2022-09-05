@@ -20,7 +20,7 @@ import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
-from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy, RetryPolicy    # type: ignore
 
 # Add test.pylib to the search path
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
@@ -70,6 +70,51 @@ def run_async(self, *args, **kwargs) -> asyncio.Future:
 Session.run_async = run_async
 
 
+class TopologyChangeRetryPolicy(RetryPolicy):
+    """
+    A retry policy that changes to another host after failure
+    """
+
+    def on_read_timeout(self, *args, **kwargs):
+        """
+        This is called when a read operation times out from the coordinator's
+        perspective (i.e. a replica did not respond to the coordinator in time).
+        See cassandra.policies RetryPolicy
+        """
+        if kwargs['retry_num'] < 3:
+            print("Retrying read after timeout. Attempt #%s" % kwargs['retry_num'], file=sys.stderr)
+            logger.debug("Retrying read after timeout. Attempt #%s", kwargs['retry_num'])
+            return (self.RETRY, None)
+        elif kwargs['retry_num'] < 6:
+            logger.debug("Retrying read after timeout. Next host. Attempt #%s",
+                         kwargs['retry_num'])
+            return (self.RETRY_NEXT_HOST , None)
+        return (self.RETHROW, None)
+
+    def on_write_timeout(self, *args, **kwargs):
+        """Retry 5 times with another host, then raise"""
+        if kwargs['retry_num'] < 3:
+            print("Retrying write after timeout. Attempt #%s" % kwargs['retry_num'], file=sys.stderr)
+            logger.debug("Retrying write after timeout. Attempt #%s", kwargs['retry_num'])
+            return (self.RETRY, None)
+        elif kwargs['retry_num'] < 6:
+            logger.debug("Retrying write after timeout. Next host. Attempt #%s",
+                         kwargs['retry_num'])
+            return (self.RETRY_NEXT_HOST , None)
+        return (self.RETHROW, None)
+
+    def on_unavailable(self, *args, **kwargs):
+        """Retry 5 times with another host, then raise"""
+        if kwargs['retry_num'] < 3:
+            print("Retrying request after UE. Attempt #%s" % kwargs['retry_num'], file=sys.stderr)
+            logger.debug("Retrying request after UE. Attempt #%s", kwargs['retry_num'])
+            return (self.RETRY, None)
+        elif kwargs['retry_num'] < 6:
+            logger.debug("Retrying request after UE. Attempt #%s", kwargs['retry_num'])
+            return (self.RETRY_NEXT_HOST , None)
+        return (self.RETHROW, None)
+
+
 # cluster_con helper: set up client object for communicating with the CQL API.
 def cluster_con(hosts: List[str], port: int, ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
@@ -77,6 +122,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
         load_balancing_policy=WhiteListRoundRobinPolicy(hosts=hosts),
+        retry_policy=TopologyChangeRetryPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeout (in seconds) for execute() commands is 10, which
