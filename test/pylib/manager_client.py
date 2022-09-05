@@ -15,6 +15,7 @@ import aiohttp                                                             # typ
 import aiohttp.web                                                         # type: ignore
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
+import sys  # XXX
 
 
 class ManagerClient():
@@ -46,12 +47,16 @@ class ManagerClient():
     async def driver_connect(self) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
-            self.ccluster = self.con_gen(await self.servers(), self.port, self.ssl)
+            # self.ccluster = self.con_gen(await self.servers(), self.port, self.ssl)
+            server_list = await self.servers()
+            print(f"XXX CLI driver_connect to {server_list}", file=sys.stderr) # XXX
+            self.ccluster = self.con_gen(server_list, self.port, self.ssl)
             self.cql = self.ccluster.connect()
 
     def driver_close(self) -> None:
         """Disconnect from cluster"""
         if self.ccluster is not None:
+            print(f"XXX CLI driver_close shutting down {self.ccluster}", file=sys.stderr) # XXX
             self.ccluster.shutdown()
             self.ccluster = None
         self.cql = None
@@ -127,8 +132,19 @@ class ManagerClient():
 
     async def server_stop(self, server_id: str) -> bool:
         """Stop specified server"""
-        resp = await self._request(f"/cluster/server/{server_id}/stop")
-        return resp.status == 200
+        # XXX driver issues
+        print("XXX CLI stopping driver", file=sys.stderr) # XXX
+        self.driver_close()  # Close driver connection to old cluster
+        # XXX XXX XXX print(f"XXX CLI stopping server {server_id}", file=sys.stderr) # XXX
+        # XXX XXX XXX resp = await self._request(f"/cluster/server/{server_id}/stop")
+        # XXX XXX XXX print(f"XXX CLI stopping server {server_id} DONE", file=sys.stderr) # XXX
+        # XXX if resp.status == 200:
+        if True:  # XXX
+            print("XXX CLI restarting driver after stop", file=sys.stderr) # XXX
+            await self.driver_connect()  # XXX
+            print("XXX CLI restarting driver DONE", file=sys.stderr) # XXX
+            return True
+        return False
 
     async def server_stop_gracefully(self, server_id: str) -> bool:
         """Stop specified server gracefully"""
@@ -137,9 +153,15 @@ class ManagerClient():
 
     async def server_start(self, server_id: str) -> bool:
         """Start specified server"""
+        debug_msg = f"XXX CLI start server {server_id} {request.node.name}"
+        print(debug_msg, file=sys.stderr) # XXX
+        # XXX self.driver_close()  # Close driver connection to old cluster
         resp = await self._request(f"/cluster/server/{server_id}/start")
         if resp.status == 200:
-            self._driver_update()
+            # XXX debug_msg = f"XXX CLI start {server_id} starting fresh driver {request.node.name}"
+            # XXX print(debug_msg, file=sys.stderr) # XXX
+            # XXX await self.driver_connect()
+            # XXX self._driver_update()
             return True
         return False
 
@@ -148,12 +170,18 @@ class ManagerClient():
         servers = await self.servers()
         if not servers or server_id not in servers:
             return False
+        debug_msg = f"XXX CLI restart server {server_id} {request.node.name}"
+        print(debug_msg, file=sys.stderr) # XXX
         if len(servers) == 1:
             # Only 1 server, so close connection and reopen fresh afterwards
-            self.driver_close()
+            # XXX debug_msg = f"XXX CLI restart close driver {request.node.name}"
+            # XXX print(debug_msg, file=sys.stderr) # XXX
+            # XXX self.driver_close()
             resp = await self._request(f"/cluster/server/{server_id}/restart")
             if resp.status == 200:
-                await self.driver_connect()
+                # XXX debug_msg = f"XXX CLI restart connect driver {request.node.name}"
+                # XXX print(debug_msg, file=sys.stderr) # XXX
+                # XXX await self.driver_connect()
                 return True
         elif len(servers) > 1:
             # Multiple servers, make sure other nodes are known by the driver
