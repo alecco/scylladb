@@ -22,7 +22,7 @@ import cassandra                                                         # type:
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
-from cassandra.policies import RoundRobinPolicy, RetryPolicy             # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy, RetryPolicy    # type: ignore
 
 
 # Add test.pylib to the search path
@@ -61,8 +61,10 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
 
     def on_result(result):
         loop.call_soon_threadsafe(aio_future.set_result, result)
+        print("\nXXX on_result scheduled result OK", file=sys.stderr) # XXX
 
     def on_error(exception, *_):
+        print(f"\nXXX on_error scheduling exception {exception}", file=sys.stderr) # XXX
         loop.call_soon_threadsafe(aio_future.set_exception, exception)
 
     f.add_callback(on_result)
@@ -71,7 +73,7 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
 
 
 def run_async(self, *args, **kwargs) -> asyncio.Future:
-    kwargs.setdefault("timeout", 60.0)
+    kwargs.setdefault("timeout", 2.0)
     return _wrap_future(self.execute_async(*args, **kwargs))
 
 
@@ -128,9 +130,10 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
+    # print(f"\nXXX cluster_con WhiteListRoundRobinPolicy(hosts={hosts})", file=sys.stderr)  # XXX
     profile = ExecutionProfile(
-        load_balancing_policy=RoundRobinPolicy(),
-        # XXX retry_policy=TopologyChangeRetryPolicy(),
+        load_balancing_policy=WhiteListRoundRobinPolicy(hosts=hosts),
+        retry_policy=TopologyChangeRetryPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeout (in seconds) for execute() commands is 10, which
@@ -138,7 +141,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
         # very slow debug build running on a very busy machine and a very slow
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
-        request_timeout=120)
+        request_timeout=5)
     if ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -162,9 +165,9 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                    # have been more than enough, but in some extreme cases with a very
                    # slow debug build running on a very busy machine, they may not be.
                    # so let's increase them to 60 seconds. See issue #11289.
-                   connect_timeout = 60,
-                   control_connection_timeout = 60,
-                   max_schema_agreement_wait=60,
+                   connect_timeout = 5,
+                   control_connection_timeout = 5,
+                   max_schema_agreement_wait=7,
                    )
 
 
@@ -181,7 +184,9 @@ async def manager_internal(event_loop, request):
     manager_int = ManagerClient(request.config.getoption('manager_api'), port, ssl, cluster_con)
     await manager_int.start()
     yield manager_int
+    print(f"\nXXX fixture manager_internal closing driver", file=sys.stderr) # XXX
     manager_int.driver_close()   # Close after last test case
+    print(f"\nXXX fixture manager_internal closing driver DONE", file=sys.stderr) # XXX
 
 @pytest.fixture(scope="function")
 async def manager(request, manager_internal):
@@ -226,6 +231,12 @@ def fails_without_raft(request, check_pre_raft):
 async def random_tables(request, cql, manager):
     tables = RandomTables(request.node.name, cql, unique_name())
     yield tables
+    debug_msg = f"\nXXX fixture random_tables cleanup: restarting driver {request.node.name}"
+    print(debug_msg, file=sys.stderr) # XXX
+    manager.driver_close()   # Close after last test case
+    await manager.driver_connect()  # Connect driver to new cluster
+    debug_msg = f"\nXXX fixture random_tables cleanup: dropping keyspace {request.node.name}"
+    print(debug_msg, file=sys.stderr) # XXX
     # NOTE: to avoid occasional timeouts on keyspace teardown, start stopped servers
-    await manager.start_stopped()
-    tables.drop_all()
+    # XXX await manager.start_stopped()
+    await tables.drop_all()
