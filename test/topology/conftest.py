@@ -63,7 +63,7 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
 
 
 def run_async(self, *args, **kwargs) -> asyncio.Future:
-    kwargs.setdefault("timeout", 60.0)
+    kwargs.setdefault("timeout", 3.0)
     return _wrap_future(self.execute_async(*args, **kwargs))
 
 
@@ -84,7 +84,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
         # very slow debug build running on a very busy machine and a very slow
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
-        request_timeout=120)
+        request_timeout=4)
     if ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -108,9 +108,9 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                    # have been more than enough, but in some extreme cases with a very
                    # slow debug build running on a very busy machine, they may not be.
                    # so let's increase them to 60 seconds. See issue #11289.
-                   connect_timeout = 60,
-                   control_connection_timeout = 60,
-                   max_schema_agreement_wait=60,
+                   connect_timeout = 2,
+                   control_connection_timeout = 2,
+                   max_schema_agreement_wait=2,
                    )
 
 
