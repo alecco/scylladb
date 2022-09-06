@@ -60,12 +60,18 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
     aio_future = loop.create_future()
 
     def on_result(result):
-        loop.call_soon_threadsafe(aio_future.set_result, result)
-        print("\nXXX on_result scheduled result OK", file=sys.stderr) # XXX
+        if result is not None:
+            loop.call_soon_threadsafe(aio_future.set_result, result)
+            print(f"XXX on_result scheduled result {result}", file=sys.stderr) # XXX
+        else:
+            print("XXX on_result scheduled result None", file=sys.stderr) # XXX
 
     def on_error(exception, *_):
-        print(f"\nXXX on_error scheduling exception {exception}", file=sys.stderr) # XXX
-        loop.call_soon_threadsafe(aio_future.set_exception, exception)
+        if exception is not None:
+            print(f"\nXXX on_error scheduling exception {exception}", file=sys.stderr) # XXX
+            loop.call_soon_threadsafe(aio_future.set_exception, exception)
+        else:
+            print("XXX on_exception scheduled exception None", file=sys.stderr) # XXX
 
     f.add_callback(on_result)
     f.add_errback(on_error)
@@ -129,7 +135,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
         # very slow debug build running on a very busy machine and a very slow
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
-        request_timeout=5)
+        request_timeout=10)
     if ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -185,11 +191,13 @@ async def manager(request, manager_internal):
     yield manager_internal
     await manager_internal.after_test(request.node.name)
 
+
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
 @pytest.fixture(scope="function")
 def cql(manager):
     yield manager.cql
+
 
 # While the raft-based schema modifications are still experimental and only
 # optionally enabled some tests are expected to fail on Scylla without this
