@@ -20,7 +20,7 @@ import cassandra                                                         # type:
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
-from cassandra.policies import RoundRobinPolicy                          # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy, RetryPolicy    # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
-        load_balancing_policy=RoundRobinPolicy(),
+        load_balancing_policy=WhiteListRoundRobinPolicy(hosts=hosts),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeout (in seconds) for execute() commands is 10, which
