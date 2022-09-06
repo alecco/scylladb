@@ -132,18 +132,18 @@ class ManagerClient():
 
     async def server_stop(self, server_id: str) -> bool:
         """Stop specified server"""
-        # XXX driver issues
-        print("XXX CLI stopping driver", file=sys.stderr) # XXX
+        print("XXX CLI stopping driver", file=sys.stderr)                   # XXX
         self.driver_close()  # Close driver connection to old cluster
-        # XXX XXX XXX print(f"XXX CLI stopping server {server_id}", file=sys.stderr) # XXX
-        # XXX XXX XXX resp = await self._request(f"/cluster/server/{server_id}/stop")
-        # XXX XXX XXX print(f"XXX CLI stopping server {server_id} DONE", file=sys.stderr) # XXX
-        # XXX if resp.status == 200:
-        if True:  # XXX
-            print("XXX CLI restarting driver after stop", file=sys.stderr) # XXX
-            await self.driver_connect()  # XXX
-            print("XXX CLI restarting driver DONE", file=sys.stderr) # XXX
+        print(f"XXX CLI stopping server {server_id}", file=sys.stderr)      # XXX
+        resp = await self._request(f"/cluster/server/{server_id}/stop")
+        print(f"XXX CLI stopping server {server_id} DONE", file=sys.stderr) # XXX
+        if resp.status == 200:
+            print("XXX CLI restarting driver after stop", file=sys.stderr)  # XXX
+            await self.driver_connect()                                     # XXX
+            print("XXX CLI restarting driver DONE", file=sys.stderr)        # XXX
             return True
+        else:
+            raise RuntimeError("XXX")
         return False
 
     async def server_stop_gracefully(self, server_id: str) -> bool:
@@ -153,15 +153,14 @@ class ManagerClient():
 
     async def server_start(self, server_id: str) -> bool:
         """Start specified server"""
-        debug_msg = f"XXX CLI start server {server_id} {request.node.name}"
-        print(debug_msg, file=sys.stderr) # XXX
-        # XXX self.driver_close()  # Close driver connection to old cluster
+        debug_msg = f"XXX CLI start server {server_id} {request.node.name}"  # XXX
+        print(debug_msg, file=sys.stderr)                                    # XXX
+        self.driver_close()  # Close driver connection to old cluster
         resp = await self._request(f"/cluster/server/{server_id}/start")
         if resp.status == 200:
-            # XXX debug_msg = f"XXX CLI start {server_id} starting fresh driver {request.node.name}"
-            # XXX print(debug_msg, file=sys.stderr) # XXX
-            # XXX await self.driver_connect()
-            # XXX self._driver_update()
+            debug_msg = f"XXX CLI start {server_id} fresh driver {request.node.name}" # XXX
+            print(debug_msg, file=sys.stderr)                                         # XXX
+            await self.driver_connect()
             return True
         return False
 
@@ -196,7 +195,7 @@ class ManagerClient():
         resp = await self._request("/cluster/addserver")
         if resp.status == 200:
             server_id = resp.text
-            self._driver_update()
+            # XXX self._driver_update()
             return server_id
         return None
 
