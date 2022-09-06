@@ -7,6 +7,7 @@
 # defines common test fixtures for all of them to use
 
 import asyncio
+import logging
 import pathlib
 import ssl
 import sys
@@ -17,6 +18,7 @@ from random_tables import RandomTables       # type: ignore # pylint: disable=im
 from util import unique_name                 # type: ignore # pylint: disable=import-error
 from manager_client import ManagerClient     # type: ignore # pylint: disable=import-error
 import pytest
+import cassandra                                                         # type: ignore
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
@@ -24,6 +26,11 @@ from cassandra.policies import RoundRobinPolicy                          # type:
 
 # Add test.pylib to the search path
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+
+
+logger = logging.getLogger(__name__)
+logger.debug("Python driver version in use: {}".format(cassandra.__version__))
+
 
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store', required=True,
