@@ -10,11 +10,15 @@
 """
 
 import os.path
+import logging
 from typing import List, Optional, Callable, NamedTuple
 import aiohttp                                                             # type: ignore
 import aiohttp.web                                                         # type: ignore
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
+
+
+logger = logging.getLogger(__name__)
 
 
 class ManagerClient():
@@ -127,20 +131,25 @@ class ManagerClient():
 
     async def server_stop(self, server_id: str) -> bool:
         """Stop specified server"""
-        resp = await self._request(f"/cluster/server/{server_id}/stop")
+        logger.debug("ManagerClient stopping %s", server_id)
         self.driver_close()           # Close driver connection to avoid timeouts
+        resp = await self._request(f"/cluster/server/{server_id}/stop")
         if resp.status == 200:
+            logger.debug("ManagerClient %s stopped, reconnecting driver", server_id)
             self.driver_connect()     # New driver connection
             return True
+        logger.debug("ManagerClient failed to stop %s", server_id)
         return False
 
     async def server_stop_gracefully(self, server_id: str) -> bool:
         """Stop specified server gracefully"""
+        logger.debug("ManagerClient stoping %s gracefully", server_id)
         resp = await self._request(f"/cluster/server/{server_id}/stop_gracefully")
         return resp.status == 200
 
     async def server_start(self, server_id: str) -> bool:
         """Start specified server"""
+        logger.debug("ManagerClient starting {server_id}")
         resp = await self._request(f"/cluster/server/{server_id}/start")
         if resp.status == 200:
             self._driver_update()
@@ -149,6 +158,7 @@ class ManagerClient():
 
     async def server_restart(self, server_id: str) -> bool:
         """Restart specified server"""
+        logger.debug("ManagerClient restarting %s", server_id)
         servers = await self.servers()
         if not servers or server_id not in servers:
             return False
@@ -169,6 +179,7 @@ class ManagerClient():
 
     async def server_add(self) -> Optional[str]:
         """Add a new server"""
+        logger.debug("ManagerClient adding server")
         resp = await self._request("/cluster/addserver")
         if resp.status == 200:
             server_id = resp.text
@@ -178,6 +189,7 @@ class ManagerClient():
 
     async def server_remove(self, server_id: str) -> bool:
         """Remove a specified server"""
+        logger.debug("ManagerClient removing %s", server_id)
         resp = await self._request(f"/cluster/removeserver/{server_id}")
         if resp.status == 200:
             self._driver_update()
@@ -186,6 +198,7 @@ class ManagerClient():
 
     async def start_stopped(self) -> None:
         """Start all previously stopped servers"""
+        logger.debug("ManagerClient starting all stopped servers")
         resp = await self._request(f"/cluster/start_stopped")
         if resp.status == 200:
             self._driver_update()
