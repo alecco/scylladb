@@ -7,6 +7,7 @@
 # defines common test fixtures for all of them to use
 
 import asyncio
+import logging
 import pathlib
 import ssl
 import sys
@@ -15,10 +16,16 @@ from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 import pytest
+import cassandra                                                         # type: ignore
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
+
+
+logger = logging.getLogger(__name__)
+logger.debug("Python driver version in use: %s", cassandra.__version__)
+
 
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store', required=True,
