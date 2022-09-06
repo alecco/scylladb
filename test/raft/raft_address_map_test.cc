@@ -86,11 +86,12 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         BOOST_CHECK(!m.find(id2));
     }
     {
-        // Throw on re-mapping address for the same id
+        // Do not throw on re-mapping address for the same id
+        // - happens when IP address changes after a node restart
         scoped_no_abort_on_internal_error abort_guard;
         raft_address_map<manual_clock> m;
         m.set(id1, addr1, false);
-        BOOST_CHECK_THROW(m.set(id1, addr2, false), std::runtime_error);
+        BOOST_CHECK_NO_THROW(m.set(id1, addr2, false));
     }
     {
         // Check that transition from regular to expiring entry is not possible
