@@ -60,12 +60,18 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
     aio_future = loop.create_future()
 
     def on_result(result):
-        loop.call_soon_threadsafe(aio_future.set_result, result)
-        print("\nXXX on_result scheduled result OK", file=sys.stderr) # XXX
+        if result is not None:
+            loop.call_soon_threadsafe(aio_future.set_result, result)
+            print(f"XXX on_result scheduled result {result}", file=sys.stderr) # XXX
+        else:
+            print("XXX on_result scheduled result None", file=sys.stderr) # XXX
 
     def on_error(exception, *_):
-        print(f"\nXXX on_error scheduling exception {exception}", file=sys.stderr) # XXX
-        loop.call_soon_threadsafe(aio_future.set_exception, exception)
+        if exception is not None:
+            print(f"\nXXX on_error scheduling exception {exception}", file=sys.stderr) # XXX
+            loop.call_soon_threadsafe(aio_future.set_exception, exception)
+        else:
+            print("XXX on_exception scheduled exception None", file=sys.stderr) # XXX
 
     f.add_callback(on_result)
     f.add_errback(on_error)
@@ -129,7 +135,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
         # very slow debug build running on a very busy machine and a very slow
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
-        request_timeout=5)
+        request_timeout=10)
     if ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -183,13 +189,7 @@ async def manager(request, manager_internal):
     """
     await manager_internal.before_test(request.node.name)
     yield manager_internal
-    await manager_internal.after_test(request.node.name)
-
-# "cql" fixture: set up client object for communicating with the CQL API.
-# Since connection is managed by manager just return that object
-@pytest.fixture(scope="function")
-def cql(manager):
-    yield manager.cql
+    # XXX await manager_internal.after_test(request.node.name)
 
 # While the raft-based schema modifications are still experimental and only
 # optionally enabled some tests are expected to fail on Scylla without this
@@ -197,13 +197,13 @@ def cql(manager):
 # These tests should use the "fails_without_raft" fixture. When Raft mode
 # becomes the default, this fixture can be removed.
 @pytest.fixture(scope="function")
-def check_pre_raft(cql):
+def check_pre_raft(manager):
     # If not running on Scylla, return false.
-    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    names = [row.table_name for row in manager.cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     if not any('scylla' in name for name in names):
         return False
     # In Scylla, we check Raft mode by inspecting the configuration via CQL.
-    experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
+    experimental_features = list(manager.cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
     return not '"raft"' in experimental_features
 
 
@@ -216,8 +216,8 @@ def fails_without_raft(request, check_pre_raft):
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
 @pytest.fixture(scope="function")
-async def random_tables(request, cql, manager):
-    tables = RandomTables(request.node.name, cql, unique_name())
+async def random_tables(request, manager):
+    tables = RandomTables(request.node.name, manager, unique_name())
     yield tables
     debug_msg = f"\nXXX fixture random_tables cleanup: restarting driver {request.node.name}"
     print(debug_msg, file=sys.stderr) # XXX
