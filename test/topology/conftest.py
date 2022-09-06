@@ -59,10 +59,16 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
     aio_future = loop.create_future()
 
     def on_result(result):
-        loop.call_soon_threadsafe(aio_future.set_result, result)
+        if result is not None:
+            loop.call_soon_threadsafe(aio_future.set_result, result)
+        else:
+            logger.debug("wrapped future on_result called with result None")
 
     def on_error(exception, *_):
-        loop.call_soon_threadsafe(aio_future.set_exception, exception)
+        if exception is not None:
+            loop.call_soon_threadsafe(aio_future.set_exception, exception)
+        else:
+            logger.warning("wrapped future on_exception called with exception None")
 
     f.add_callback(on_result)
     f.add_errback(on_error)
