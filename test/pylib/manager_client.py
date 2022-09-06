@@ -179,11 +179,3 @@ class ManagerClient():
             self._driver_update()
             return True
         return False
-
-    async def start_stopped(self) -> None:
-        """Start all previously stopped servers"""
-        resp = await self._request(f"/cluster/start_stopped")
-        if resp.status == 200:
-            self._driver_update()
-            return True
-        return False
