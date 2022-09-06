@@ -7,7 +7,8 @@
 Test consistency of schema changes with topology changes.
 """
 import pytest
-import sys  # XXX
+import sys      # XXX
+import asyncio  # XXX
 
 
 #@pytest.mark.asyncio
@@ -25,12 +26,14 @@ async def test_stop_server_add_column(manager, random_tables):
     servers = await manager.servers()
     table = await random_tables.add_table(ncolumns=5)
     # server_id = await manager.server_add()
-    # print(f"\nXXX test_stop... addded server {server_id}", file=sys.stderr) # XXX
-    print(f"\nXXX test_stop... stopping server {servers[1]}", file=sys.stderr) # XXX
-    await manager.server_stop(servers[1])
-    print(f"\nXXX test_stop... add column", file=sys.stderr) # XXX
-    await table.add_column()
-    print(f"\nXXX test_stop... add column DONE", file=sys.stderr) # XXX
+    # asyncio.sleep(1)                                                           # XXX
+    # print(f"\nXXX test_stop... addded server {server_id}", file=sys.stderr)    # XXX
+    # print(f"\nXXX test_stop... stopping server {servers[1]}", file=sys.stderr) # XXX
+    # await manager.server_stop(servers[1])
+    # asyncio.sleep(10)                                                           # XXX
+    #print(f"\nXXX test_stop... add column", file=sys.stderr)                   # XXX
+    #await table.add_column()
+    #print(f"\nXXX test_stop... add column DONE", file=sys.stderr)              # XXX
     await random_tables.verify_schema()
 
 
