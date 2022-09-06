@@ -501,7 +501,8 @@ class ScyllaCluster:
             logging.info("Cluster %s stopping", self)
             self.is_dirty = True
             # If self.running is empty, no-op
-            await asyncio.gather(*(server.stop() for server in self.running.values()))
+            # XXX gracefully
+            await asyncio.gather(*(server.stop_gracefully() for server in self.running.values()))
             self.stopped.update(self.running)
             self.running.clear()
             self.is_running = False
@@ -707,8 +708,9 @@ class ScyllaClusterManager:
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
+        # XXX await asyncio.sleep(2)
         await self.site.stop()
-        self.cluster.after_test(self.test_name)
+        # XXX NO NO NO NO self.cluster.after_test(self.test_name)
         if not self.cluster.is_dirty:
             logging.info("Returning Scylla cluster %s", self.cluster)
             await self.clusters.put(self.cluster)
