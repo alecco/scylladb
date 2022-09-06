@@ -128,7 +128,11 @@ class ManagerClient():
     async def server_stop(self, server_id: str) -> bool:
         """Stop specified server"""
         resp = await self._request(f"/cluster/server/{server_id}/stop")
-        return resp.status == 200
+        self.driver_close()           # Close driver connection to avoid timeouts
+        if resp.status == 200:
+            self.driver_connect()     # New driver connection
+            return True
+        return False
 
     async def server_stop_gracefully(self, server_id: str) -> bool:
         """Stop specified server gracefully"""
