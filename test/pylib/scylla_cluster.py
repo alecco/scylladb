@@ -215,8 +215,7 @@ class ScyllaServer:
                 seed_addrs = self.seeds,
                 cluster_name = self.cluster_name) \
             | self.config_options
-        with self.config_filename.open('w') as config_file:
-            yaml.dump(self.config, config_file)
+        self._write_config_file()
 
         self.log_file = self.log_filename.open("wb")
 
@@ -440,6 +439,10 @@ class ScyllaServer:
 
     def __str__(self):
         return self.hostname
+
+    def _write_config_file(self) -> None:
+        with self.config_filename.open('w') as config_file:
+            yaml.dump(self.config, config_file)
 
 
 class ScyllaCluster:
