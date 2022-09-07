@@ -265,6 +265,11 @@ bool messaging_service::is_same_dc(inet_address addr) const {
     }
 
     const auto& topo = _token_metadata->get()->get_topology();
+    if (!topo.has_endpoint(addr)) {
+        mlogger.error("Node {} is not in topology", addr);
+        return false;
+    }
+
     return topo.get_datacenter(addr) == topo.get_datacenter();
 }
 
@@ -275,6 +280,11 @@ bool messaging_service::is_same_rack(inet_address addr) const {
     }
 
     const auto& topo = _token_metadata->get()->get_topology();
+    if (!topo.has_endpoint(addr)) {
+        mlogger.error("Node {} is not in topology", addr);
+        return false;
+    }
+
     return topo.get_rack(addr) == topo.get_rack();
 }
 

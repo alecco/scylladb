@@ -897,6 +897,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }).get();
             }
 
+            token_metadata.invoke_on_all([&snitch] (auto& tm) {
+                tm.init_local_endpoint({ snitch.local()->get_datacenter(), snitch.local()->get_rack() });
+            }).get();
+
             static direct_fd_clock fd_clock;
             static sharded<direct_failure_detector::failure_detector> fd;
             supervisor::notify("starting direct failure detector service");

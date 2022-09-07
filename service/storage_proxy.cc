@@ -2780,7 +2780,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         slogger.trace("Operation is not rate limited");
     }
 
-    slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
+    slogger.info("creating write handler with live (1): {} dead: {}", live_endpoints, dead_endpoints);
     tracing::trace(tr_state, "Creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
 
     db::assure_sufficient_live_nodes(cl, *erm, live_endpoints, pending_endpoints);
@@ -2988,6 +2988,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
     auto live_endpoints = get_live_endpoints(*erm, m.token());
 
     if (live_endpoints.empty()) {
+        slogger.error("proxy unavailable exception (6)");
         throw exceptions::unavailable_exception(cl, block_for(*erm, cl), 0);
     }
 
@@ -3111,6 +3112,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
             boost::adaptors::filtered(std::bind_front(&storage_proxy::is_alive, this)), std::back_inserter(live_endpoints));
 
     if (live_endpoints.size() < required_participants) {
+        slogger.error("proxy unavailable exception (7)");
         throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
     }
 
@@ -3118,6 +3120,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     // Note that we fake an impossible number of required nodes in the unavailable exception
     // to nail home the point that it's an impossible operation no matter how many nodes are live.
     if (pending_endpoints.size() > 1) {
+        slogger.error("proxy unavailable exception (8)");
         throw exceptions::unavailable_exception(fmt::format(
                 "Cannot perform LWT operation as there is more than one ({}) pending range movement", pending_endpoints.size()),
                 cl_for_paxos, participants + 1, live_endpoints.size());
@@ -3356,6 +3359,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                                 if (_cl == db::consistency_level::ANY) {
                                     return {local_addr};
                                 }
+                                slogger.error("proxy unavailable exception (1)");
                                 throw exceptions::unavailable_exception(db::consistency_level::ONE, 1, 0);
                             }
                             return chosen_endpoints;
@@ -3499,7 +3503,7 @@ future<> storage_proxy::send_to_endpoint(
                 std::bind_front(&storage_proxy::is_alive, this));
         auto& ks = _db.local().find_keyspace(m->schema()->ks_name());
         auto erm = ks.get_effective_replication_map();
-        slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
+        slogger.info("Creating write handler with live (2): {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, *erm, targets, pending_endpoints);
         return create_write_response_handler(
             std::move(erm),
@@ -4982,6 +4986,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     try {
         db::assure_sufficient_live_nodes(cl, *erm, target_replicas);
     } catch (exceptions::unavailable_exception& ex) {
+        slogger.error("proxy unavailable exception (2)");
         slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
         get_stats().read_unavailables.mark();
         throw;
@@ -5369,6 +5374,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         try {
             db::assure_sufficient_live_nodes(cl, *erm, filtered_endpoints);
         } catch(exceptions::unavailable_exception& ex) {
+            slogger.error("proxy unavailable exception (3)");
             slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
             get_stats().range_slice_unavailables.mark();
             throw;
@@ -5717,6 +5723,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                 partition_ranges[0].start()->value().as_decorated_key(),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
     } catch (exceptions::unavailable_exception& ex) {
+        slogger.error("proxy unavailable exception (4)");
         write ?  get_stats().cas_write_unavailables.mark() : get_stats().cas_read_unavailables.mark();
         throw;
     }
@@ -5835,6 +5842,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
             throw write_timeout_to_read(schema, ex);
         }
     } catch (exceptions::unavailable_exception& ex) {
+        slogger.error("proxy unavailable exception (5)");
         write ? get_stats().cas_write_unavailables.mark() :  get_stats().cas_read_unavailables.mark();
         throw;
     } catch (seastar::semaphore_timed_out& ex) {

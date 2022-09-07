@@ -594,6 +594,10 @@ public:
             auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
             snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
+            token_metadata.invoke_on_all([&snitch] (auto& tm) {
+                tm.init_local_endpoint({ snitch.local()->get_datacenter(), snitch.local()->get_rack() });
+            }).get();
+
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
             sharded<cql3::cql_config> cql_config;
