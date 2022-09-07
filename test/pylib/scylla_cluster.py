@@ -578,7 +578,9 @@ class ScyllaCluster:
         running when it's added to the pool, which can't be attributed
         to any specific test, throwing it here would stop a specific
         test."""
-        if self.start_exception:
+        if self.start_exception is not None:
+            import sys  # XXX
+            print(f"XXX before_test start exception {self.start_exception} -----", file=sys.stderr) # XXX
             raise self.start_exception
 
         for server in self.running.values():
@@ -587,6 +589,10 @@ class ScyllaCluster:
     def after_test(self, name) -> None:
         """Check that the cluster is still alive and the test
         hasn't left any garbage."""
+        # XXX
+        if self.start_exception is not None:
+            import sys
+            print(f"XXX after_test start exception {self.start_exception}", file=sys.stderr) # XXX
         assert self.start_exception is None
         if self._get_keyspace_count() != self.keyspace_count:
             raise RuntimeError("Test post-condition failed, "
