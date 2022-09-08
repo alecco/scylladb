@@ -932,18 +932,18 @@ schema_ptr system_keyspace::group0_history() {
     return schema;
 }
 
-schema_ptr system_keyspace::discovery() {
+schema_ptr system_keyspace::group0_peers() {
     static thread_local auto schema = [] {
-        auto id = generate_legacy_id(NAME, DISCOVERY);
-        return schema_builder(NAME, DISCOVERY, id)
+        auto id = generate_legacy_id(NAME, GROUP0_PEERS);
+        return schema_builder(NAME, GROUP0_PEERS, id)
             // This is a single-partition table with key 'peers'
             .with_column("key", utf8_type, column_kind::partition_key)
-            // Opaque connection properties. See `raft::server_info`.
-            .with_column("server_info", bytes_type, column_kind::clustering_key)
+            // Peer ip address
+            .with_column("ip", inet_addr_type, column_kind::clustering_key)
             // The ID of the group 0 server on that peer.
             // May be unknown during discovery, then it's set to UUID 0.
             .with_column("raft_id", uuid_type)
-            .set_comment("State of cluster discovery algorithm: the set of discovered peers")
+            .set_comment("The set of discovered peers")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
             .with_null_sharder()
@@ -2699,7 +2699,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
     });
     if (cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
-        r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), group0_history(), discovery()});
+        r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), group0_history(), group0_peers()});
 
         if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
             r.insert(r.end(), {broadcast_kv_store()});
