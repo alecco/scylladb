@@ -357,7 +357,14 @@ public:
 
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
 
-        rslog.error("on_join{} {} {}", endpoint, ep_state);
+        rslog.error("on_join{} {}", endpoint);
+
+        auto app_state_ptr = ep_state.get_application_state_ptr(gms::application_state::RAFT_SERVER_ID);
+        if (app_state_ptr) {
+            raft::server_id id(utils::UUID(app_state_ptr->value));
+            set(id, endpoint, true);
+        }
+
         return make_ready_future<>();
     }
 
