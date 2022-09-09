@@ -289,12 +289,36 @@ future<> raft_group0::abort() {
     co_await _shutdown_gate.close();
 }
 
+static constexpr auto DISCOVERY_KEY = "peers";
+
+static future<discovery::peer_list> load_discovered_peers(cql3::query_processor& qp) {
+    static const auto load_cql = format(
+            "SELECT ip, raft_id FROM system.{} WHERE key = '{}'",
+            db::system_keyspace::GROUP0_PEERS, DISCOVERY_KEY);
+    auto rs = co_await qp.execute_internal(load_cql, cql3::query_processor::cache_internal::yes);
+    assert(rs);
+
+    discovery::peer_list peers;
+    for (auto& r: *rs) {
+        peers.push_back({
+            raft::server_id{r.get_as<utils::UUID>("raft_id")},
+            gms::inet_address{r.get_as<net::inet_address>("ip")}
+        });
+    }
+
+    co_return peers;
+}
+
 future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     assert(group0_id != raft::group_id{});
 
     auto my_id = co_await load_my_id();
-
+    auto peers = co_await load_discovered_peers(_qp);
+    for (auto& peer : peers) {
+        _raft_gr.address_map().set(peer.id, peer.ip, true);
+    }
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
+
     co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_id));
     _group0.emplace<raft::group_id>(group0_id);
 }
@@ -712,8 +736,6 @@ future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list pee
     }, _group0);
 }
 
-static constexpr auto DISCOVERY_KEY = "peers";
-
 static mutation make_discovery_mutation(discovery::peer_list peers) {
     auto s = db::system_keyspace::group0_peers();
     auto ts = api::new_timestamp();
@@ -732,24 +754,6 @@ static mutation make_discovery_mutation(discovery::peer_list peers) {
 
 static future<> store_discovered_peers(cql3::query_processor& qp, discovery::peer_list peers) {
     return qp.proxy().mutate_locally({make_discovery_mutation(std::move(peers))}, tracing::trace_state_ptr{});
-}
-
-static future<discovery::peer_list> load_discovered_peers(cql3::query_processor& qp) {
-    static const auto load_cql = format(
-            "SELECT ip, raft_id FROM system.{} WHERE key = '{}'",
-            db::system_keyspace::GROUP0_PEERS, DISCOVERY_KEY);
-    auto rs = co_await qp.execute_internal(load_cql, cql3::query_processor::cache_internal::yes);
-    assert(rs);
-
-    discovery::peer_list peers;
-    for (auto& r: *rs) {
-        peers.push_back({
-            raft::server_id{r.get_as<utils::UUID>("raft_id")},
-            gms::inet_address{r.get_as<net::inet_address>("ip")}
-        });
-    }
-
-    co_return peers;
 }
 
 future<persistent_discovery> persistent_discovery::make(discovery_peer self, peer_list seeds, cql3::query_processor& qp) {
