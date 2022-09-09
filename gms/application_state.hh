@@ -24,7 +24,7 @@ enum class application_state {
     REMOVAL_COORDINATOR,
     INTERNAL_IP,
     RPC_ADDRESS,
-    X_11_PADDING, // padding specifically for 1.1
+    RAFT_SERVER_ID,
     SEVERITY,
     NET_VERSION,
     HOST_ID,
