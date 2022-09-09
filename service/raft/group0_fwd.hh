@@ -41,6 +41,7 @@ struct group0_info {
     raft::group_id group0_id;
     raft::server_id id;
     gms::inet_address ip;
+    std::vector<discovery_peer> peers;
     bool operator==(const group0_info& rhs) const {
         return rhs.group0_id == group0_id && rhs.id == id && rhs.ip == ip;
     }
