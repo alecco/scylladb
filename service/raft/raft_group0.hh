@@ -93,6 +93,9 @@ public:
         gms::feature_service& feat,
         raft_group0_client& client);
 
+    // Helper to access raft group registry.
+    raft_group_registry& raft_gr() { return _raft_gr; }
+
     // Call before destroying the object.
     future<> abort();
 

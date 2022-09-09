@@ -406,6 +406,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
+    if (_group0->raft_gr().is_enabled()) {
+        auto id = _group0->raft_gr().group0().id();
+        app_states.emplace(gms::application_state::RAFT_SERVER_ID, versioned_value::raft_server_id(id.id));
+    }
     app_states.emplace(gms::application_state::RELEASE_VERSION, versioned_value::release_version());
     app_states.emplace(gms::application_state::SUPPORTED_FEATURES, versioned_value::supported_features(features));
     app_states.emplace(gms::application_state::CACHE_HITRATES, versioned_value::cache_hitrates(""));
