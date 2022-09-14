@@ -29,6 +29,11 @@ class Pool(Generic[T]):
 
     async def get(self) -> T:
         if self.pool.empty() and self.total < self.pool.maxsize:
+            await self.add_one()
+        return await self.pool.get()
+
+    async def add_one(self) -> None:
+        if self.total < self.pool.maxsize:
             # Increment the total first to avoid a race
             # during self.build()
             self.total += 1
@@ -37,8 +42,6 @@ class Pool(Generic[T]):
             except:     # noqa: E722
                 self.total -= 1
                 raise
-
-        return await self.pool.get()
 
     async def put(self, obj: T):
         await self.pool.put(obj)

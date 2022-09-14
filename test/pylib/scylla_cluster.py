@@ -742,6 +742,7 @@ class ScyllaClusterManager:
             await self.clusters.put(self.cluster)
         else:
             await self.cluster.stop()
+            await self.clusters.add_one()   # Replace with fresh one
         del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
