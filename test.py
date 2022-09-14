@@ -333,7 +333,7 @@ class PythonTestSuite(TestSuite):
 
         self.create_cluster = self.topology_for_class(topology["class"], topology)
 
-        self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
+        self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster, "clusters")
 
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
 
@@ -839,6 +839,7 @@ class TopologyTest(PythonTest):
 
     async def run(self, options: argparse.Namespace) -> Test:
 
+        logging.info("Test %s run starting", self.uname)
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
         async with get_cluster_manager(self.shortname, self.suite.clusters, test_path) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
@@ -854,6 +855,7 @@ class TopologyTest(PythonTest):
                     # Don't try to continue if the cluster is broken
                     raise
             logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        logging.info("Test %s run finished", self.uname)
         return self
 
 

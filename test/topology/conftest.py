@@ -8,10 +8,6 @@
 
 import asyncio
 import logging
-logging.basicConfig(
-    format='%(asctime)s %(levelname)-8s %(message)s',
-    level=logging.INFO,
-    datefmt='%Y-%m-%d %H:%M:%S')
 import pathlib
 import ssl
 import sys
@@ -21,6 +17,7 @@ from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 import pytest
 import cassandra                                                         # type: ignore
+from cassandra.auth import PlainTextAuthProvider                         # type: ignore  XXX re-added
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
@@ -81,7 +78,7 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
 
 
 def run_async(self, *args, **kwargs) -> asyncio.Future:
-    kwargs.setdefault("timeout", 120.0)
+    kwargs.setdefault("timeout", 60.0)
     return _wrap_future(self.execute_async(*args, **kwargs))
 
 
@@ -93,16 +90,20 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
+    caslog = logging.getLogger('cassandra')
+    # XXX oldlevel = caslog.getEffectiveLevel()
+    auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
     profile = ExecutionProfile(
-        load_balancing_policy=WhiteListRoundRobinPolicy(hosts=hosts[:1]),
-        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        load_balancing_policy=WhiteListRoundRobinPolicy(hosts=hosts[:1]),  # XXX XXX XXX ONE HOST ONLY
+        # XXX consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        consistency_level=ConsistencyLevel.ONE,  # XXX from cqlsh
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeout (in seconds) for execute() commands is 10, which
         # should have been more than enough, but in some extreme cases with a
         # very slow debug build running on a very busy machine and a very slow
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
-        request_timeout=120)
+        request_timeout=60)
     if ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -111,7 +112,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
         ssl_context = None
 
     return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                   contact_points=hosts,
+                   contact_points=hosts[:1],   # XXX XXX XXX ONE HOST ONLY
                    port=port,
                    # TODO: make the protocol version an option, to allow testing with
                    # different versions. If we drop this setting completely, it will
@@ -120,15 +121,17 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                    # NOTE: No auth provider as auth keysppace has RF=1 and topology will take
                    # down nodes, causing errors. If auth is needed in the future for topology
                    # tests, they should bump up auth RF and run repair.
+                   auth_provider=auth, # XXX re-added to debug
                    ssl_context=ssl_context,
                    # The default timeout for new connections is 5 seconds, and for
                    # requests made by the control connection is 2 seconds. These should
                    # have been more than enough, but in some extreme cases with a very
                    # slow debug build running on a very busy machine, they may not be.
                    # so let's increase them to 60 seconds. See issue #11289.
-                   connect_timeout = 120,
-                   control_connection_timeout = 120,
-                   max_schema_agreement_wait=120,
+                   connect_timeout = 60,
+                   control_connection_timeout = 60,
+                   max_schema_agreement_wait=20,
+                   # XXX executor_threads=10,
                    )
 
 

@@ -715,6 +715,7 @@ class ScyllaClusterManager:
 
     async def start(self) -> None:
         """Get first cluster, setup API"""
+        logging.info("ScyllaManager starting %s", self.test_name)
         await self._get_cluster()
         await self.runner.setup()
         self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
@@ -738,14 +739,19 @@ class ScyllaClusterManager:
             logging.info("Returning Scylla cluster %s", self.cluster)
             await self.clusters.put(self.cluster)
         else:
+            logging.info("Scylla cluster %s is dirty, stopping", self.cluster)
             await self.cluster.stop()
+        logging.info("XXX 1")  # XXX
         del self.cluster
+        logging.info("XXX 2")  # XXX
         if os.path.exists(self.manager_dir):
+            logging.info("XXX 3")  # XXX
             shutil.rmtree(self.manager_dir)
+        logging.info("XXX 4")  # XXX
 
     async def _get_cluster(self) -> None:
         self.cluster = await self.clusters.get()
-        logging.info("Getting new Scylla cluster %s", self.cluster)
+        logging.info("Got new Scylla cluster %s", self.cluster)
 
 
     def _setup_routes(self) -> None:

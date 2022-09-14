@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Generic, Callable, Awaitable, TypeVar, AsyncContextManager
 
 T = TypeVar('T')
@@ -21,11 +22,12 @@ class Pool(Generic[T]):
         await run_test(test, server)
     """
 
-    def __init__(self, size: int, build: Callable[[], Awaitable[T]]):
+    def __init__(self, size: int, build: Callable[[], Awaitable[T]], info=""):
         assert(size >= 0)
         self.pool: asyncio.Queue[T] = asyncio.Queue(size)
         self.build = build
         self.total = 0
+        self.info = info
 
     async def get(self) -> T:
         if self.pool.empty() and self.total < self.pool.maxsize:
@@ -33,11 +35,14 @@ class Pool(Generic[T]):
             # during self.build()
             self.total += 1
             try:
+                logging.info("Pool %s put", self.info)
                 await self.pool.put(await self.build())
             except:     # noqa: E722
+                logging.info("Pool %s put failed", self.info)
                 self.total -= 1
                 raise
 
+        logging.info("Pool %s going to get 1 out of %s", self.info, self.pool.qsize())
         return await self.pool.get()
 
     async def put(self, obj: T):

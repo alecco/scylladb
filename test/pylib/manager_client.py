@@ -58,11 +58,13 @@ class ManagerClient():
 
     def driver_close(self) -> None:
         """Disconnect from cluster"""
+        if self.cql is not None:
+            self.cql.shutdown()
+            self.cql = None
         if self.ccluster is not None:
             logger.debug("shutting down driver")
             self.ccluster.shutdown()
             self.ccluster = None
-        self.cql = None
 
     # Make driver update endpoints from remote connection
     def _driver_update(self) -> None:
