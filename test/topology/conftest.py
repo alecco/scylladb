@@ -8,6 +8,10 @@
 
 import asyncio
 import logging
+logging.basicConfig(
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    level=logging.INFO,
+    datefmt='%Y-%m-%d %H:%M:%S')
 import pathlib
 import ssl
 import sys
@@ -77,7 +81,7 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
 
 
 def run_async(self, *args, **kwargs) -> asyncio.Future:
-    kwargs.setdefault("timeout", 60.0)
+    kwargs.setdefault("timeout", 120.0)
     return _wrap_future(self.execute_async(*args, **kwargs))
 
 
@@ -90,7 +94,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
-        load_balancing_policy=WhiteListRoundRobinPolicy(hosts=hosts),
+        load_balancing_policy=WhiteListRoundRobinPolicy(hosts=hosts[:1]),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeout (in seconds) for execute() commands is 10, which
@@ -122,9 +126,9 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                    # have been more than enough, but in some extreme cases with a very
                    # slow debug build running on a very busy machine, they may not be.
                    # so let's increase them to 60 seconds. See issue #11289.
-                   connect_timeout = 60,
-                   control_connection_timeout = 60,
-                   max_schema_agreement_wait=60,
+                   connect_timeout = 120,
+                   control_connection_timeout = 120,
+                   max_schema_agreement_wait=120,
                    )
 
 
@@ -186,6 +190,6 @@ def fails_without_raft(request, check_pre_raft):
 # used in tests to make schema changes. Tables are dropped after finished.
 @pytest.fixture(scope="function")
 def random_tables(request, manager):
-    tables = RandomTables(request.node.name, manager, unique_name())
+    tables = RandomTables(request.node.name, manager, "test_keyspace")
     yield tables
     tables.drop_all()

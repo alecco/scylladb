@@ -787,7 +787,6 @@ class PythonTest(Test):
         self.is_before_test_ok = False
         self.is_after_test_ok = False
         self.args = [
-            "-s",  # don't capture print() output inside pytest
             "-o",
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),
