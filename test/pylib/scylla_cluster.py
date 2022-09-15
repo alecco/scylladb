@@ -59,7 +59,7 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
         # to add here specific experimental features as they are introduced.
         'enable_user_defined_functions': True,
         'experimental': True,
-        'experimental_features': ['raft', 'udf'],
+        'experimental_features': ['udf'],
 
         'skip_wait_for_gossip_to_settle': 0,
         'ring_delay_ms': 0,
@@ -99,6 +99,7 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--max-networking-io-control-blocks', '100',
     '--unsafe-bypass-fsync', '1',
     '--kernel-page-cache', '1',
+    '--consistent-cluster-management', '1',
 ]
 
 
