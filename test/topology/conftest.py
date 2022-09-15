@@ -174,7 +174,8 @@ def check_pre_raft(cql):
         return False
     # In Scylla, we check Raft mode by inspecting the configuration via CQL.
     experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
-    return not '"raft"' in experimental_features
+    consistent_cluster_management = list(cql.execute("SELECT value FROM system.config WHERE name = 'consistent_cluster_management'"))[0].value
+    return not '"raft"' in experimental_features and not '"true"' in consistent_cluster_management
 
 
 @pytest.fixture(scope="function")
