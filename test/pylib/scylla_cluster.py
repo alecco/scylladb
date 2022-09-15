@@ -99,6 +99,7 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--max-networking-io-control-blocks', '100',
     '--unsafe-bypass-fsync', '1',
     '--kernel-page-cache', '1',
+    # '--consistent-cluster-management', '1',
 ]
 
 
