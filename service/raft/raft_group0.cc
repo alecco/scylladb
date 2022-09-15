@@ -343,7 +343,7 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     auto my_id = co_await load_my_id();
     auto peers = co_await load_discovered_peers(_qp);
     for (auto& peer : peers) {
-        _raft_gr.address_map().set(peer.id, peer.ip, true);
+        _raft_gr.address_map().set(peer.id, peer.ip);
     }
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
 

@@ -92,7 +92,7 @@ void raft_group_registry::init_rpc_verbs() {
             auto& rpc = self.get_rpc(gid);
             // The address learnt from a probably unknown server should
             // eventually expire
-            self._address_map->set(from, std::move(addr), true, true);
+            self._address_map->set(from, std::move(addr));
             // Execute the actual message handling code
             return handler(rpc);
         });

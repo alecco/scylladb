@@ -279,6 +279,18 @@ public:
         }
         return {};
     }
+
+    std::optional<gms::inet_address> clear_expiring_flag(raft::server_id id) {
+        auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
+        if (set_it == _set.end()) {
+            return std::nullopt;
+        }
+        if (set_it->expiring()) {
+            // Change the mapping from expiring to regular
+            unlink_and_dispose(to_list_iterator(set_it));
+        }
+        return set_it->_addr;
+    }
     // Inserts a new mapping or updates the existing one.
     // An entry can be changed from expiring to non expiring one, but not the other way.
     // The function verifies that if the mapping exists, then its inet_address
@@ -287,48 +299,30 @@ public:
     // This means that we cannot remap the entry's actual inet_address but
     // nonetheless the function can be used to promote the entry from
     // expiring to permanent or vice versa.
-    void set(raft::server_id id, gms::inet_address addr, bool expiring, bool allow_override = true) {
+    void set(raft::server_id id, gms::inet_address addr) {
         auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
         if (set_it == _set.end()) {
-            auto entry = new timestamped_entry(_set, std::move(id), std::move(addr), expiring);
+            auto entry = new timestamped_entry(_set, std::move(id), std::move(addr), true);
             _set.insert(*entry);
-            if (expiring) {
-                auto ts_ptr = new expiring_entry_ptr(_expiring_list, entry);
-                _expiring_list.push_front(*ts_ptr);
-                if (!_timer.armed()) {
-                    _timer.arm(_expiry_period);
-                }
+
+            auto ts_ptr = new expiring_entry_ptr(_expiring_list, entry);
+            _expiring_list.push_front(*ts_ptr);
+            if (!_timer.armed()) {
+                _timer.arm(_expiry_period);
             }
             return;
         }
 
-        // Don't allow to remap to a different address
         if (set_it->_addr != addr) {
-            if (allow_override) {
-                set_it->_addr = addr;
-            } else {
-                on_internal_error(rslog, format("raft_address_map: expected to get inet_address {} for raft server id {} (got {})",
-                        set_it->_addr, id, addr));
-            }
+            // IP address has changed
+            set_it->_addr = addr;
         }
 
         if (set_it->expiring()) {
-            if (!expiring) {
-                // Change the mapping from expiring to regular
-                unlink_and_dispose(to_list_iterator(set_it));
-            } else {
-                // Update timestamp of expiring entry
-                to_list_iterator(set_it)->touch(); // Re-insert in the front of _expiring_list
-            }
+            // Update timestamp of expiring entry
+            to_list_iterator(set_it)->touch(); // Re-insert in the front of _expiring_list
         }
         // No action needed when a regular entry is updated
-    }
-
-    // A shortcut to setting a new permanent address
-    void set(raft::server_address addr) {
-        return set(addr.id,
-            ser::deserialize_from_buffer(addr.info, boost::type<gms::inet_address>{}),
-            false);
     }
 
     // Erase an entry from the server address map and return its address.
@@ -362,7 +356,7 @@ public:
         auto app_state_ptr = ep_state.get_application_state_ptr(gms::application_state::RAFT_SERVER_ID);
         if (app_state_ptr) {
             raft::server_id id(utils::UUID(app_state_ptr->value));
-            set(id, endpoint, true);
+            set(id, endpoint);
         }
 
         return make_ready_future<>();

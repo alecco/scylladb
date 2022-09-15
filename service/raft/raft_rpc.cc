@@ -148,11 +148,12 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::
 }
 
 void raft_rpc::add_server(raft::server_address addr) {
-    auto inet_addr = raft_addr_to_inet_addr(addr.info);
     // Entries explicitly managed via `rpc::add_server` and `rpc::remove_server` should never expire
     // while entries learnt upon receiving an rpc message should be expirable.
-    _address_map.set(addr.id, inet_addr, false);
-    _on_server_update(inet_addr, addr.id, true);
+    auto inet_addr = _address_map.clear_expiring_flag(addr.id);
+    if (inet_addr) {
+        _on_server_update(*inet_addr, addr.id, true);
+    }
 }
 
 void raft_rpc::remove_server(raft::server_id id) {

@@ -37,7 +37,8 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Set + erase regular entry works as expected
         raft_address_map<manual_clock> m;
-        m.set(id1, addr1, false);
+        m.set(id1, addr1);
+        m.clear_expiring_flag(id1);
         auto found = m.find(id1);
         BOOST_CHECK(!!found && *found == addr1);
         m.erase(id1);
@@ -46,7 +47,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Set expiring + erase works as expected
         raft_address_map<manual_clock> m;
-        m.set(id1, addr1, true);
+        m.set(id1, addr1);
         auto found = m.find(id1);
         BOOST_CHECK(!!found && *found == addr1);
         m.erase(id1);
@@ -55,7 +56,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Set expiring + wait for expiration works as expected
         raft_address_map<manual_clock> m;
-        m.set(id1, addr1, true);
+        m.set(id1, addr1);
         auto found = m.find(id1);
         BOOST_CHECK(!!found && *found == addr1);
         // The entry stay in the cache for 1 hour
@@ -65,7 +66,8 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Check that regular entries don't expire
         raft_address_map<manual_clock> m;
-        m.set(id1, addr1, false);
+        m.set(id1, addr1);
+        m.clear_expiring_flag(id1);
         manual_clock::advance(expiration_time);
         BOOST_CHECK(!!m.find(id1) && *m.find(id1) == addr1);
     }
@@ -73,9 +75,9 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         // Set two expirable entries with different timestamps, check for
         // automatic rearming of expiration timer after the first one expires.
         raft_address_map<manual_clock> m;
-        m.set(id1, addr1, true);
+        m.set(id1, addr1);
         manual_clock::advance(30min);
-        m.set(id2, addr2, true);
+        m.set(id2, addr2);
         // Here the expiration timer will rearm itself automatically since id2
         // hasn't expired yet and need to be collected some time later
         manual_clock::advance(30min + 1s);
@@ -90,22 +92,24 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         // - happens when IP address changes after a node restart
         scoped_no_abort_on_internal_error abort_guard;
         raft_address_map<manual_clock> m;
-        m.set(id1, addr1, false);
-        BOOST_CHECK_NO_THROW(m.set(id1, addr2, false));
+        m.set(id1, addr1);
+        m.clear_expiring_flag(id1);
+        BOOST_CHECK_NO_THROW(m.set(id1, addr2));
     }
     {
         // Check that transition from regular to expiring entry is not possible
         raft_address_map<manual_clock> m;
-        m.set(id1, addr1, false);
-        m.set(id1, addr1, true);
+        m.set(id1, addr1);
+        m.clear_expiring_flag(id1);
+        m.set(id1, addr1);
         manual_clock::advance(expiration_time);
         BOOST_CHECK(m.find(id1));
     }
     {
         // Check that transition from expiring to regular entry works
         raft_address_map<manual_clock> m;
-        m.set(id1, addr1, true);
-        m.set(id1, addr1, false);
+        m.set(id1, addr1);
+        m.clear_expiring_flag(id1);
         manual_clock::advance(expiration_time);
         BOOST_CHECK(!!m.find(id1) && *m.find(id1) == addr1);
     }
