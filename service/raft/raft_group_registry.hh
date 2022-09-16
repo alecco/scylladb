@@ -100,6 +100,8 @@ public:
     // after boot/upgrade is complete
     raft::server& group0();
 
+    bool has_group0() const;
+
     // Start raft server instance, store in the map of raft servers and
     // arm the associated timer to tick the server.
     future<> start_server_for_group(raft_server_for_group grp);

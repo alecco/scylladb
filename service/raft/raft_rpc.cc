@@ -230,16 +230,4 @@ future<raft::add_entry_reply> raft_rpc::execute_modify_config(raft::server_id fr
     });
 }
 
-gms::inet_address raft_addr_to_inet_addr(const raft::server_info& info) {
-    return ser::deserialize_from_buffer(info, boost::type<gms::inet_address>());
-}
-
-gms::inet_address raft_addr_to_inet_addr(const raft::server_address& addr) {
-    return raft_addr_to_inet_addr(addr.info);
-}
-
-raft::server_info inet_addr_to_raft_addr(const gms::inet_address& addr) {
-    return ser::serialize_to_buffer<bytes>(addr);
-}
-
 } // end of namespace service

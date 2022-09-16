@@ -268,6 +268,10 @@ raft::server& raft_group_registry::group0() {
     return get_server(*_group0_id);
 }
 
+bool raft_group_registry::has_group0() const {
+    return _group0_id.has_value();
+}
+
 future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
     auto gid = new_grp.gid;
 
@@ -281,7 +285,7 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
         co_await new_grp.server->start();
         new_grp.server->register_metrics();
     } catch (...) {
-        on_internal_error(rslog, std::current_exception());
+        on_internal_error(rslog, format("here we go {}", std::current_exception()));
     }
 
     std::exception_ptr ex;

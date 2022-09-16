@@ -380,9 +380,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
             // TODO: link to the manual recovery docs
         }
         group0_id = g0_info.group0_id;
-        raft::server_address my_addr{my_id,
-            inet_addr_to_raft_addr(_gossiper.get_broadcast_address())
-        };
+        raft::server_address my_addr{my_id, {}};
 
         if (server == nullptr) {
             // This is the first time discovery is run. Create and start a Raft server for group 0 on this node.
@@ -433,13 +431,31 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
     group0_log.info("{} joined group 0 with id {}", my_id, group0_id);
 }
 
+struct group0_members {
+    const raft::server& _group0_server;
+    const raft_address_map<>& _address_map;
+
+    std::vector<gms::inet_address> get_inet_addrs() const {
+        const raft::config_member_set& members = _group0_server.get_configuration().current;
+        std::vector<gms::inet_address> ret;
+        for (auto& srv: members) {
+            ret.push_back(*_address_map.find(srv.addr.id));
+        }
+        return ret;
+    }
+
+    bool is_joint() const {
+        return _group0_server.get_configuration().is_joint();
+    }
+};
+
 static future<bool> wait_for_peers_to_enter_synchronize_state(
-        const raft::server& group0_server, netw::messaging_service&, abort_source&, gate::holder pause_shutdown);
+        const group0_members& members0, netw::messaging_service&, abort_source&, gate::holder pause_shutdown);
 static future<bool> anyone_finished_upgrade(
-        const raft::server& group0_server, netw::messaging_service&, abort_source&);
+        const group0_members& members0, netw::messaging_service&, abort_source&);
 static future<bool> synchronize_schema(
         replica::database&, netw::messaging_service&,
-        const raft::server& group0_server, service::migration_manager&,
+        const group0_members& members0, service::migration_manager&,
         const noncopyable_function<future<bool>()>& can_finish_early,
         abort_source&);
 
@@ -497,6 +513,7 @@ future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unord
 
     group0_log.info("setup_group0: ensuring that the cluster has fully upgraded to use Raft...");
     auto& group0_server = _raft_gr.group0();
+    group0_members members0{group0_server, _raft_gr.address_map()};
 
     // Perform a Raft read barrier so we know the set of group 0 members and our group 0 state is up-to-date.
     co_await group0_server.read_barrier(&_abort_source);
@@ -513,11 +530,11 @@ future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unord
         // In a fully upgraded cluster this should finish immediately (if the network works well) - everyone is in `use_post_raft_procedures`.
         // In a cluster that is currently in the middle of `upgrade_to_group0`, this will cause us to wait until the procedure finishes.
         group0_log.info("setup_group0: ensuring that the cluster has fully upgraded to use Raft...");
-        if (co_await wait_for_peers_to_enter_synchronize_state(group0_server, _ms, _abort_source, _shutdown_gate.hold())) {
+        if (co_await wait_for_peers_to_enter_synchronize_state(members0, _ms, _abort_source, _shutdown_gate.hold())) {
             // Everyone entered `synchronize` state. That means we're bootstrapping in the middle of `upgrade_to_group0`.
             // We need to finish upgrade as others do.
-            auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(group0_server), std::ref(_ms), std::ref(_abort_source));
-            co_await synchronize_schema(_qp.db().real_database(), _ms, group0_server, _mm, can_finish_early, _abort_source);
+            auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms), std::ref(_abort_source));
+            co_await synchronize_schema(_qp.db().real_database(), _ms, members0, _mm, can_finish_early, _abort_source);
         }
     }
 
@@ -534,7 +551,7 @@ future<> raft_group0::finish_setup_after_join() {
             group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
             // Just bootstrapped and joined as non-voter. Become a voter.
             auto pause_shutdown = _shutdown_gate.hold();
-            raft::server_address my_addr{my_id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
+            raft::server_address my_addr{my_id, {}};
             co_await _raft_gr.group0().modify_config({{my_addr, true}}, {}, &_abort_source);
             group0_log.info("finish_setup_after_join: became a group 0 voter."); // No need to run `upgrade_to_group0()` since we must have bootstrapped with Raft
             // (that's the only way to join as non-voter today).
@@ -827,13 +844,6 @@ persistent_discovery::persistent_discovery(discovery_peer self, const peer_list&
     }
 }
 
-static std::vector<gms::inet_address> get_raft_members_inet_addrs(const raft::config_member_set& members) {
-    std::vector<gms::inet_address> ret;
-    for (auto& srv: members) {
-        ret.push_back(raft_addr_to_inet_addr(srv.addr));
-    }
-    return ret;
-}
 
 // Given a function `fun` that takes an `abort_source&` as parameter,
 // call `fun` with an internally constructed abort source which is aborted after the given time duration.
@@ -913,15 +923,14 @@ with_timeout(abort_source& as, db::timeout_clock::duration d, F&& fun) {
 
 // Precondition: we joined group 0 and the server is running.
 // Assumes we don't leave group 0 while running.
-static future<> wait_until_every_peer_joined_group0(db::system_keyspace& sys_ks, const raft::server& group0_server, abort_source& as) {
+static future<> wait_until_every_peer_joined_group0(db::system_keyspace& sys_ks, const group0_members& members0, abort_source& as) {
     static constexpr auto retry_period = std::chrono::seconds{1};
 
     while (true) {
         // We fetch both config and peers on each iteration; we don't assume that they don't change.
         // No new node should join while the procedure is running, but nodes may leave.
-        auto group0_config = group0_server.get_configuration();
 
-        auto current_config = get_raft_members_inet_addrs(group0_config.current);
+        auto current_config = members0.get_inet_addrs();
         std::sort(current_config.begin(), current_config.end());
 
         auto peers = co_await sys_ks.load_peers();
@@ -931,19 +940,19 @@ static future<> wait_until_every_peer_joined_group0(db::system_keyspace& sys_ks,
         std::set_difference(peers.begin(), peers.end(), current_config.begin(), current_config.end(), std::back_inserter(missing_peers));
 
         if (missing_peers.empty()) {
-            if (!group0_config.is_joint()) {
+            if (!members0.is_joint()) {
                 co_return;
             }
 
-            upgrade_log.info("group 0 configuration is joint: {}. Sleeping for a while before retrying...", group0_config);
+            upgrade_log.info("group 0 configuration is joint: {}. Sleeping for a while before retrying...", current_config);
             co_await sleep_abortable(retry_period, as);
             continue;
         }
 
         upgrade_log.info(
             "group 0 configuration does not contain all peers yet."
-            " Missing peers: {}. Current group 0 config: {}. Current group 0 config addresses: {}. Sleeping for a while before retrying...",
-            missing_peers, group0_config, current_config);
+            " Missing peers: {}. Current group 0 config: {}. Sleeping for a while before retrying...",
+            missing_peers, current_config);
 
         co_await sleep_abortable(retry_period, as);
     }
@@ -952,11 +961,11 @@ static future<> wait_until_every_peer_joined_group0(db::system_keyspace& sys_ks,
 // Check if anyone entered `use_post_raft_procedures`.
 // This is a best-effort single round-trip check; we don't retry if some nodes fail to answer.
 static future<bool> anyone_finished_upgrade(
-        const raft::server& group0_server, netw::messaging_service& ms, abort_source& as) {
+        const group0_members& members0, netw::messaging_service& ms, abort_source& as) {
     static constexpr auto max_concurrency = 10;
     static constexpr auto rpc_timeout = std::chrono::seconds{5};
 
-    auto current_config = get_raft_members_inet_addrs(group0_server.get_configuration().current);
+    auto current_config = members0.get_inet_addrs();
     bool finished = false;
     co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
         try {
@@ -1029,7 +1038,7 @@ static future<> check_remote_group0_upgrade_state_dry_run(
 // Returns `true` if we finished because everybody entered `synchronize`.
 // Returns `false` if we finished because somebody entered `use_post_raft_procedures`.
 static future<bool> wait_for_peers_to_enter_synchronize_state(
-        const raft::server& group0_server, netw::messaging_service& ms, abort_source& as, gate::holder pause_shutdown) {
+        const group0_members& members0, netw::messaging_service& ms, abort_source& as, gate::holder pause_shutdown) {
     static constexpr auto retry_period = std::chrono::seconds{1};
     static constexpr auto rpc_timeout = std::chrono::seconds{5};
     static constexpr auto max_concurrency = 10;
@@ -1043,7 +1052,7 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
 
     while (true) {
         // We fetch the config again on every attempt to handle the possibility of removing failed nodes.
-        auto current_config = get_raft_members_inet_addrs(group0_server.get_configuration().current);
+        auto current_config = members0.get_inet_addrs();
 
         ::tracker<bool> tracker;
         auto retry = make_lw_shared<bool>(false);
@@ -1117,7 +1126,7 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
 // Returning nullopt means we finished early (`can_finish_early` returned true).
 static future<std::optional<std::unordered_map<gms::inet_address, table_schema_version>>>
 collect_schema_versions_from_group0_members(
-        netw::messaging_service& ms, const raft::server& group0_server,
+        netw::messaging_service& ms, const group0_members& members0,
         const noncopyable_function<future<bool>()>& can_finish_early,
         abort_source& as) {
     static constexpr auto max_retry_period = std::chrono::seconds{16};
@@ -1128,8 +1137,7 @@ collect_schema_versions_from_group0_members(
     std::unordered_map<gms::inet_address, table_schema_version> versions;
     while (true) {
         // We fetch the config on each iteration; some nodes may leave.
-        auto group0_config = group0_server.get_configuration();
-        auto current_config = get_raft_members_inet_addrs(group0_config.current);
+        auto current_config = members0.get_inet_addrs();
 
         bool failed = false;
         co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
@@ -1156,8 +1164,8 @@ collect_schema_versions_from_group0_members(
 
         if (failed) {
             upgrade_log.warn("synchronize_schema: there were some failures when collecting remote schema versions.");
-        } else if (group0_config.is_joint()) {
-            upgrade_log.warn("synchronize_schema: group 0 configuration is joint: {}.", group0_config);
+        } else if (members0.is_joint()) {
+            upgrade_log.warn("synchronize_schema: group 0 configuration is joint: {}.", current_config);
         } else {
             co_return versions;
         }
@@ -1178,6 +1186,8 @@ collect_schema_versions_from_group0_members(
     }
 }
 
+
+
 // Returning `true` means we synchronized schema.
 // `false` means we finished early after calling `can_finish_early`.
 //
@@ -1193,7 +1203,8 @@ collect_schema_versions_from_group0_members(
 // should cause everybody to arrive at the same result.
 static future<bool> synchronize_schema(
         replica::database& db, netw::messaging_service& ms,
-        const raft::server& group0_server, service::migration_manager& mm,
+        const group0_members& members0,
+        service::migration_manager& mm,
         const noncopyable_function<future<bool>()>& can_finish_early,
         abort_source& as) {
     static constexpr auto max_retry_period = std::chrono::seconds{32};
@@ -1206,7 +1217,7 @@ static future<bool> synchronize_schema(
 
     while (true) {
         upgrade_log.info("synchronize_schema: collecting schema versions from group 0 members...");
-        auto remote_versions = co_await collect_schema_versions_from_group0_members(ms, group0_server, can_finish_early, as);
+        auto remote_versions = co_await collect_schema_versions_from_group0_members(ms, members0, can_finish_early, as);
         if (!remote_versions) {
             upgrade_log.info("synchronize_schema: finished early.");
             co_return false;
@@ -1383,6 +1394,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
             "We're already a member of group 0."
             " Apparently we're restarting after a previous upgrade attempt failed.");
     }
+    group0_members members0{_raft_gr.group0(), _raft_gr.address_map()};
 
     // After we joined, we shouldn't be removed from group 0 until the end of the procedure.
     // The implementation of `leave_group0` waits until upgrade finishes before leaving the group.
@@ -1392,10 +1404,8 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
     // and we won't do anything harmful to other nodes while in `synchronize`, worst case being
     // that we get stuck.
 
-    auto& group0_server = _raft_gr.group0();
-
     upgrade_log.info("Waiting until every peer has joined Raft group 0...");
-    co_await wait_until_every_peer_joined_group0(sys_ks, group0_server, _abort_source);
+    co_await wait_until_every_peer_joined_group0(sys_ks, members0, _abort_source);
     upgrade_log.info("Every peer is a member of Raft group 0.");
 
     if (start_state == group0_upgrade_state::use_pre_raft_procedures) {
@@ -1409,7 +1419,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
         // to do any additional schema pulls (only verify quickly that the schema is still in sync).
         upgrade_log.info("Waiting for schema to synchronize across all nodes in group 0...");
         auto can_finish_early = [] { return make_ready_future<bool>(false); };
-        co_await synchronize_schema(_qp.db().real_database(), _ms, group0_server, _mm, can_finish_early, _abort_source);
+        co_await synchronize_schema(_qp.db().real_database(), _ms, members0, _mm, can_finish_early, _abort_source);
 
         // Before entering `synchronize`, perform a round-trip of `get_group0_upgrade_state` RPC calls
         // to everyone as a dry run, just to check that nodes respond to this RPC.
@@ -1419,9 +1429,8 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
         // a very high chance that the following steps succeed as well (we would need to be very unlucky otherwise).
         upgrade_log.info("Performing a dry run of remote `get_group0_upgrade_state` calls...");
         co_await check_remote_group0_upgrade_state_dry_run(
-                [&group0_server] {
-                    auto current_config = get_raft_members_inet_addrs(group0_server.get_configuration().current);
-                    return make_ready_future<std::vector<gms::inet_address>>(std::move(current_config));
+                [members0] {
+                    return make_ready_future<std::vector<gms::inet_address>>(members0.get_inet_addrs());
                 }, _ms, _abort_source);
 
         upgrade_log.info("Entering synchronize state.");
@@ -1431,14 +1440,14 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
     }
 
     upgrade_log.info("Waiting for all peers to enter synchronize state...");
-    if (!(co_await wait_for_peers_to_enter_synchronize_state(group0_server, _ms, _abort_source, _shutdown_gate.hold()))) {
+    if (!(co_await wait_for_peers_to_enter_synchronize_state(members0, _ms, _abort_source, _shutdown_gate.hold()))) {
         upgrade_log.info("Another node already finished upgrade. We can finish early.");
         co_return;
     }
 
     upgrade_log.info("All peers in synchronize state. Waiting for schema to synchronize...");
-    auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(group0_server), std::ref(_ms), std::ref(_abort_source));
-    if (!(co_await synchronize_schema(_qp.db().real_database(), _ms, group0_server, _mm, can_finish_early, _abort_source))) {
+    auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms), std::ref(_abort_source));
+    if (!(co_await synchronize_schema(_qp.db().real_database(), _ms, members0, _mm, can_finish_early, _abort_source))) {
         upgrade_log.info("Another node already finished upgrade. We can finish early.");
         co_return;
     }
