@@ -922,7 +922,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
     BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -935,7 +934,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_unused) {
     BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -948,7 +946,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(cfg.check_experimental(ef::UDF));
     BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -961,21 +958,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_alternator_streams) {
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     BOOST_CHECK(cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
-    BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
-    return make_ready_future();
-}
-
-SEASTAR_TEST_CASE(test_parse_experimental_features_raft) {
-    auto cfg_ptr = std::make_unique<config>();
-    config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental_features:\n    - raft\n", throw_on_error);
-    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::RAFT});
-    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
-    BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(cfg.check_experimental(ef::RAFT));
-    BOOST_CHECK(!cfg.check_experimental(ef::BROADCAST_TABLES));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -988,7 +970,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_broadcast_tables) {
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
     BOOST_CHECK(cfg.check_experimental(ef::BROADCAST_TABLES));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
@@ -1002,7 +983,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_keyspace_storage_options) {
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
     BOOST_CHECK(cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -1042,7 +1022,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_true) {
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(cfg.check_experimental(ef::UDF));
     BOOST_CHECK(cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
     BOOST_CHECK(cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -1054,7 +1033,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_false) {
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }

@@ -81,10 +81,9 @@ namespace db {
 
 /// Enumeration of all valid values for the `experimental` config entry.
 struct experimental_features_t {
-    // NOTE: RAFT and BROADCAST_TABLES features are not enabled via `experimental` umbrella flag.
     // These options should be enabled explicitly.
     // RAFT feature has to be enabled if BROADCAST_TABLES is enabled.
-    enum class feature { UNUSED, UDF, ALTERNATOR_STREAMS, ALTERNATOR_TTL, RAFT,
+    enum class feature { UNUSED, UDF, ALTERNATOR_STREAMS, ALTERNATOR_TTL,
             BROADCAST_TABLES, KEYSPACE_STORAGE_OPTIONS };
     static std::map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();
@@ -382,6 +381,8 @@ public:
 
     named_value<bool> ignore_truncation_record;
     named_value<bool> force_schema_commit_log;
+
+    named_value<bool> consistent_cluster_management;
 
     named_value<uint32_t> task_ttl_seconds;
 

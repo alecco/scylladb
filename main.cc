@@ -1074,8 +1074,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
 
-            raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
-                std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
+            raft_gr.start(cfg->consistent_cluster_management(), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
 
             // group0 client exists only on shard 0.
             // The client has to be created before `stop_raft` since during
@@ -1095,7 +1094,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
-            if (cfg->check_experimental(db::experimental_features_t::feature::RAFT)) {
+            if (cfg->consistent_cluster_management()) {
                 supervisor::notify("starting Raft Group Registry service");
             } else {
                 if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
