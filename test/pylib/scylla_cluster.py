@@ -31,6 +31,7 @@ from cassandra.cluster import Session           # pylint: disable=no-name-in-mod
 from cassandra.cluster import ExecutionProfile  # pylint: disable=no-name-in-module
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+import sys  # XXX
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -579,7 +580,6 @@ class ScyllaCluster:
         to any specific test, throwing it here would stop a specific
         test."""
         if self.start_exception is not None:
-            import sys  # XXX
             print(f"XXX before_test start exception {self.start_exception} -----", file=sys.stderr) # XXX
             raise self.start_exception
 
@@ -591,7 +591,6 @@ class ScyllaCluster:
         hasn't left any garbage."""
         # XXX
         if self.start_exception is not None:
-            import sys
             print(f"XXX after_test start exception {self.start_exception}", file=sys.stderr) # XXX
         assert self.start_exception is None
         if self._get_keyspace_count() != self.keyspace_count:
@@ -845,7 +844,9 @@ async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], tes
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
     manager = ScyllaClusterManager(test_name, clusters, test_path)
+    # XXX print(f"XXX get_cluster_manager  1 ---------", file=sys.stderr) # XXX
     await manager.start()
+    # XXX print(f"XXX get_cluster_manager  2 ---------", file=sys.stderr) # XXX
     try:
         yield manager
     finally:
