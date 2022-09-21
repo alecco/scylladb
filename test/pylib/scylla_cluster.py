@@ -874,8 +874,12 @@ async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], tes
         -> AsyncIterator[ScyllaClusterManager]:
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_name, clusters, test_path)
+    manager: Optional[ScyllaClusterManager] = None
     try:
+        manager = ScyllaClusterManager(test_name, clusters, test_path)
         yield manager
+    except Exception as exc:
+        raise exc
     finally:
-        await manager.stop()
+        if manager:
+            await manager.stop()
