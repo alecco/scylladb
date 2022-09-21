@@ -407,7 +407,13 @@ def check_pre_raft(dynamodb):
             ExpressionAttributeNames={'#key': 'name'},
             ExpressionAttributeValues={':val': 'experimental_features'}
         )['Items'][0]['value']
-    return not '"raft"' in experimental_features
+    consistent_cluster_management = config_table.query(
+            KeyConditionExpression='#key=:val',
+            ExpressionAttributeNames={'#key': 'name'},
+            ExpressionAttributeValues={':val': 'consistent_cluster_management'}
+        )['Items'][0]['value']
+    return not '"raft"' in experimental_features and not '"true"' in consistent_cluster_management
+
 @pytest.fixture(scope="function")
 def fails_without_raft(request, check_pre_raft):
     if check_pre_raft:
