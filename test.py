@@ -30,6 +30,7 @@ import yaml
 
 from abc import ABC, abstractmethod
 from io import StringIO
+import psutil
 from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
@@ -333,7 +334,16 @@ class PythonTestSuite(TestSuite):
 
         self.create_cluster = self.topology_for_class(topology["class"], topology)
 
-        self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
+        cfg_pool_size = cfg.get("pool_size", 2)
+        # Max 1 scylla server per core
+        cores = psutil.cpu_count(logical=False)
+        rf = topology["replication_factor"]
+        rf_core = int(cores / rf)
+        assert rf_core >= 1, f"Not enough cores to run test with replication factor {rf}"
+        cluster_pool_size = min(cfg_pool_size, rf_core)
+        logging.info("Setting up Cluster pool of size %s (config %s)", cluster_pool_size,
+                     cfg_pool_size)
+        self.clusters = Pool(cluster_pool_size, self.create_cluster)
 
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
 
