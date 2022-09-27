@@ -45,6 +45,7 @@ async def test_remove_server_add_column(manager, random_tables):
     servers = await manager.servers()
     table = await random_tables.add_table(ncolumns=5)
     await manager.server_add()
-    await manager.server_remove(servers[1])
+    server_uuid = await manager.get_server_uuid(servers[1])   # get uuid [1]
+    await manager.server_remove(servers[1], server_uuid)      # Remove   [1]
     await table.add_column()
     await random_tables.verify_schema()
