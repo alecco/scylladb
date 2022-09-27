@@ -21,6 +21,7 @@ from typing import Optional, Dict, List, Set, Callable, AsyncIterator, NamedTupl
 import uuid
 from io import BufferedWriter
 from test.pylib.pool import Pool
+from test.pylib.rest_client import ScyllaRESTAPIClient
 import aiohttp
 import aiohttp.web
 import yaml
@@ -707,6 +708,7 @@ class ScyllaClusterManager:
         self.app = aiohttp.web.Application()
         self._setup_routes()
         self.runner = aiohttp.web.AppRunner(self.app)
+        self.api = ScyllaRESTAPIClient()
 
     async def start(self) -> None:
         """Get first cluster, setup API"""
@@ -762,7 +764,8 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/server/{id}/start', self._cluster_server_start)
         self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
         self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
-        self.app.router.add_get('/cluster/removeserver/{id}', self._cluster_server_remove)
+        # TODO: only pass UUID
+        self.app.router.add_get('/cluster/removeserver/{ip}/{uuid}', self._cluster_server_remove)
         self.app.router.add_get('/cluster/server/{id}/get_config', self._server_get_config)
         self.app.router.add_put('/cluster/server/{id}/update_config', self._server_update_config)
 
@@ -844,9 +847,25 @@ class ScyllaClusterManager:
     async def _cluster_server_remove(self, _request) -> aiohttp.web.Response:
         """Remove a specified server"""
         assert self.cluster
-        server_id = _request.match_info['id']
-        if not await self.cluster.server_remove(server_id):
-            return aiohttp.web.Response(status=500, text=f"Host {server_id} not found")
+        # TODO: only pass UUID
+        to_remove_ip = _request.match_info['ip']
+        to_remove_uuid = _request.match_info['uuid']
+        assert len(self.cluster.running) > 2, "Can't remove last running node"
+        initiator_ip = next(s_id for s_id in self.cluster.running if s_id != to_remove_ip)
+        logging.debug("_cluster_server_remove initiator %s server %s %s", initiator_ip,
+                      to_remove_ip, to_remove_uuid)
+        # stop before remove
+        await self.cluster.server_stop(to_remove_ip, gracefully=True)
+        # initate remove
+        if not await self.api.remove_node_and_wait(initiator_ip, to_remove_uuid):
+            logging.debug("_cluster_server_remove initiator %s server %s %s", initiator_ip,
+                          to_remove_ip, to_remove_uuid)
+            return aiohttp.web.Response(status=500,
+                                        text=f"Error removing {to_remove_ip} {to_remove_uuid}")
+
+        # once removed from cluster, remove the server
+        if not await self.cluster.server_remove(to_remove_ip):
+            return aiohttp.web.Response(status=500, text=f"Host {to_remove_ip} not found")
         return aiohttp.web.Response(text="OK")
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:

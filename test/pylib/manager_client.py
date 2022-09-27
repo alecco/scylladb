@@ -11,9 +11,9 @@
 
 from typing import Dict, List, Optional, Callable
 import logging
+from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
-from test.pylib.rest_client import UnixRESTClient
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ class ManagerClient():
         self.ccluster: Optional[CassandraCluster] = None
         self.cql: Optional[CassandraSession] = None
         self.cli = UnixRESTClient(sock_path)
+        self.api = ScyllaRESTAPIClient()
 
     async def driver_connect(self) -> None:
         """Connect to cluster"""
@@ -135,10 +136,11 @@ class ManagerClient():
         logger.debug("ManagerClient added %s", server_id)
         return server_id
 
-    async def server_remove(self, server_id: str) -> None:
+    # TODO: only pass UUID
+    async def server_remove(self, to_remove_ip: str, to_remove_uuid: str) -> None:
         """Remove a specified server"""
-        logger.debug("ManagerClient removing %s", server_id)
-        await self.cli.get_text(f"/cluster/removeserver/{server_id}")
+        logger.debug("ManagerClient removing %s %s", to_remove_ip, to_remove_uuid)
+        await self.cli.get_text(f"/cluster/removeserver/{to_remove_ip}/{to_remove_uuid}")
         self._driver_update()
 
     async def server_get_config(self, server_id: str) -> Dict[str, object]:
@@ -152,3 +154,11 @@ class ManagerClient():
                                        {'key': key, 'value': value})
         if resp.status != 200:
             raise Exception(await resp.text())
+
+    async def get_server_uuid(self, server_id: str) -> None:
+        """Get server UUID through Scylla REST API"""
+        return await self.api.get_server_uuid(server_id)
+
+    async def server_wait_known(self, server_id: str, expected_server_id: str) -> bool:
+        """Wait for server_id know about expected_server_id through Scylla REST API"""
+        return await self.api.wait_for_host_known(server_id, expected_server_id)
