@@ -150,9 +150,8 @@ async def manager_internal(event_loop, request):
     port = int(request.config.getoption('port'))
     ssl = bool(request.config.getoption('ssl'))
     manager_int = ManagerClient(request.config.getoption('manager_api'), port, ssl, cluster_con)
-    await manager_int.start()
     yield manager_int
-    manager_int.driver_close()   # Close after last test case
+    manager_int.stop()   # Stop and close after last test case in this pytest file
 
 @pytest.fixture(scope="function")
 async def manager(request, manager_internal):
