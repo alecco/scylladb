@@ -21,6 +21,7 @@ from typing import Optional, Dict, List, Set, Callable, AsyncIterator, NamedTupl
 import uuid
 from io import BufferedWriter
 from test.pylib.pool import Pool
+from test.pylib.rest_client import ScyllaRESTAPIClient
 import aiohttp
 import aiohttp.web
 import yaml
@@ -471,6 +472,7 @@ class ScyllaCluster:
         self.create_server = create_server
         self.running: Dict[str, ScyllaServer] = {}  # started servers
         self.stopped: Dict[str, ScyllaServer] = {}  # servers no longer running but present
+        self.decommissioned: Set[str] = set()       # decommissioned servers (might be running)
         # cluster is started (but it might not have running servers)
         self.is_running: bool = False
         # cluster was modified in a way it should not be used in subsequent tests
@@ -567,10 +569,16 @@ class ScyllaCluster:
     def __str__(self):
         return f"{{{', '.join(str(c) for c in self.running)}}}"
 
+    def active_servers(self) -> List[str]:
+        return list(set(self.running.keys()) - self.decommissioned)
+
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert self.start_exception is None
-        server = next(iter(self.running.values()))
+        endpoints = self.active_servers()
+        assert endpoints, "No active nodes left"
+        server = self.running[next(iter(endpoints))]
+        logging.info("_get_keyspace_count() using server %s", server)
         assert server.control_connection is not None
         rows = server.control_connection.execute(
                "select count(*) as c from system_schema.keyspaces")
@@ -616,6 +624,12 @@ class ScyllaCluster:
         self.stopped[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} stopped")
 
+    def server_decommission(self, server_id: str) -> ActionReturn:
+        """Mark server as decommissioned."""
+        logging.debug("Cluster %s marking server %s as decommissioned", self, server_id)
+        self.decommissioned.add(server_id)
+        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} stopped")
+
     async def server_start(self, server_id: str) -> ActionReturn:
         """Start a stopped server"""
         logging.info("Cluster %s starting server", self)
@@ -640,7 +654,7 @@ class ScyllaCluster:
             return ret
         return await self.server_start(server_id)
 
-    async def server_remove(self, server_id: str) -> ActionReturn:
+    async def server_remove(self, server_id: str) -> None:
         """Remove a specified server"""
         raise NotImplementedError
 
@@ -691,6 +705,7 @@ class ScyllaClusterManager:
         self.app = aiohttp.web.Application()
         self._setup_routes()
         self.runner = aiohttp.web.AppRunner(self.app)
+        self.api = ScyllaRESTAPIClient()
 
     async def start(self) -> None:
         """Get first cluster, setup API"""
@@ -717,6 +732,7 @@ class ScyllaClusterManager:
         """Stop, cycle last cluster if not dirty and present"""
         logging.info("ScyllaManager stopping for test %s", self.test_name)
         await self.site.stop()
+        await self.api.close()
         if not self.cluster.is_dirty:
             logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_name)
             await self.clusters.put(self.cluster)
@@ -740,7 +756,8 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/up', self._cluster_up)
         self.app.router.add_get('/cluster/is-dirty', self._is_dirty)
         self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
-        self.app.router.add_get('/cluster/servers', self._cluster_servers)
+        self.app.router.add_get('/cluster/running-servers', self._cluster_running_servers)
+        self.app.router.add_get('/cluster/active-servers', self._cluster_active_servers)
         self.app.router.add_get('/cluster/before-test/{test_name}', self._before_test_req)
         self.app.router.add_get('/cluster/after-test/{test_name}', self._after_test)
         self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
@@ -750,7 +767,11 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/server/{id}/start', self._cluster_server_start)
         self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
         self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
-        self.app.router.add_get('/cluster/removeserver/{id}', self._cluster_server_remove)
+        # TODO: only pass UUID
+        self.app.router.add_get('/cluster/remove-server/{ip}', self._cluster_server_remove)
+        self.app.router.add_get('/cluster/remove-node/{initiator}/{ip}/{uuid}',
+                                self._cluster_remove_node)
+        self.app.router.add_get('/cluster/decommission-node/{ip}', self._cluster_decommission_node)
         self.app.router.add_get('/cluster/server/{id}/get_config', self._server_get_config)
         self.app.router.add_put('/cluster/server/{id}/update_config', self._server_update_config)
 
@@ -773,9 +794,13 @@ class ScyllaClusterManager:
             return aiohttp.web.Response(status=500, text="No cluster active")
         return aiohttp.web.Response(text=f"{self.cluster.replicas}")
 
-    async def _cluster_servers(self, _request) -> aiohttp.web.Response:
-        """Return a list of active server ids (IPs)"""
-        return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.running))}")
+    async def _cluster_running_servers(self, _request) -> aiohttp.web.Response:
+        """Return a list of running server ids (IPs)"""
+        return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.running.keys()))}")
+
+    async def _cluster_active_servers(self, _request) -> aiohttp.web.Response:
+        """Return a list of active (running and not decommissioned) server ids (IPs)"""
+        return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.active_servers()))}")
 
     async def _before_test_req(self, _request) -> aiohttp.web.Response:
         await self._before_test(_request.match_info['test_name'])
@@ -832,9 +857,51 @@ class ScyllaClusterManager:
     async def _cluster_server_remove(self, _request) -> aiohttp.web.Response:
         """Remove a specified server"""
         assert self.cluster
-        server_id = _request.match_info['id']
-        if not await self.cluster.server_remove(server_id):
-            return aiohttp.web.Response(status=500, text=f"Host {server_id} not found")
+        server_ip = _request.match_info['ip']
+        try:
+            await self.cluster.server_remove(server_ip)
+            return aiohttp.web.Response(text="OK")
+        except RuntimeError as exc:
+            return aiohttp.web.Response(status=500, text=f"{exc}")
+
+    async def _cluster_remove_node(self, _request) -> aiohttp.web.Response:
+        """Run remove node on Scylla REST API for a specified server"""
+        assert self.cluster
+        # TODO: only pass UUID
+        initiator_ip = _request.match_info["initiator"]
+        to_remove_ip = _request.match_info["ip"]
+        to_remove_uuid = _request.match_info["uuid"]
+        assert len(self.cluster.running) > 2, "Can't remove last running node"
+        logging.info("_cluster_remove_node initiator %s server %s %s", initiator_ip,
+                     to_remove_ip, to_remove_uuid)
+
+        # initate remove
+        try:
+            await self.api.remove_node(initiator_ip, to_remove_uuid)
+        except RuntimeError:
+            logging.error("_cluster_remove_node initiator %s server %s %s, check log at %s",
+                          initiator_ip, to_remove_ip, to_remove_uuid,
+                          self.cluster.running[initiator_ip].log_filename)
+            return aiohttp.web.Response(status=500,
+                                        text=f"Error removing {to_remove_ip} {to_remove_uuid}")
+        return aiohttp.web.Response(text="OK")
+
+    async def _cluster_decommission_node(self, _request) -> aiohttp.web.Response:
+        """Run remove node on Scylla REST API for a specified server"""
+        assert self.cluster
+        assert len(self.cluster.running) > 2, "Can't decommission last running node"
+        to_decommission_ip = _request.match_info["ip"]
+        logging.info("_cluster_decommission_node %s", to_decommission_ip)
+
+        # initate decommission
+        self.cluster.server_decommission(to_decommission_ip)
+        try:
+            await self.api.decommission_node(to_decommission_ip)
+        except RuntimeError:
+            logging.error("_cluster_decommission_node %s, check log at %s", to_decommission_ip,
+                          self.cluster.running[to_decommission_ip].log_filename)
+            return aiohttp.web.Response(status=500,
+                                        text=f"Error removing {to_decommission_ip}")
         return aiohttp.web.Response(text="OK")
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
