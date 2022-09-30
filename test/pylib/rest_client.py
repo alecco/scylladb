@@ -9,7 +9,7 @@ import asyncio
 import logging
 import os.path
 from time import time
-from typing import Dict
+from typing import Dict, Optional
 import aiohttp
 
 
@@ -86,7 +86,7 @@ class TCPRESTClient():
         return await self.session.request(method="PUT", url=self._resource_uri(resource, host),
                                           json=json)
 
-    async def post(self, resource: str, params: Dict[str, str], host: str) \
+    async def post(self, resource: str, host: str, params: Optional[Dict[str, str]] = None) \
             -> aiohttp.ClientResponse:
         """Post to remote resource or raise"""
         resp = await self.session.post(self._resource_uri(resource, host), params=params)
@@ -131,16 +131,21 @@ class ScyllaRESTAPIClient():
 
     async def remove_node(self, initiator_ip: str, server_uuid: str) -> None:
         """Initiate remove node of server_uuid in initiator initiator_ip"""
+        t0 = time()  # XXX
         resp = await self.cli.post("/storage_service/remove_node", params={"host_id": server_uuid},
                                    host=initiator_ip)
+        logger.warning("XXX remove_node for %s took %s seconds", resp.status, server_uuid, int(time() - t0))  # XXX
         logger.debug("remove_node status %s for %s", resp.status, server_uuid)
 
     async def wait_for_remove(self, initiator_ip: str, server_uuid, timeout: int = 30) -> None:
         """Wait until server remove finishes"""
         max_time = time() + timeout
+        t = 0   # XXX
         while True:
             resp_body = await self.cli.get_text("/storage_service/removal_status",
                                                 host=initiator_ip)
+            t += 1  # XXX
+            logger.warning("wait_for_remove [%s] for %s: %s", t, server_uuid, resp_body) # XXX
             if not server_uuid in resp_body:
                 logger.info("wait_for_remove SUCCESS %s %s", server_uuid, resp_body)
                 break
@@ -156,3 +161,30 @@ class ScyllaRESTAPIClient():
         await self.remove_node(initiator_ip, server_uuid)
         await self.wait_for_remove(initiator_ip, server_uuid, timeout)
         logger.info("remove_node_and_wait SUCCESS for %s", server_uuid)
+
+    async def decommission_node(self, node_ip: str) -> None:
+        """Initiate remove node of server_uuid in initiator initiator_ip"""
+        resp = await self.cli.post("/storage_service/decommission", host=node_ip)
+        logger.debug("decommission_node status %s for %s", resp.status, node_ip)
+
+    async def wait_for_decommission(self, node_ip: str, timeout: int = 30) -> None:
+        """Wait until server decommission finishes"""
+        max_time = time() + timeout
+        while True:
+            resp_body = await self.cli.get_text("/storage_service/operation_mode",  # XXX -> "Normal"
+                                                host=node_ip)
+            # XXX check
+            raise Exception(f"XXX wait_for_decommission {resp_body}")  # XXX
+            if time() > max_time:
+                logger.error("wait_for_decommission timeout reached %s", node_ip)
+                break
+            logger.info("wait_for_decommission WAIT %s", node_ip)
+            await asyncio.sleep(0.05)
+
+    # XXX does it make sense to wait or does POST end when done??
+    async def decommission_node_and_wait(self, node_ip: str, timeout: int = 60) \
+            -> None:
+        """Initiate node decommission of node at node_ip and wait to finish"""
+        await self.decommission_node(node_ip)
+        await self.wait_for_decommission(node_ip, timeout)
+        logger.info("remove_node_and_wait SUCCESS for %s", node_ip)

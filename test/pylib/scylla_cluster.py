@@ -769,6 +769,7 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/remove-node/{ip}/{uuid}', self._cluster_remove_node)
         self.app.router.add_get('/cluster/server/{id}/get_config', self._server_get_config)
         self.app.router.add_put('/cluster/server/{id}/update_config', self._server_update_config)
+        self.app.router.add_get('/cluster/decommission/{ip}', self._cluster_node_decommission)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -875,6 +876,20 @@ class ScyllaClusterManager:
                           self.cluster.running[initiator_ip].log_filename)
             return aiohttp.web.Response(status=500,
                                         text=f"Error removing {to_remove_ip} {to_remove_uuid}")
+        return aiohttp.web.Response(text="OK")
+
+    async def _cluster_node_decommission(self, _request) -> aiohttp.web.Response:
+        """Decommission: transfer this node's data to other machines and remove it from service"""
+        assert self.cluster
+        node_ip = _request.match_info["ip"]
+        assert len(self.cluster.running) > 2, "Can't remove last running node"
+        logging.info("_cluster_node_decommission on %s", node_ip)
+
+        try:
+            await self.api.decommission_node_and_wait(initiator_ip, to_remove_uuid)
+        except RuntimeError as exc:
+            logging.error(f"_cluster_node_decommission on server %s: %s", node_id, exc)
+            return aiohttp.web.Response(status=500, text=f"Error on decommission {node_id} {exc}")
         return aiohttp.web.Response(text="OK")
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
