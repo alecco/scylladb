@@ -472,6 +472,7 @@ class ScyllaCluster:
         self.create_server = create_server
         self.running: Dict[str, ScyllaServer] = {}  # started servers
         self.stopped: Dict[str, ScyllaServer] = {}  # servers no longer running but present
+        self.removed: Set[str] = set()              # removed servers (might be running)
         self.decommissioned: Set[str] = set()       # decommissioned servers (might be running)
         # cluster is started (but it might not have running servers)
         self.is_running: bool = False
@@ -570,7 +571,7 @@ class ScyllaCluster:
         return f"{{{', '.join(str(c) for c in self.running)}}}"
 
     def active_servers(self) -> List[str]:
-        return list(set(self.running.keys()) - self.decommissioned)
+        return list(set(self.running.keys()) - self.removed - self.decommissioned)
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
@@ -624,11 +625,17 @@ class ScyllaCluster:
         self.stopped[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} stopped")
 
+    def server_remove(self, server_id: str) -> ActionReturn:
+        """Mark server as removed."""
+        logging.debug("Cluster %s marking server %s as removed", self, server_id)
+        self.removed.add(server_id)
+        return ScyllaCluster.ActionReturn(success=True, msg=f"{server_id} removed")
+
     def server_decommission(self, server_id: str) -> ActionReturn:
         """Mark server as decommissioned."""
         logging.debug("Cluster %s marking server %s as decommissioned", self, server_id)
         self.decommissioned.add(server_id)
-        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} stopped")
+        return ScyllaCluster.ActionReturn(success=True, msg=f"{server_id} marked decommissioned")
 
     async def server_start(self, server_id: str) -> ActionReturn:
         """Start a stopped server"""
@@ -653,10 +660,6 @@ class ScyllaCluster:
             logging.error("Cluster %s failed to stop server %s", self, server_id)
             return ret
         return await self.server_start(server_id)
-
-    async def server_remove(self, server_id: str) -> None:
-        """Remove a specified server"""
-        raise NotImplementedError
 
     def get_config(self, server_id: str) -> ActionReturn:
         """Get conf/scylla.yaml of the given server as a dictionary.
@@ -768,7 +771,6 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
         self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
         # TODO: only pass UUID
-        self.app.router.add_get('/cluster/remove-server/{ip}', self._cluster_server_remove)
         self.app.router.add_get('/cluster/remove-node/{initiator}/{ip}/{uuid}',
                                 self._cluster_remove_node)
         self.app.router.add_get('/cluster/decommission-node/{ip}', self._cluster_decommission_node)
@@ -854,16 +856,6 @@ class ScyllaClusterManager:
         server_id = await self.cluster.add_server()
         return aiohttp.web.Response(text=server_id)
 
-    async def _cluster_server_remove(self, _request) -> aiohttp.web.Response:
-        """Remove a specified server"""
-        assert self.cluster
-        server_ip = _request.match_info['ip']
-        try:
-            await self.cluster.server_remove(server_ip)
-            return aiohttp.web.Response(text="OK")
-        except RuntimeError as exc:
-            return aiohttp.web.Response(status=500, text=f"{exc}")
-
     async def _cluster_remove_node(self, _request) -> aiohttp.web.Response:
         """Run remove node on Scylla REST API for a specified server"""
         assert self.cluster
@@ -876,6 +868,7 @@ class ScyllaClusterManager:
                      to_remove_ip, to_remove_uuid)
 
         # initate remove
+        self.cluster.server_remove(to_remove_ip)
         try:
             await self.api.remove_node(initiator_ip, to_remove_uuid)
         except RuntimeError:

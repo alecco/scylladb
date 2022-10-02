@@ -148,12 +148,6 @@ class ManagerClient():
         logger.debug("ManagerClient added %s", server_id)
         return server_id
 
-    async def server_remove(self, to_remove_ip: str) -> None:
-        """Remove a specified server"""
-        logger.debug("ManagerClient removing server %s", to_remove_ip)
-        await self.cli.get_text(f"/cluster/remove-server/{to_remove_ip}")
-        self._driver_update()
-
     # TODO: only pass UUID
     async def remove_node(self, initiator_ip: str, to_remove_ip: str, to_remove_uuid: str) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
