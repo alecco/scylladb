@@ -152,10 +152,13 @@ class ManagerClient():
     # TODO: only pass UUID
     async def remove_node(self, initiator_ip: str, to_remove_ip: str, to_remove_uuid: str) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
-        logger.debug("ManagerClient remove node %s %s", to_remove_ip, to_remove_uuid)
+        logger.debug("ManagerClient remove node %s %s on initiator %s", to_remove_ip,
+                     to_remove_uuid, initiator_ip)
+        self.driver_close()
         await self.cli.get_text(
                 f"/cluster/remove-node/{initiator_ip}/{to_remove_ip}/{to_remove_uuid}")
-        self._driver_update()
+        # XXX self._driver_update()
+        await self.driver_connect()
 
     async def decommission_node(self, to_remove_ip: str) -> None:
         """Tell a node to decommission with Scylla REST API"""
