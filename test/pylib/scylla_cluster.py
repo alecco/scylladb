@@ -472,6 +472,7 @@ class ScyllaCluster:
         self.create_server = create_server
         self.running: Dict[str, ScyllaServer] = {}  # started servers
         self.stopped: Dict[str, ScyllaServer] = {}  # servers no longer running but present
+        self.removed: Set[str] = set()              # removed servers (might be running)
         self.decommissioned: Set[str] = set()       # decommissioned servers (might be running)
         # cluster is started (but it might not have running servers)
         self.is_running: bool = False
@@ -570,7 +571,7 @@ class ScyllaCluster:
         return f"{{{', '.join(str(c) for c in self.running)}}}"
 
     def active_servers(self) -> List[str]:
-        return list(set(self.running.keys()) - self.decommissioned)
+        return list(set(self.running.keys()) - self.removed - self.decommissioned)
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
@@ -624,11 +625,17 @@ class ScyllaCluster:
         self.stopped[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} stopped")
 
+    def server_remove(self, server_id: str) -> ActionReturn:
+        """Mark server as removed."""
+        logging.debug("Cluster %s marking server %s as removed", self, server_id)
+        self.removed.add(server_id)
+        return ScyllaCluster.ActionReturn(success=True, msg=f"{server_id} removed")
+
     def server_decommission(self, server_id: str) -> ActionReturn:
         """Mark server as decommissioned."""
         logging.debug("Cluster %s marking server %s as decommissioned", self, server_id)
         self.decommissioned.add(server_id)
-        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} stopped")
+        return ScyllaCluster.ActionReturn(success=True, msg=f"{server_id} marked decommissioned")
 
     async def server_start(self, server_id: str) -> ActionReturn:
         """Start a stopped server"""
@@ -861,6 +868,7 @@ class ScyllaClusterManager:
                      to_remove_ip, to_remove_uuid)
 
         # initate remove
+        self.cluster.server_remove(to_remove_ip)
         try:
             await self.api.remove_node(initiator_ip, to_remove_uuid)
         except RuntimeError:
