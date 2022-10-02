@@ -10,6 +10,7 @@ import pytest
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="debug")  # XXX
 async def test_add_server_add_column(manager, random_tables):
     """Add a node and then add a column to a table and verify"""
     table = await random_tables.add_table(ncolumns=5)
@@ -19,6 +20,7 @@ async def test_add_server_add_column(manager, random_tables):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="debug")  # XXX
 async def test_stop_server_add_column(manager, random_tables):
     """Add a node, stop an original node, add a column"""
     servers = await manager.active_servers()
@@ -30,6 +32,7 @@ async def test_stop_server_add_column(manager, random_tables):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="debug")  # XXX
 async def test_restart_server_add_column(manager, random_tables):
     """Add a node, stop an original node, add a column"""
     servers = await manager.active_servers()
@@ -52,6 +55,7 @@ async def test_remove_node_add_column(manager, random_tables):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="debug")  # XXX
 async def test_decommission_node_add_column(manager, random_tables):
     """Add a node, remove an original node, add a column"""
     servers = await manager.active_servers()
