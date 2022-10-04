@@ -114,6 +114,7 @@ class ScyllaServer:
     log_filename: pathlib.Path
     config_filename: pathlib.Path
     log_file: BufferedWriter
+    host_id: str                      # Host id (UUID)
 
     def __init__(self, exe: str, vardir: str,
                  host_registry,
@@ -147,14 +148,14 @@ class ScyllaServer:
         self.stop_artifact = stop_server
         self.uninstall_artifact = uninstall_server
 
-    async def install_and_start(self) -> None:
+    async def install_and_start(self, api: ScyllaRESTAPIClient) -> None:
         """Setup and start this server"""
         await self.install()
 
         logging.info("starting server at host %s in %s...", self.hostname,
                      self.workdir.name)
 
-        await self.start()
+        await self.start(api)
 
         if self.cmd:
             logging.info("started server at host %s in %s, pid %d", self.hostname,
@@ -291,19 +292,17 @@ class ScyllaServer:
             caslog.setLevel(oldlevel)
         # Any other exception may indicate a problem, and is passed to the caller.
 
-    async def rest_api_is_up(self) -> bool:
+    async def rest_api_is_up(self, api: ScyllaRESTAPIClient) -> bool:
         """Test that the Scylla REST API is serving. Can be used as a
         checker function at start up."""
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"http://{self.hostname}:10000/"
-                async with session.get(url):
-                    return True
-        except aiohttp.ClientConnectionError:
+            self.host_id = await api.get_host_id(self.hostname)
+            return True
+        except (aiohttp.ClientConnectionError, RuntimeError):
             return False
         # Any other exception may indicate a problem, and is passed to the caller.
 
-    async def start(self) -> None:
+    async def start(self, api: ScyllaRESTAPIClient) -> None:
         """Start an installed server. May be used for restarts."""
 
         # Add suite-specific command line options
@@ -341,7 +340,7 @@ class ScyllaServer:
                                        f"{logpath}\n"
                                        f"{self.log_filename}")
 
-            if await self.rest_api_is_up():
+            if await self.rest_api_is_up(api):
                 if await self.cql_is_up():
                     return
 
@@ -537,7 +536,7 @@ class ScyllaCluster:
         self.is_dirty = True
         try:
             logging.info("Cluster %s adding server...", self)
-            await server.install_and_start()
+            await server.install_and_start(self.api)
         except Exception as exc:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
                           server.hostname, server.workdir.name, str(exc))
@@ -652,7 +651,7 @@ class ScyllaCluster:
         self.is_dirty = True
         server = self.stopped.pop(server_ip)
         server.seeds = self._seeds()
-        await server.start()
+        await server.start(self.api)
         self.running[server_ip] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_ip} started")
 
