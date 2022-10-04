@@ -481,6 +481,7 @@ class ScyllaCluster:
         self.is_dirty: bool = False
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
+        self.api = ScyllaRESTAPIClient()
 
     async def install_and_start(self) -> None:
         """Setup initial servers and start them.
@@ -509,6 +510,7 @@ class ScyllaCluster:
         if self.is_running:
             logging.info("Cluster %s stopping", self)
             self.is_dirty = True
+            await self.api.close()
             # If self.running is empty, no-op
             await asyncio.gather(*(server.stop() for server in self.running.values()))
             self.stopped.update(self.running)
@@ -713,7 +715,6 @@ class ScyllaClusterManager:
         app = aiohttp.web.Application()
         self._setup_routes(app)
         self.runner = aiohttp.web.AppRunner(app)
-        self.api = ScyllaRESTAPIClient()
 
     async def start(self) -> None:
         """Get first cluster, setup API"""
@@ -741,7 +742,6 @@ class ScyllaClusterManager:
         """Stop, cycle last cluster if not dirty and present"""
         logging.info("ScyllaManager stopping for test %s", self.test_uname)
         await self.site.stop()
-        await self.api.close()
         if not self.cluster.is_dirty:
             logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
             await self.clusters.put(self.cluster)
@@ -876,7 +876,7 @@ class ScyllaClusterManager:
 
         # initate remove
         try:
-            await self.api.remove_node(initiator_ip, to_remove_host_id, ignore_dead)
+            await self.cluster.api.remove_node(initiator_ip, to_remove_host_id, ignore_dead)
         except RuntimeError as exc:
             logging.error("_cluster_remove_node failed initiator %s server %s %s ignore_dead %s, check log at %s",
                           initiator_ip, to_remove_ip, to_remove_host_id, ignore_dead,
@@ -898,7 +898,7 @@ class ScyllaClusterManager:
 
         # initate decommission
         try:
-            await self.api.decommission_node(to_decommission_ip)
+            await self.cluster.api.decommission_node(to_decommission_ip)
         except RuntimeError as exc:
             logging.error("_cluster_decommission_node %s, check log at %s", to_decommission_ip,
                           self.cluster.running[to_decommission_ip].log_filename)
