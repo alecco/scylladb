@@ -11,10 +11,10 @@ import time
 import functools
 from typing import Callable, Awaitable, Optional, TypeVar, Generic
 
-from cassandra.cluster import NoHostAvailable, Session
-from cassandra.pool import Host
+from cassandra.cluster import NoHostAvailable, Session  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.pool import Host                         # type: ignore # pylint: disable=no-name-in-module
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.manager_client import ManagerClient, ServerID, IPAddress, ServerInfo
 from test.pylib.random_tables import RandomTables
 from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error
 
@@ -34,26 +34,26 @@ async def reconnect_driver(manager: ManagerClient) -> Session:
     return cql
 
 
-async def restart(manager: ManagerClient, srv: str) -> None:
-    logging.info(f"Stopping {srv} gracefully")
-    await manager.server_stop_gracefully(srv)
-    logging.info(f"Restarting {srv}")
-    await manager.server_start(srv)
-    logging.info(f"{srv} restarted")
+async def restart(manager: ManagerClient, server_id: ServerID) -> None:
+    logging.info(f"Stopping {server_id} gracefully")
+    await manager.server_stop_gracefully(server_id)
+    logging.info(f"Restarting {server_id}")
+    await manager.server_start(server_id)
+    logging.info(f"{server_id} restarted")
 
 
-async def enable_raft(manager: ManagerClient, srv: str) -> None:
-    config = await manager.server_get_config(srv)
+async def enable_raft(manager: ManagerClient, server_id: ServerID) -> None:
+    config = await manager.server_get_config(server_id)
     features = config['experimental_features']
     assert(type(features) == list)
     features.append('raft')
-    logging.info(f"Updating config of server {srv}")
-    await manager.server_update_config(srv, 'experimental_features', features)
+    logging.info(f"Updating config of server {server_id}")
+    await manager.server_update_config(server_id, 'experimental_features', features)
 
 
-async def enable_raft_and_restart(manager: ManagerClient, srv: str) -> None:
-    await enable_raft(manager, srv)
-    await restart(manager, srv)
+async def enable_raft_and_restart(manager: ManagerClient, server_id: ServerID) -> None:
+    await enable_raft(manager, server_id)
+    await restart(manager, server_id)
 
 
 async def wait_for(pred: Callable[[], Awaitable[Optional[T]]], deadline: float) -> T:
@@ -76,9 +76,10 @@ async def wait_for_cql(cql: Session, host: Host, deadline: float) -> None:
     await wait_for(cql_ready, deadline)
 
 
-async def wait_for_cql_and_get_hosts(cql: Session, ips: list[str], deadline: float) -> list[Host]:
+async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], deadline: float) \
+        -> list[Host]:
     """Wait until every ip in `ips` is available through `cql` and translate `ips` to `Host`s."""
-    ip_set = set(ips)
+    ip_set = set(str(srv.host_ip) for srv in servers)
     async def get_hosts() -> Optional[list[Host]]:
         hosts = cql.cluster.metadata.all_hosts()
         remaining = ip_set - {h.address for h in hosts}
@@ -120,7 +121,8 @@ async def wait_until_upgrade_finishes(cql: Session, host: Host, deadline: float)
     await wait_for_upgrade_state('use_post_raft_procedures', cql, host, deadline)
 
 
-async def wait_for_gossip_gen_increase(api: ScyllaRESTAPIClient, gen: int, node_ip: str, target_ip: str, deadline: float):
+async def wait_for_gossip_gen_increase(api: ScyllaRESTAPIClient, gen: int, node_ip: IPAddress,
+                                       target_ip: IPAddress, deadline: float):
     """Wait until the generation number of `target_ip` increases above `gen` from the point of view of `node_ip`.
        Can be used to wait until `node_ip` gossips with `target_ip` after `target_ip` was restarted
        by saving the generation number of `target_ip` before restarting it and then calling this function
@@ -167,7 +169,7 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
         assert(not (await cql.run_async("select * from system.group0_history")))
 
     logging.info(f"Enabling Raft on {servers} and restarting")
-    await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in servers))
+    await asyncio.gather(*(enable_raft_and_restart(manager, srv.server_id) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")
@@ -199,26 +201,23 @@ async def test_raft_upgrade_with_node_remove(manager: ManagerClient, random_tabl
     servers = await manager.running_servers()
     srv1, *others = servers
 
-    srv1_gen = await manager.api.get_gossip_generation_number(others[0], srv1)
+    srv1_gen = await manager.api.get_gossip_generation_number(others[0].host_ip, srv1.host_ip)
     logging.info(f"Gossip generation number of {srv1} seen from {others[0]}: {srv1_gen}")
 
     logging.info(f"Enabling Raft on {srv1} and restarting")
-    await enable_raft_and_restart(manager, srv1)
+    await enable_raft_and_restart(manager, srv1.server_id)
 
     # Before continuing, ensure that another node has gossiped with srv1
     # after srv1 has restarted. Then we know that the other node learned about srv1's
     # supported features, including SUPPORTS_RAFT.
     logging.info(f"Waiting until {others[0]} gossips with {srv1}")
-    await wait_for_gossip_gen_increase(manager.api, srv1_gen, others[0], srv1, time.time() + 60)
-
-    srv1_host_id = await manager.get_host_id(srv1)
-    logging.info(f"Obtained host ID of {srv1}: {srv1_host_id}")
+    await wait_for_gossip_gen_increase(manager.api, srv1_gen, others[0].host_ip, srv1.host_ip, time.time() + 60)
 
     logging.info(f"Stopping {srv1}")
-    await manager.server_stop_gracefully(srv1)
+    await manager.server_stop_gracefully(srv1.server_id)
 
     logging.info(f"Enabling Raft on {others} and restarting")
-    await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in others))
+    await asyncio.gather(*(enable_raft_and_restart(manager, srv.server_id) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to every server except {srv1}")
@@ -226,7 +225,7 @@ async def test_raft_upgrade_with_node_remove(manager: ManagerClient, random_tabl
     logging.info(f"Driver reconnected, hosts: {hosts}")
 
     logging.info(f"Removing {srv1} using {others[0]}")
-    await manager.remove_node(others[0], srv1, srv1_host_id)
+    await manager.remove_node(others[0].server_id, srv1.server_id)
 
     logging.info("Waiting until upgrade finishes")
     await asyncio.gather(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
@@ -249,13 +248,14 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
     srv1, *others = servers
 
     logging.info(f"Enabling Raft on {srv1} and restarting")
-    await enable_raft_and_restart(manager, srv1)
+    await enable_raft_and_restart(manager, srv1.server_id)
 
     # TODO error injection should probably be done through ScyllaClusterManager (we may need to mark the cluster as dirty).
     # In this test the cluster is dirty anyway due to a restart so it's safe.
-    async with inject_error(manager.api, srv1, 'group0_upgrade_before_synchronize', one_shot=True):
+    async with inject_error(manager.api, srv1.host_ip, 'group0_upgrade_before_synchronize',
+                            one_shot=True):
         logging.info(f"Enabling Raft on {others} and restarting")
-        await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in others))
+        await asyncio.gather(*(enable_raft_and_restart(manager, srv.server_id) for srv in others))
         cql = await reconnect_driver(manager)
 
         logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
@@ -274,7 +274,7 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
         await cql.run_async("update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'", host=host)
 
     logging.info(f"Restarting {others}")
-    await asyncio.gather(*(restart(manager, srv) for srv in others))
+    await asyncio.gather(*(restart(manager, srv.server_id) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"{others} restarted, waiting until driver reconnects to them")
@@ -288,21 +288,18 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
     logging.info("Creating a table while in recovery state")
     table = await random_tables.add_table(ncolumns=5)
 
-    srv1_host_id = await manager.get_host_id(srv1)
-    logging.info(f"Obtained host ID of {srv1}: {srv1_host_id}")
-
     logging.info(f"Stopping {srv1}")
-    await manager.server_stop_gracefully(srv1)
+    await manager.server_stop_gracefully(srv1.server_id)
 
     logging.info(f"Removing {srv1} using {others[0]}")
-    await manager.remove_node(others[0], srv1, srv1_host_id)
+    await manager.remove_node(others[0].server_id, srv1.server_id)
 
     logging.info(f"Deleting Raft data and upgrade state on {hosts} and restarting")
     for host in hosts:
         await delete_raft_data(cql, host)
         await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host)
 
-    await asyncio.gather(*(restart(manager, srv) for srv in others))
+    await asyncio.gather(*(restart(manager, srv.server_id) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
@@ -334,7 +331,7 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
     servers = await manager.running_servers()
 
     logging.info(f"Enabling Raft on {servers} and restarting")
-    await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in servers))
+    await asyncio.gather(*(enable_raft_and_restart(manager, srv.server_id) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")
@@ -347,31 +344,29 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
     tables = await asyncio.gather(*(random_tables.add_table(ncolumns=5) for _ in range(5)))
 
     srv1, *others = servers
-    others_with_host_ids = [(srv, await manager.get_host_id(srv)) for srv in others]
-    logging.info(f"Obtained host IDs: {others_with_host_ids}")
 
     logging.info(f"Killing all nodes except {srv1}")
-    await asyncio.gather(*(manager.server_stop(srv) for srv in others))
+    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in others))
 
     logging.info(f"Entering recovery state on {srv1}")
-    host1 = next(h for h in hosts if h.address == srv1)
+    host1 = next(h for h in hosts if h.address == srv1.host_ip)
     await cql.run_async("update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'", host=host1)
-    await restart(manager, srv1)
+    await restart(manager, srv1.server_id)
     cql = await reconnect_driver(manager)
 
     logging.info("Node restarted, waiting until driver connects")
     host1 = (await wait_for_cql_and_get_hosts(cql, [srv1], time.time() + 60))[0]
 
-    for i in range(len(others_with_host_ids)):
-        remove_ip, remove_host_id = others_with_host_ids[i]
-        ignore_dead_ips = [ip for (ip, _) in others_with_host_ids[i+1:]]
-        logging.info(f"Removing {remove_ip} using {srv1} with ignore_dead: {ignore_dead_ips}")
-        await manager.remove_node(srv1, remove_ip, remove_host_id, ignore_dead_ips)
+    for i in range(len(others)):
+        to_remove = others[i]
+        ignore_dead_ips = [srv.host_ip for srv in others[i+1:]]
+        logging.info(f"Removing {to_remove} using {srv1} with ignore_dead: {ignore_dead_ips}")
+        await manager.remove_node(srv1.server_id, to_remove.server_id, ignore_dead_ips)
 
     logging.info(f"Deleting old Raft data and upgrade state on {host1} and restarting")
     await delete_raft_data(cql, host1)
     await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host1)
-    await restart(manager, srv1)
+    await restart(manager, srv1.server_id)
     cql = await reconnect_driver(manager)
 
     logging.info("Node restarted, waiting until driver connects")
