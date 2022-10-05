@@ -5,12 +5,15 @@
 #
 """Asynchronous helper for Scylla REST API operations.
 """
+from __future__ import annotations                           # Type hints as strings
 import logging
 import pytest
 import os.path
 import aiohttp
-from typing import Optional
+from typing import Optional, TYPE_CHECKING, cast
 from contextlib import asynccontextmanager
+if TYPE_CHECKING:
+    from test.pylib.manager_client import HostID, IPAddress
 
 
 logger = logging.getLogger(__name__)
@@ -143,23 +146,24 @@ class ScyllaRESTAPIClient():
         """Close session"""
         await self.client.close()
 
-    async def get_host_id(self, server_id: str) -> str:
+    async def get_host_id(self, server_ip: IPAddress) -> HostID:
         """Get server id (UUID)"""
-        host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_id)
+        host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_ip)
         host_uuid = host_uuid.lstrip('"').rstrip('"')
-        return host_uuid
+        return cast("HostID", host_uuid)
 
-    async def remove_node(self, initiator_ip: str, server_uuid: str, ignore_dead: list[str]) -> None:
-        """Initiate remove node of server_uuid in initiator initiator_ip"""
+    async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
+                          ignore_dead: list[IPAddress]) -> None:
+        """Initiate remove node of host_id in initiator initiator_ip"""
         resp = await self.client.post("/storage_service/remove_node",
-                               params={"host_id": server_uuid, "ignore_nodes": ",".join(ignore_dead)},
+                               params={"host_id": host_id, "ignore_nodes": ",".join(ignore_dead)},
                                host=initiator_ip)
-        logger.info("remove_node status %s for %s", resp.status, server_uuid)
+        logger.info("remove_node status %s for %s", resp.status, host_id)
 
-    async def decommission_node(self, node_ip: str) -> None:
-        """Initiate remove node of server_uuid in initiator initiator_ip"""
-        resp = await self.client.post("/storage_service/decommission", host=node_ip)
-        logger.debug("decommission_node status %s for %s", resp.status, node_ip)
+    async def decommission_node(self, host_ip: str) -> None:
+        """Initiate decommission node of host_ip"""
+        resp = await self.client.post("/storage_service/decommission", host=host_ip)
+        logger.debug("decommission_node status %s for %s", resp.status, host_ip)
 
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
         """Get the current generation number of `target_ip` observed by `node_ip`."""
@@ -188,7 +192,8 @@ class ScyllaRESTAPIClient():
 
 
 @asynccontextmanager
-async def inject_error(api: ScyllaRESTAPIClient, node_ip: str, injection: str, one_shot: bool):
+async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str,
+                       one_shot: bool):
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
        It will trigger a test to be skipped if attempting to enable an injection has no effect.
     """
