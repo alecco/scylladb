@@ -741,7 +741,6 @@ class ScyllaClusterManager:
         """Stop, cycle last cluster if not dirty and present"""
         logging.info("ScyllaManager stopping for test %s", self.test_uname)
         await self.site.stop()
-        await self.api.close()
         if not self.cluster.is_dirty:
             logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
             await self.clusters.put(self.cluster)
