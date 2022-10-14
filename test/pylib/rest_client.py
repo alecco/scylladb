@@ -133,6 +133,7 @@ class TCPRESTClient:
         return await self.session.delete(self._resource_uri(resource, host))
 
     def _resource_uri(self, resource: str, host: str) -> str:
+        # XXX here use http or https
         return f"http://{host}:{self.port}{resource}"
 
 
@@ -148,9 +149,16 @@ class ScyllaRESTAPIClient():
 
     async def get_host_id(self, server_ip: IPAddress) -> HostID:
         """Get server id (UUID)"""
-        host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_ip)
-        host_uuid = host_uuid.lstrip('"').rstrip('"')
-        return cast("HostID", host_uuid)
+        # XXX try with custom session
+        uri = self.client._resource_uri("/storage_service/hostid/local", server_ip)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(uri, ssl=False) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"XXX get_host_id status {resp.status}")  # XXX
+                return await resp.text()
+        #host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_ip)
+        #host_uuid = host_uuid.lstrip('"').rstrip('"')
+        #return cast("HostID", host_uuid)
 
     async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
                           ignore_dead: list[IPAddress]) -> None:

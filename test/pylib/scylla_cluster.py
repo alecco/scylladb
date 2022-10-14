@@ -293,13 +293,11 @@ class ScyllaServer:
         """Test that the Scylla REST API is serving. Can be used as a
         checker function at start up."""
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"http://{self.host_ip}:10000/"
-                async with session.get(url):
-                    pass
-                self.host_id = await api.get_host_id(self.host_ip)
-                return True
-        except (aiohttp.ClientConnectionError, RuntimeError):
+            self.host_id = await api.get_host_id(self.host_ip)
+            logging.warning(f"XXX rest_api_is_up got host id {self.host_id} on {self.host_ip}") # XXX
+            return True
+        except (aiohttp.ClientConnectionError, RuntimeError) as exc:   # XXX as exc
+            logging.warning(f"XXX rest_api_is_up got {exc} on {self.host_ip}") # XXX
             return False
         # Any other exception may indicate a problem, and is passed to the caller.
 
@@ -341,7 +339,7 @@ class ScyllaServer:
                                        f"{logpath}\n"
                                        f"{self.log_filename}")
 
-            if await self.rest_api_is_up(api):
+            if hasattr(self, "host_id") or await self.rest_api_is_up(api):
                 if await self.cql_is_up():
                     return
 
