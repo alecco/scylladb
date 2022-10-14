@@ -744,9 +744,6 @@ class ScyllaClusterManager:
             await self.site.stop()
             del self.site
         if hasattr(self, "api"):
-            await self.api.close()
-            del self.api
-        if hasattr(self, "api"):
             if not self.cluster.is_dirty:
                 logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
                 await self.clusters.put(self.cluster)
@@ -882,7 +879,7 @@ class ScyllaClusterManager:
         # initate remove
         try:
             await self.api.remove_node(initiator_ip, to_remove_host_id, ignore_dead)
-        except RuntimeError as exc:
+        except aiohttp.ClientError as exc:
             logging.error("_cluster_remove_node failed initiator %s server %s %s ignore_dead %s, check log at %s",
                           initiator_ip, to_remove_ip, to_remove_host_id, ignore_dead,
                           self.cluster.running[initiator_ip].log_filename)
@@ -904,7 +901,7 @@ class ScyllaClusterManager:
         # initate decommission
         try:
             await self.api.decommission_node(to_decommission_ip)
-        except RuntimeError as exc:
+        except aiohttp.ClientError as exc:
             logging.error("_cluster_decommission_node %s, check log at %s", to_decommission_ip,
                           self.cluster.running[to_decommission_ip].log_filename)
             return aiohttp.web.Response(status=500,
