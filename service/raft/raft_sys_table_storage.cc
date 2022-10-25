@@ -11,6 +11,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
 #include "utils/UUID.hh"
+#include "utils/error_injection.hh"
 
 #include "serializer.hh"
 #include "idl/raft_storage.dist.hh"
@@ -197,6 +198,13 @@ future<> raft_sys_table_storage::store_snapshot_descriptor(const raft::snapshot_
 }
 
 future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
+
+    utils::get_local_injector().inject("raft_sys_table_storage_store_log_entries/test-failure",
+        [] {
+            // XXX some logic
+            throw std::runtime_error("error injection at raft sys table storage");
+            });
+
     if (entries.empty()) {
         co_return;
     }
