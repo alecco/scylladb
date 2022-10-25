@@ -6,6 +6,7 @@
 """Scylla clusters for testing.
    Provides helpers to setup and manage clusters of Scylla servers for testing.
 """
+from abc import ABCMeta, abstractmethod
 import asyncio
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
@@ -679,7 +680,7 @@ class ScyllaCluster:
         return ScyllaCluster.ActionReturn(success=True)
 
 
-class ScyllaClusterManager:
+class ScyllaClusterManagerBase(metaclass=ABCMeta):
     """Manages a Scylla cluster for running test cases
        Provides an async API for tests to request changes in the Cluster.
        Parallel requests are not supported.
@@ -689,12 +690,11 @@ class ScyllaClusterManager:
     site: aiohttp.web.UnixSite
     is_after_test_ok: bool
 
-    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
+    def __init__(self, test_uname: str, base_dir: str) -> None:
         self.test_uname: str = test_uname
         # The currently running test case with self.test_uname prepended, e.g.
         # test_topology.1::test_add_server_add_column
         self.current_test_case_full_name: str = ''
-        self.clusters: Pool[ScyllaCluster] = clusters
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
         self.is_after_test_ok: bool = False
@@ -719,8 +719,7 @@ class ScyllaClusterManager:
 
     async def _before_test(self, test_case_name: str) -> None:
         if self.cluster.is_dirty:
-            await self.clusters.steal()
-            await self.cluster.stop()
+            await self._cluster_dispose()
             await self._get_cluster()
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
         logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
@@ -734,21 +733,26 @@ class ScyllaClusterManager:
         await self.site.stop()
         if not self.cluster.is_dirty:
             logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster)
+            await self._cluster_return()
         else:
             logging.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
                             self.cluster, self.test_uname)
-            await self.clusters.steal()
-            await self.cluster.stop()
-        del self.cluster
+            await self._cluster_dispose()
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
         self.is_running = False
 
+    @abstractmethod
     async def _get_cluster(self) -> None:
-        self.cluster = await self.clusters.get()
-        logging.info("Getting new Scylla cluster %s", self.cluster)
+        pass
 
+    @abstractmethod
+    async def _cluster_return(self) -> None:
+        pass
+
+    @abstractmethod
+    async def _cluster_dispose(self) -> None:
+        pass
 
     def _setup_routes(self, app: aiohttp.web.Application) -> None:
         app.router.add_get('/up', self._manager_up)
@@ -938,12 +942,30 @@ class ScyllaClusterManager:
         return aiohttp.web.Response()
 
 
+class ScyllaClusterManagerPool(ScyllaClusterManagerBase):
+    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
+        self.clusters: Pool[ScyllaCluster] = clusters
+        super().__init__(test_uname, base_dir)
+
+    async def _get_cluster(self) -> None:
+        self.cluster = await self.clusters.get()
+        logging.info("Manager got Scylla cluster %s from pool", self.cluster)
+
+    async def _cluster_dispose(self) -> None:
+        await self.clusters.steal()
+        await self.cluster.stop()
+        del self.cluster
+
+    async def _cluster_return(self) -> None:
+        await self.clusters.put(self.cluster)
+        del self.cluster
+
 @asynccontextmanager
-async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
-        -> AsyncIterator[ScyllaClusterManager]:
-    """Create a temporary manager for the active cluster used in a test
-       and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_uname, clusters, test_path)
+async def get_cluster_manager_pool(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
+        -> AsyncIterator[ScyllaClusterManagerPool]:
+    """Create a temporary manager for clusters used in a test using
+       a provided pool of clusters."""
+    manager = ScyllaClusterManagerPool(test_uname, clusters, test_path)
     try:
         yield manager
     finally:

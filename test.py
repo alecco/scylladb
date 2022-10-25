@@ -34,7 +34,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
-from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager
+from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager_pool
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable
 
 output_is_a_tty = sys.stdout.isatty()
@@ -837,7 +837,7 @@ class TopologyTest(PythonTest):
     async def run(self, options: argparse.Namespace) -> Test:
 
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
-        async with get_cluster_manager(self.uname, self.suite.clusters, test_path) as manager:
+        async with get_cluster_manager_pool(self.uname, self.suite.clusters, test_path) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
             try:
