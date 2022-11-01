@@ -756,6 +756,7 @@ class ScyllaClusterManagerBase(metaclass=ABCMeta):
 
     def _setup_routes(self, app: aiohttp.web.Application) -> None:
         app.router.add_get('/up', self._manager_up)
+        app.router.add_get('/cluster/name', self._cluster_name)
         app.router.add_get('/cluster/up', self._cluster_up)
         app.router.add_get('/cluster/is-dirty', self._is_dirty)
         app.router.add_get('/cluster/replicas', self._cluster_replicas)
@@ -779,6 +780,9 @@ class ScyllaClusterManagerBase(metaclass=ABCMeta):
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
+
+    async def _cluster_name(self, _request) -> aiohttp.web.Response:
+        return aiohttp.web.Response(text=f"{self.cluster.name}")
 
     async def _cluster_up(self, _request) -> aiohttp.web.Response:
         """Is cluster running"""
@@ -811,6 +815,8 @@ class ScyllaClusterManagerBase(metaclass=ABCMeta):
         return aiohttp.web.Response(text=f"{self.cluster.servers[server_id].host_id}")
 
     async def _before_test_req(self, request) -> aiohttp.web.Response:
+        # XXX here get json with topology if present
+        data = await request.json()
         await self._before_test(request.match_info['test_case_name'])
         return aiohttp.web.Response(text="OK")
 
@@ -960,12 +966,44 @@ class ScyllaClusterManagerPool(ScyllaClusterManagerBase):
         await self.clusters.put(self.cluster)
         del self.cluster
 
+
+class ScyllaClusterManagerAdHoc(ScyllaClusterManagerBase):
+    def __init__(self, test_uname: str, base_dir: str) -> None:
+        super().__init__(test_uname, base_dir)
+
+    async def _get_cluster(self) -> None:
+        if hasattr(self, "cluster"):
+            # XXX if topology matches reuse, else kill and get new
+            return
+        # else... get cluster
+        pass # XXX
+
+    async def _cluster_dispose(self) -> None:
+        await self.cluster.stop()
+        del self.cluster
+
+    async def _cluster_return(self) -> None:
+        pass  # No-op: check when next cluster requested it matches topology
+
+
 @asynccontextmanager
 async def get_cluster_manager_pool(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
         -> AsyncIterator[ScyllaClusterManagerPool]:
     """Create a temporary manager for clusters used in a test using
        a provided pool of clusters."""
     manager = ScyllaClusterManagerPool(test_uname, clusters, test_path)
+    try:
+        yield manager
+    finally:
+        await manager.stop()
+
+
+@asynccontextmanager
+async def get_cluster_manager_adhoc(test_uname: str, test_path: str) \
+        -> AsyncIterator[ScyllaClusterManagerPool]:
+    """Create a temporary manager for ad-hoc clusters requested by test
+       cases."""
+    manager = ScyllaClusterManagerAdHoc(test_uname, clusters, test_path)
     try:
         yield manager
     finally:

@@ -161,6 +161,17 @@ async def manager(request, manager_internal):
     yield manager_internal
     await manager_internal.after_test(test_case_name)
 
+@pytest.fixture(scope="function")
+async def manager_custom(request, manager_internal):
+    """Per test fixture to notify Manager client object when tests begin so it can
+    perform checks for cluster state.
+    """
+    # XXX tell server manager the topology the test requires
+    test_case_name = request.node.name
+    await manager_internal.before_test(test_case_name)
+    yield manager_internal
+    await manager_internal.after_test(test_case_name)
+
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
 @pytest.fixture(scope="function")

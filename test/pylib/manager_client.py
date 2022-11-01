@@ -81,14 +81,16 @@ class ManagerClient():
     async def before_test(self, test_case_name: str) -> None:
         """Before a test starts check if cluster needs cycling and update driver connection"""
         logger.debug("before_test for %s", test_case_name)
-        dirty = await self.is_dirty()
-        if dirty:
-            self.driver_close()  # Close driver connection to old cluster
+        cluster_name_start = self.cluster_name()
         try:
             await self.client.get(f"/cluster/before-test/{test_case_name}")
+            # XXX change to pass it desired topology
+            await self.client.put_json(f"/cluster/before-test/{test_case_name}",
+                                       {"XXX": XXX, "XXX": XXX})  # XXX send desired topology
         except RuntimeError as exc:
             raise RuntimeError(f"Failed before test check {exc}") from exc
-        if self.cql is None:
+        cluster_name_current = self.cluster_name()
+        if cluster_name_start != cluster_name_current or self.cql is None:
             # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
             # await self._wait_for_cluster()
             await self.driver_connect()  # Connect driver to new cluster
@@ -102,6 +104,10 @@ class ManagerClient():
         """Check if Manager server is up"""
         ret = await self.client.get_text("/up")
         return ret == "True"
+
+    async def cluster_name(self) -> bool:
+        """Get current cluster name"""
+        return await self.client.get_text("/cluster/name")
 
     async def is_cluster_up(self) -> bool:
         """Check if cluster is up"""
