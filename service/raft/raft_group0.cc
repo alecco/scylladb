@@ -741,6 +741,12 @@ future<> raft_group0::remove_from_group0(raft::server_id node) {
         co_return;
     }
 
+    // XXX here make non-voter
+    // auto their_id = _raft_gr.address_map().find_replace_id(node, my_id);
+    //     group0_log.info("remove_from_group0({}): becoming a voter in the group 0 configuration...", node);
+    //     co_await _raft_gr.group0().modify_config({{their_addr, false}}, {}, &_abort_source);
+    // }
+
     if (!_feat.supports_raft_cluster_mgmt) {
         // Similar situation as in `leave_group0` (read the comment there for detailed explanations).
         //
