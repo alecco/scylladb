@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <iostream>
 #include <random>
 #include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
@@ -5746,11 +5747,19 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
         foreign_ptr<lw_shared_ptr<query::result>> res;
         std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
             const query::partition_slice& slice, api::timestamp_type ts) {
+                paxos::paxos_state::logger.error("XXXX BEFORE err inj paxos apply() ");  // XXX
+                utils::get_local_injector().inject("read_cas_request_apply",
+                    [] {
+std::cerr << "XXXX ERR\n";  // XXX
+                    paxos::paxos_state::logger.error("XXXX err inj paxos apply() ");  // XXX
+                    throw std::runtime_error("error injection after finish, before remove from group 0"); });
             res = std::move(qr);
             return std::nullopt;
         }
     };
 
+std::cerr << "XXXX PRE\n";  // XXX
+paxos::paxos_state::logger.error("XXXX PRE");  // XXX
     auto request = seastar::make_shared<read_cas_request>();
 
     return cas(std::move(s), request, cmd, std::move(partition_ranges), std::move(query_options),

@@ -163,6 +163,7 @@ future<bool> paxos_state::accept(storage_proxy& sp, tracing::trace_state_ptr tr_
 
 future<> paxos_state::learn(storage_proxy& sp, schema_ptr schema, proposal decision, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
+    // XXX this is the injection!
     if (utils::get_local_injector().enter("paxos_error_before_learn")) {
         return make_exception_future<>(utils::injected_error("injected_error_before_learn"));
     }

@@ -39,6 +39,7 @@ from typing import Optional, Type, List, Set, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from cassandra.cluster import Session as CassandraSession            # type: ignore
     from test.pylib.manager_client import ManagerClient
+from cassandra.cluster import ConsistencyLevel
 
 
 logger = logging.getLogger('random_tables')
@@ -212,6 +213,26 @@ class RandomTable():
         return await self.manager.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names})"
                                                 f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
                                                 parameters=[c.val(seed) for c in self.columns])
+
+    async def insert_row(self, seed: int = None, if_not_exists: bool = False,
+                         consistency_level: Optional[str] = None) -> asyncio.Future:
+        """Insert a row of next sequential values"""
+        seed = seed if seed is not None else self.next_seq()
+        assert self.manager.cql is not None
+
+        kwparams = {"parameters": [c.val(seed) for c in self.columns]}
+        if consistency_level is not None:
+            if consistency_level.lower() == "serial":
+                kwparams["consistency_level"] = ConsistencyLevel.SERIAL
+            elif consistency_level.lower() == "quorum":
+                kwparams["consistency_level"] = ConsistencyLevel.QUORUM
+            elif consistency_level.lower() == "one":
+                kwparams["consistency_level"] = ConsistencyLevel.ONE
+
+        stmt = f"INSERT INTO {self.full_name} ({self.all_col_names})" \
+               f" VALUES ({', '.join(['%s'] * len(self.columns)) })"  \
+               f" {'IF NOT EXISTS ' if if_not_exists else ''}",
+        return await self.manager.cql.run_async(stmt, **kwparams)
 
     async def add_index(self, column: Union[Column, str], name: str = None) -> str:
         if isinstance(column, int):
