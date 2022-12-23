@@ -7,35 +7,53 @@
 """
 Test repro of failure to store mutation with schema change and a server down
 """
-import pytest
 import logging
 from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error
+import pytest
 
 
 logger = logging.getLogger(__name__)
 
 
+# XXX
+async def reopen_driver(manager):
+    manager.driver_close()
+    await manager.driver_connect()
+
 @pytest.mark.asyncio
 async def test_mutation_schema_change(manager, random_tables):
     """
-        1. build a cluster of 3 nodes
-        2. inject failure into paxos apply on one node
-        3. execute paxos write
-        4. alter table add column
-        5. replace the node which failed to apply a mutation
-        6. drop another node, not the one you were replacing (stopping it is just fine)
-        7. perform serial read of the partition -> this will lead to repair,
-           which should try to load old mapping, which is gone onthe replaced node.
+        1. shut down 1 node,  A
+        2. do LWT operation,  (B C)
+        3. change schema twice,  (so it cannot recreate a history)   2 add columns
+        4. shut down B, then start A   [K: C becomes leader, replicates it's Raft log to A]
+        5. then do LWT operation on the same key
     """
-    table = await random_tables.add_table(ncolumns=5)
-
     servers = await manager.running_servers()
-    # async with inject_error(manager.api, servers[0].ip_addr, 'read_cas_request_apply', one_shot=True):
-    async with inject_error(manager.api, servers[0].ip_addr, 'read_cas_request_apply', one_shot=True):
-        async with inject_error(manager.api, servers[1].ip_addr, 'read_cas_request_apply', one_shot=True):
-            async with inject_error(manager.api, servers[2].ip_addr, 'read_cas_request_apply', one_shot=True):
-                await table.insert_row(if_not_exists = True)    # Insert a row
-    raise Exception("CUEC")  # XXX
-    # await manager.remove_node(servers[0].server_id, servers[1].server_id)   # Remove 1 (on 0)
-    # await table.add_column()
-    # await manager.server_stop_gracefully(servers[1].server_id)              # stop   1
+    t = await random_tables.add_table(ncolumns=5)
+    await manager.server_stop_gracefully(servers[0].server_id)    # Stop  A
+    await reopen_driver(manager)
+    for srv in [1, 2]:
+        await manager.api.set_logger_level(servers[srv].ip_addr, "paxos", "trace")
+    seeds = [t.next_seq() for _ in range(10)]
+    for seed in seeds:
+        logger.warning(f"---------------- {seed} -------------------------")  # XXX
+        await manager.cql.run_async(f"INSERT INTO {t} ({','.join(c.name for c in t.columns)}) " \
+                                    f"VALUES ({', '.join(['%s'] * len(t.columns))}) "           \
+                                    f"IF NOT EXISTS",
+                                    parameters=[c.val(seed) for c in t.columns])  # FIRST
+        await t.add_column()
+    manager.driver_close()           # CLOSE
+    await manager.server_stop_gracefully(servers[1].server_id)    # Stop  B  (C stays)
+    # XXX here we want A to get the schema change from C's snapshot
+    logger.warning("---------------------------------- STARTING A -----------------------------------------")  # XXX
+    await manager.server_start(servers[0].server_id)              # Start A again  (C leader)
+    await manager.driver_connect()   # CONNECT
+    # logger.warning("---------------------------------- BEFORE SLEEP -----------------------------------------")  # XXX
+    # await asyncio.sleep(5) # XXX SLEEP
+    # manager._driver_update()                                      # driver update endpoints
+    for seed in seeds:
+        await manager.cql.run_async(f"INSERT INTO {t} ({','.join(c.name for c in t.columns)}) " \
+                                    f"VALUES ({', '.join(['%s'] * len(t.columns))}) "           \
+                                    f"IF NOT EXISTS",
+                                    parameters=[c.val(seed) for c in t.columns])  # SECOND
