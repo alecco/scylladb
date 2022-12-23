@@ -17,7 +17,7 @@ import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
-from cassandra.policies import RoundRobinPolicy                          # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
@@ -95,7 +95,7 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
-        load_balancing_policy=RoundRobinPolicy(),
+        load_balancing_policy=WhiteListRoundRobinPolicy(hosts=hosts),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeouts should have been more than enough, but in some
