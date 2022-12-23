@@ -198,6 +198,10 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
         config.max_log_size = 3 * config.max_command_size;
         config.snapshot_threshold_log_size = config.max_log_size / 2;
         config.snapshot_trailing_size = config.snapshot_threshold_log_size / 2;
+        utils::get_local_injector().inject("group0_force_snapshot", [&config] {
+            config.snapshot_threshold = 3;
+            config.snapshot_trailing = 2;
+        });
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
