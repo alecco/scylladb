@@ -35,6 +35,7 @@ async def test_mutation_schema_change(manager, random_tables):
     await reopen_driver(manager)
     for srv in [1, 2]:
         await manager.api.set_logger_level(servers[srv].ip_addr, "paxos", "trace")
+        await manager.api.set_logger_level(servers[srv].ip_addr, "raft", "trace")
     seeds = [t.next_seq() for _ in range(10)]
     for seed in seeds:
         logger.warning(f"---------------- {seed} -------------------------")  # XXX
