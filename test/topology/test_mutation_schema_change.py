@@ -8,7 +8,7 @@
 Test repro of failure to store mutation with schema change and a server down
 """
 import logging
-from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error
+from test.pylib.rest_client import inject_error
 import pytest
 
 
@@ -31,20 +31,23 @@ async def test_mutation_schema_change(manager, random_tables):
     """
     servers = await manager.running_servers()
     t = await random_tables.add_table(ncolumns=5)
-    await manager.server_stop_gracefully(servers[0].server_id)    # Stop  A
+    await manager.server_stop_gracefully(servers[0].server_id)          # Stop  A
     await reopen_driver(manager)
     for srv in [1, 2]:
         await manager.api.set_logger_level(servers[srv].ip_addr, "paxos", "trace")
         await manager.api.set_logger_level(servers[srv].ip_addr, "raft", "trace")
-    seeds = [t.next_seq() for _ in range(10)]
-    for seed in seeds:
-        logger.warning(f"---------------- {seed} -------------------------")  # XXX
-        await manager.cql.run_async(f"INSERT INTO {t} ({','.join(c.name for c in t.columns)}) " \
-                                    f"VALUES ({', '.join(['%s'] * len(t.columns))}) "           \
-                                    f"IF NOT EXISTS",
-                                    parameters=[c.val(seed) for c in t.columns])  # FIRST
-        await t.add_column()
-    manager.driver_close()           # CLOSE
+
+    async with inject_error(manager.api, servers[0].ip_addr, 'group0_force_snapshot', one_shot=False):
+        async with inject_error(manager.api, servers[1].ip_addr, 'group0_force_snapshot', one_shot=False):
+            for seed in seeds:
+                logger.warning(f"---------------- {seed} -------------------------")  # XXX
+                stmt = f"INSERT INTO {t} ({','.join(c.name for c in t.columns)}) " \
+                       f"VALUES ({', '.join(['%s'] * len(t.columns))}) "           \
+                       f"IF NOT EXISTS"
+                await manager.cql.run_async(stmt, parameters=[c.val(seed) for c in t.columns])  # FIRST
+                await t.add_column()
+
+    manager.driver_close()
     await manager.server_stop_gracefully(servers[1].server_id)    # Stop  B  (C stays)
     # XXX here we want A to get the schema change from C's snapshot
     logger.warning("---------------------------------- STARTING A -----------------------------------------")  # XXX
