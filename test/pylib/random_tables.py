@@ -176,13 +176,14 @@ class RandomTable():
         if column is not None:
             assert type(column) is Column, "Wrong column type to add_column"
         else:
-            name = name if name is not None else f"c_{self.next_clustering_id():02}"
+            name = name if name is not None else f"v_{self.next_value_id():02}"
             ctype = ctype if ctype is not None else TextType
             column = Column(name, ctype=ctype)
         self.columns.append(column)
         assert self.manager.cql is not None
-        await self.manager.cql.run_async(f"ALTER TABLE {self.full_name} "
-                                         f"ADD {column.name} {column.ctype.name}")
+        cql_stmt = f"ALTER TABLE {self.full_name} ADD {column.name} {column.ctype.name}"
+        logger.debug(cql_stmt)
+        await self.manager.cql.run_async(cql_stmt)
 
     async def drop_column(self, column: Union[Column, str] = None):
         if column is None:
