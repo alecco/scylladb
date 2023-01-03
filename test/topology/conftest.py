@@ -196,6 +196,6 @@ def fails_without_consistent_cluster_management(request, check_pre_consistent_cl
 # used in tests to make schema changes. Tables are dropped after finished.
 @pytest.fixture(scope="function")
 def random_tables(request, manager):
-    tables = RandomTables(request.node.name, manager, unique_name())
+    tables = RandomTables(request.node.name, manager, unique_name(), 3)
     yield tables
     tables.drop_all()
