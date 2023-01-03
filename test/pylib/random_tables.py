@@ -182,8 +182,9 @@ class RandomTable():
             column = Column(name, ctype=ctype)
         self.columns.append(column)
         assert self.manager.cql is not None
-        await self.manager.cql.run_async(f"ALTER TABLE {self.full_name} "
-                                         f"ADD {column.name} {column.ctype.name}")
+        cql_stmt = f"ALTER TABLE {self.full_name} ADD {column.name} {column.ctype.name}"
+        logger.debug(cql_stmt)
+        await self.manager.cql.run_async(cql_stmt)
 
     async def drop_column(self, column: Union[Column, str] = None):
         if column is None:
