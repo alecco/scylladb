@@ -96,7 +96,7 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
-        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        consistency_level=ConsistencyLevel.ONE,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeouts should have been more than enough, but in some
         # extreme cases with a very slow debug build running on a slow or very busy
