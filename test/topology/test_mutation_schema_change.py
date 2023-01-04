@@ -28,31 +28,34 @@ async def test_mutation_schema_change(manager, random_tables):
         B down, C up
         do lwt write to the same key
     """
-    servers = await manager.running_servers()
+    server_a, server_b, server_c = await manager.running_servers()
     t = await random_tables.add_table(ncolumns=5)
     manager.driver_close()
-    logger.warning("----- STOPPING [2] -----")
-    await manager.server_stop_gracefully(servers[2].server_id)          # Stop  [2]
+    logger.warning("----- STOPPING C -----")
+    await manager.server_stop_gracefully(server_c.server_id)          # Stop  C
     await manager.driver_connect()
 
-    await t.add_column()
-    ROWS = 1
-    seeds = [t.next_seq() for _ in range(ROWS)]
-    for seed in seeds:
-        stmt = f"INSERT INTO {t} ({','.join(c.name for c in t.columns)}) " \
-               f"VALUES ({', '.join(['%s'] * len(t.columns))}) "           \
-               f"IF NOT EXISTS"
-        logger.debug("----- FIRST INSERT: %s -----\n%s\n", seed, stmt)
-        await manager.cql.run_async(stmt, parameters=[c.val(seed) for c in t.columns])  # FIRST
-    await t.add_column()
+    async with inject_error(manager.api, server_b.ip_addr, 'paxos_error_before_learn',
+                            one_shot=False):
+        await t.add_column()
+        ROWS = 10
+        seeds = [t.next_seq() for _ in range(ROWS)]
+        for seed in seeds:
+            stmt = f"INSERT INTO {t} ({','.join(c.name for c in t.columns)}) " \
+                   f"VALUES ({', '.join(['%s'] * len(t.columns))}) "           \
+                   f"IF NOT EXISTS"
+            logger.debug("----- FIRST INSERT: %s -----\n%s\n", seed, stmt)
+            await manager.cql.run_async(stmt, parameters=[c.val(seed) for c in t.columns])  # FIRST
+        await t.add_column()
 
-    manager.driver_close()
-    logger.warning("----- STOPPING [1] -----")
-    await manager.server_stop_gracefully(servers[1].server_id)    # Stop  [1]
-    logger.warning("----- STARTING [2] -----")
-    await manager.server_start(servers[2].server_id)              # Start [2] again
+        manager.driver_close()
+
+    logger.warning("----- STOPPING B -----")
+    await manager.server_stop_gracefully(server_b.server_id)    # Stop  B
+    logger.warning("----- STARTING C -----")
+    await manager.server_start(server_c.server_id)              # Start A again
     await manager.driver_connect()
-    # await asyncio.sleep(1)
+    await asyncio.sleep(1)
     for seed in seeds:
         stmt = f"UPDATE {t} "                        \
                f"SET   {t.columns[3].name} = %s "  \
