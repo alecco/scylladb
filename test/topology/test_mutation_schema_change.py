@@ -58,7 +58,7 @@ async def test_mutation_schema_change(manager, random_tables):
     logger.warning("----- STARTING C -----")
     await manager.server_start(server_c.server_id)              # Start A again
     await manager.driver_connect()
-    await asyncio.sleep(1)
+    await asyncio.sleep(10)
     stmt = f"UPDATE {t} "                        \
            f"SET   {t.columns[3].name} = %s "  \
            f"WHERE {t.columns[0].name} = %s "  \
