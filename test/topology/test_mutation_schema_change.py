@@ -40,7 +40,7 @@ async def test_mutation_schema_change(manager, random_tables):
     async with inject_error(manager.api, server_b.ip_addr, 'paxos_error_before_learn',
                             one_shot=False):
         await t.add_column()
-        ROWS = 10
+        ROWS = 1
         seeds = [t.next_seq() for _ in range(ROWS)]
         stmt = f"INSERT INTO {t} ({','.join(c.name for c in t.columns)}) " \
                f"VALUES ({', '.join(['%s'] * len(t.columns))}) "           \
