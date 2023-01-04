@@ -117,7 +117,7 @@ class RandomTable():
     newid = itertools.count(start=1).__next__
 
     def __init__(self, manager: ManagerClient, keyspace: str, ncolumns: Optional[int]=None,
-                 columns: Optional[List[Column]]=None, pks: int=2, name: str=None):
+                 columns: Optional[List[Column]]=None, pks: int=1, name: str=None):
         """Set up a new table definition from column definitions.
            If column definitions not specified pick a random number of columns with random types.
            By default there will be 4 columns with first column as Primary Key"""
@@ -263,7 +263,7 @@ class RandomTables():
         self.tables.extend(tables)
 
     async def add_table(self, ncolumns: int = None, columns: List[Column] = None,
-                        pks: int = 2, name: str = None,
+                        pks: int = 1, name: str = None,
                         if_not_exists: bool = False) -> RandomTable:
         """Add a random table. See random_tables.RandomTable()"""
         table = RandomTable(self.manager, self.keyspace, ncolumns=ncolumns, columns=columns,
