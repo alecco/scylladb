@@ -57,9 +57,13 @@ async def test_mutation_schema_change(manager, random_tables):
     await manager.server_stop_gracefully(server_b.server_id)
     logger.warning("----- STARTING C -----")
     await manager.server_start(server_c.server_id)
-    await manager.driver_connect()
 
     await asyncio.sleep(10)
+
+    # await manager.driver_connect()
+    logger.debug("driver connecting to C")
+    manager.ccluster = manager.con_gen([server_c.ip_addr], manager.port, manager.use_ssl)
+    manager.cql = manager.ccluster.connect()
 
     stmt = f"UPDATE {t} "                        \
            f"SET   {t.columns[3].name} = %s "  \
