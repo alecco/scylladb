@@ -58,7 +58,7 @@ async def test_mutation_schema_change(manager, random_tables):
     logger.warning("----- STARTING C -----")
     await manager.server_start(server_c.server_id)
 
-    await asyncio.sleep(10)
+    # await asyncio.sleep(10)
 
     # await manager.driver_connect()
     logger.debug("driver connecting to C")
