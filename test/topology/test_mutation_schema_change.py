@@ -71,7 +71,7 @@ async def test_mutation_schema_change(manager, random_tables):
            f"IF    {t.columns[3].name} = %s"
     query = SimpleStatement(stmt, consistency_level=ConsistencyLevel.ONE)
     for seed in seeds:
-        logger.warning("----- SECOND INSERT: %s -----\n", seed)
+        logger.warning("----- UPDATE: %s -----\n", seed)
         await manager.cql.run_async(query, parameters=[t.columns[3].val(seed + 1), # v_01 = seed + 1
                                                        t.columns[0].val(seed),     # pk = seed
                                                        t.columns[3].val(seed)])    # v_01 == seed
