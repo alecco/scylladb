@@ -51,14 +51,16 @@ async def test_mutation_schema_change(manager, random_tables):
             await manager.cql.run_async(query, parameters=[c.val(seed) for c in t.columns])  # FIRST
         await t.add_column()
 
-        manager.driver_close()
+    manager.driver_close()
 
     logger.warning("----- STOPPING B -----")
-    await manager.server_stop_gracefully(server_b.server_id)    # Stop  B
+    await manager.server_stop_gracefully(server_b.server_id)
     logger.warning("----- STARTING C -----")
-    await manager.server_start(server_c.server_id)              # Start A again
+    await manager.server_start(server_c.server_id)
     await manager.driver_connect()
+
     await asyncio.sleep(10)
+
     stmt = f"UPDATE {t} "                        \
            f"SET   {t.columns[3].name} = %s "  \
            f"WHERE {t.columns[0].name} = %s "  \
