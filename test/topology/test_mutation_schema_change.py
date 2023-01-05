@@ -23,12 +23,12 @@ async def test_mutation_schema_change(manager, random_tables):
     """
         Cluster A, B, C
         create table
-        C is down
-        change schema
-        do lwt write
-        change schema
-        B down, C up
-        do lwt write to the same key
+        stop C
+        change schema + do lwt write + change schema
+        stop B
+        restart A
+        start C
+        do lwt write to the same key through A
     """
     server_a, server_b, server_c = await manager.running_servers()
     t = await random_tables.add_table(ncolumns=5)
@@ -55,10 +55,10 @@ async def test_mutation_schema_change(manager, random_tables):
 
     logger.warning("----- STOPPING B -----")
     await manager.server_stop_gracefully(server_b.server_id)
-    logger.warning("----- STARTING A -----")
-    await manager.server_start(server_a.server_id)
+    logger.warning("----- RESTARTING A -----")
+    await manager.server_restart(server_a.server_id)
 
-    # await asyncio.sleep(10)
+    await asyncio.sleep(30)
 
     # await manager.driver_connect()
     logger.debug("driver connecting to A")
