@@ -754,7 +754,29 @@ future<> gossiper::update_live_endpoints_version() {
     auto version = _live_endpoints_version + 1;
     return container().invoke_on_all([version] (gms::gossiper& g) {
         g._live_endpoints_version = version;
+        g._live_endpoints_version_condvar.broadcast();
     });
+}
+
+std::set<inet_address> gossiper::wait_version_on_all_shards(std::chrono::milliseconds timeout) {
+    auto start_time = std::chrono::steady_clock::now();
+    auto live_members = gossiper::get_live_members();
+    auto version = _live_endpoints_version;
+    size_t nr_version = co_await container().map_reduce0([version] (gossiper& g) -> size_t {
+        try {
+            return local_gossiper._live_endpoints_version_condvar.wait(20ms, [version], {
+                 return local_gossiper._live_endpoints_version >= version;
+            });
+        } catch (...) {
+            return 0;
+        }
+        return 1;
+    }, 0, std::plus<size_t>());
+    logger.debug("Nodes with gossiper version >= {}: {} / {}", version, nr_version, smp::count);
+    if (nr_version < smp::count) {
+        throw std::runtime_error(format("Failed wait for gossip version on all shards in 20ms");
+    }
+    co_return live_members;
 }
 
 future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version) {
