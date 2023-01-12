@@ -46,6 +46,25 @@
          ]
       },
       {
+         "path":"/gossiper/endpoint/live_synchronized/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the addreses of live endpoints",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_live_endpoint_synchronized",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/gossiper/downtime/{addr}",
          "operations":[
             {
