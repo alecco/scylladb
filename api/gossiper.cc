@@ -19,8 +19,9 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
         return container_to_vec(res);
     });
 
+
     httpd::gossiper_json::get_live_endpoint.set(r, [&g] (const_req req) {
-        auto res = g.get_live_members();
+        auto res = g.get_live_members_synchronized();
         return container_to_vec(res);
     });
 
