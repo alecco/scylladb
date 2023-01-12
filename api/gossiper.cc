@@ -24,6 +24,11 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
         return container_to_vec(res);
     });
 
+    httpd::gossiper_json::get_live_endpoint_synchronized.set(r, [&g] (const_req req) {
+        auto res = g.get_live_members_synchronized(1s).get0();
+        return container_to_vec(res);
+    });
+
     httpd::gossiper_json::get_endpoint_downtime.set(r, [&g] (const_req req) {
         gms::inet_address ep(req.param["addr"]);
         return g.get_endpoint_downtime(ep);
