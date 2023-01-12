@@ -757,6 +757,13 @@ future<> gossiper::update_live_endpoints_version() {
     });
 }
 
+std::set<inet_address> gossiper::get_live_members_synchronized() {
+    auto live_members = gossiper::get_live_members();
+    auto version = _live_endpoints_version;
+    duplicate_live_endpoints_on_change();
+    return live_members;
+}
+
 future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
@@ -867,6 +874,7 @@ void gossiper::duplicate_live_endpoints_on_change() {
     bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
 
     if (live_endpoint_changed || unreachable_endpoint_changed) {
+        logger.debug("duplicating live endpoints");
         if (live_endpoint_changed) {
             _shadow_live_endpoints = _live_endpoints;
         }
