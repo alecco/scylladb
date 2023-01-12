@@ -435,6 +435,9 @@ public:
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
 
+    // Wait for nodes to have gossiper version equal or greater than current version on shard 0
+    future<std::set<inet_address>> wait_version_on_all_shards(std::chrono::milliseconds timeout);
+
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
