@@ -36,7 +36,7 @@
                "items":{
                   "type":"string"
                },
-               "nickname":"get_live_endpoint",
+               "nickname":"get_live_endpoint_synchronized",
                "produces":[
                   "application/json"
                ],

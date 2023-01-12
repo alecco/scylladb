@@ -202,6 +202,7 @@ private:
     /* live member set */
     utils::chunked_vector<inet_address> _live_endpoints;
     uint64_t _live_endpoints_version = 0;
+    condition_variable _live_endpoints_version_condvar;
 
     /* nodes are being marked as alive */
     std::unordered_set<inet_address> _pending_mark_alive_endpoints;
@@ -434,6 +435,9 @@ public:
     bool is_dead_state(const endpoint_state& eps) const;
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
+
+    // Wait for nodes to have gossiper version equal or greater than current version on shard 0
+    future<std::set<inet_address>> get_live_members_synchronized(std::chrono::milliseconds timeout);
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
