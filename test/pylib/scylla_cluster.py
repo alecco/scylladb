@@ -807,9 +807,9 @@ class ScyllaClusterManager:
     site: aiohttp.web.UnixSite
     is_after_test_ok: bool
 
-    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
+    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str,
+                 logger: logging.Logger) -> None:
         self.test_uname: str = test_uname
-        logger = logging.getLogger(self.test_uname)
         self.logger = LogPrefixAdapter(logger, {'prefix': self.test_uname})
         # The currently running test case with self.test_uname prepended, e.g.
         # test_topology.1::test_add_server_add_column
@@ -1070,11 +1070,11 @@ class ScyllaClusterManager:
 
 
 @asynccontextmanager
-async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
-        -> AsyncIterator[ScyllaClusterManager]:
+async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str,
+                              logger: logging.Logger) -> AsyncIterator[ScyllaClusterManager]:
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_uname, clusters, test_path)
+    manager = ScyllaClusterManager(test_uname, clusters, test_path, logger)
     try:
         yield manager
     finally:

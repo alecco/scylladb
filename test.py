@@ -883,7 +883,9 @@ class TopologyTest(PythonTest):
         self._prepare_pytest_params(options)
 
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
-        async with get_cluster_manager(self.mode + '/' + self.uname, self.suite.clusters, test_path) as manager:
+        test_fullname = self.mode + '/' + self.uname
+        logger = logging.getLogger(test_fullname)
+        async with get_cluster_manager(test_fullname, self.suite.clusters, test_path, logger) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
             try:
@@ -898,7 +900,7 @@ class TopologyTest(PythonTest):
                     print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
                     raise
-            manager.logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
 
