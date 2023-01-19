@@ -34,7 +34,7 @@ from io import StringIO
 from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
-from test.pylib.pool import Pool
+from test.pylib.pool import Pool, PoolDiscardItem
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
@@ -842,26 +842,37 @@ class PythonTest(Test):
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        async with self.suite.clusters.instance(logger) as cluster:
-            try:
-                cluster.before_test(self.uname)
-                logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-                self.args.insert(0, "--host={}".format(cluster.endpoint()))
-                self.is_before_test_ok = True
-                cluster.take_log_savepoint()
-                status = await run_test(self, options)
-                cluster.after_test(self.uname)
-                self.is_after_test_ok = True
-                self.success = status
-            except Exception as e:
-                self.server_log = cluster.read_server_log()
-                self.server_log_filename = cluster.server_log_filename()
-                if self.is_before_test_ok is False:
-                    print("Test {} pre-check failed: {}".format(self.name, str(e)))
-                    print("Server log of the first server:\n{}".format(self.server_log))
-                    # Don't try to continue if the cluster is broken
-                    raise
-            logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        try:
+            async with self.suite.clusters.instance(logger) as cluster:
+                try:
+                    cluster.before_test(self.uname)
+                    logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                    self.args.insert(0, "--host={}".format(cluster.endpoint()))
+                    self.is_before_test_ok = True
+                    cluster.take_log_savepoint()
+                    status = await run_test(self, options)
+                    cluster.after_test(self.uname)
+                    self.is_after_test_ok = True
+                    self.success = status
+                except Exception as e:
+                    self.server_log = cluster.read_server_log()
+                    self.server_log_filename = cluster.server_log_filename()
+                    if self.is_before_test_ok is False:
+                        print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                        print("Server log of the first server:\n{}".format(self.server_log))
+                        # Don't try to continue if the cluster is broken
+                        raise
+                    if self.is_after_test_ok is False:
+                        print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                        print("Server log of the first server:\n{}".format(self.server_log))
+                        logger.info(f"Discarding cluster after failed test %s...", self.name)
+                        await self.suite.clusters.steal()
+                        await cluster.stop()
+                        await cluster.release_ips()
+                        raise PoolDiscardItem("Cluster discarded")
+        except PoolDiscardItem:
+            pass    # Exception processed by context manager
+        logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
