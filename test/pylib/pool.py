@@ -97,7 +97,7 @@ class Pool(Generic[T]):
                 return self.obj
 
             async def __aexit__(self, exc_type, exc, obj):
-                if self.obj:
+                if exc_type is None and self.obj:
                     await self.pool.put(self.obj)
                     self.obj = None
 

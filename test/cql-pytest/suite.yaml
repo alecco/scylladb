@@ -1,2 +1,2 @@
 type: Python
-pool_size: 4
+pool_size: 1

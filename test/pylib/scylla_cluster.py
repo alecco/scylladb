@@ -716,6 +716,8 @@ class ScyllaCluster:
     def after_test(self, name) -> None:
         """Check that the cluster is still alive and the test
         hasn't left any garbage."""
+        if "test_null" in name or "test_json" in name:
+            raise Exception("CUEC")
         assert self.start_exception is None
         if self._get_keyspace_count() != self.keyspace_count:
             raise RuntimeError("Test post-condition failed, "
