@@ -4,6 +4,10 @@ from typing import Generic, Callable, Awaitable, TypeVar, AsyncContextManager, F
 T = TypeVar('T')
 
 
+class PoolDiscardItem(Exception):
+    pass
+
+
 class Pool(Generic[T]):
     """Asynchronous object pool.
     You need a pool of up to N objects, but objects should be created
@@ -97,7 +101,7 @@ class Pool(Generic[T]):
                 return self.obj
 
             async def __aexit__(self, exc_type, exc, obj):
-                if self.obj:
+                if exc_type is not PoolDiscardItem and self.obj:
                     await self.pool.put(self.obj)
                     self.obj = None
 
