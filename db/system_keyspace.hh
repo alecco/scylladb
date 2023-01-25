@@ -139,6 +139,7 @@ public:
     static constexpr auto RAFT_SNAPSHOT_CONFIG = "raft_snapshot_config";
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto GROUP0_HISTORY = "group0_history";
+    static constexpr auto GROUP_REGISTRY_STATE = "group_registry_state";
     static constexpr auto DISCOVERY = "discovery";
     static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
 
@@ -223,6 +224,7 @@ public:
     static schema_ptr raft_snapshots();
     static schema_ptr repair_history();
     static schema_ptr group0_history();
+    static schema_ptr group_registry_state();
     static schema_ptr discovery();
     static schema_ptr broadcast_kv_store();
 
