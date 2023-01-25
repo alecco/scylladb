@@ -930,6 +930,25 @@ schema_ptr system_keyspace::group0_history() {
     return schema;
 }
 
+schema_ptr system_keyspace::group_registry_state() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, GROUP_REGISTRY_STATE);
+        return schema_builder(NAME, GROUP_REGISTRY_STATE, id)
+            // this is a single-row table with key 'group_id'
+            .with_column("group_id", reversed_type_impl::get_instance(timeuuid_type), column_kind::partition_key)
+            // XXX config, ...
+            .with_column("description", utf8_type)
+            .with_column("leader", uuid_type)  // XXX ???
+            .with_column("commit_idx", long_type, column_kind::static_column)
+            .with_column("term", long_type)
+            .set_comment("")  // XXX
+            .with_version(generate_schema_version(id))
+            .with_null_sharder()
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::discovery() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, DISCOVERY);
@@ -2801,7 +2820,8 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
     });
     if (cfg.consistent_cluster_management()) {
-        r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
+        r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(),
+                 group_registry_state, discovery()});
 
         if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
             r.insert(r.end(), {broadcast_kv_store()});
@@ -3377,6 +3397,8 @@ future<mutation> system_keyspace::get_group0_history(distributed<service::storag
     slogger.warn("get_group0_history: '{}' partition not found", GROUP0_HISTORY_KEY);
     co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
 }
+
+// XXX here getter/setter for group_registry_state
 
 static constexpr auto GROUP0_UPGRADE_STATE_KEY = "group0_upgrade_state";
 
