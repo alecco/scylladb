@@ -1161,9 +1161,13 @@ future<> server_impl::applier_fiber() {
                auto last_snap_idx = _fsm->log_last_snapshot_idx();
 
                // Error injection to be set/restored with one_shot
-               utils::get_local_injector().inject("raft_server_snapshot/reduce_threshold",
+utils::get_local_injector().inject("raft_server_reduce_threshold",
+     [] { throw std::runtime_error("test-failure"); });  // XXX raise if enabled
+utils::get_local_injector().inject("raft_server_restore_threshold",
+     [] { throw std::runtime_error("test-failure"); });  // XXX raise if enabled
+               utils::get_local_injector().inject("raft_server_reduce_threshold",
                    [this] { _config.snapshot_threshold = 3; _config.snapshot_trailing = 2; });
-               utils::get_local_injector().inject("raft_server_snapshot/restore_threshold",
+               utils::get_local_injector().inject("raft_server_restore_threshold",
                    [this] { _config.snapshot_threshold = 1024; _config.snapshot_trailing = 200; });
 
                if (_applied_idx > last_snap_idx &&
