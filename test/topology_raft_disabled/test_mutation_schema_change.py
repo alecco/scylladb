@@ -33,6 +33,9 @@ async def test_mutation_schema_change(manager, random_tables):
     server_a, server_b, server_c = await manager.running_servers()
     t = await random_tables.add_table(ncolumns=5)
     manager.driver_close()
+    await inject_error_one_shot(manager.api, server_a.ip_addr, 'raft_server_reduce_threshold')
+    await asyncio.sleep(.2)
+
     logger.warning("----- STOPPING C -----")
     await manager.server_stop_gracefully(server_c.server_id)          # Stop  C
     await manager.driver_connect()
@@ -75,6 +78,9 @@ async def test_mutation_schema_change(manager, random_tables):
                                                        t.columns[0].val(seed),     # pk = seed
                                                        t.columns[3].val(seed)])    # v_01 == seed
 
+    await inject_error_one_shot(manager.api, server_a.ip_addr, 'raft_server_restore_threshold')
+    await asyncio.sleep(.1)
+
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(reason="Issue #10770")
@@ -92,10 +98,15 @@ async def test_mutation_schema_change_restart(manager, random_tables):
     server_a, server_b, server_c = await manager.running_servers()
     t = await random_tables.add_table(ncolumns=5)
     manager.driver_close()
+    await inject_error_one_shot(manager.api, server_a.ip_addr, 'raft_server_reduce_threshold')
+    await asyncio.sleep(.2)
+
     logger.warning("----- STOPPING C -----")
     await manager.server_stop_gracefully(server_c.server_id)          # Stop  C
     await manager.driver_connect()
 
+    await inject_error_one_shot(manager.api, server_a.ip_addr,
+                                'raft_server_reduce_threshold')
     async with inject_error(manager.api, server_b.ip_addr, 'paxos_error_before_learn',
                             one_shot=False):
         await t.add_column()
@@ -135,3 +146,6 @@ async def test_mutation_schema_change_restart(manager, random_tables):
         await manager.cql.run_async(query, parameters=[t.columns[3].val(seed + 1), # v_01 = seed + 1
                                                        t.columns[0].val(seed),     # pk = seed
                                                        t.columns[3].val(seed)])    # v_01 == seed
+
+    await inject_error_one_shot(manager.api, server_a.ip_addr, 'raft_server_restore_threshold')
+    await asyncio.sleep(.1)
