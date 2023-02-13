@@ -39,6 +39,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/rwlock.hh>
 #include "locator/token_metadata.hh"
 
 namespace db {
@@ -209,6 +210,8 @@ private:
     /* unreachable member set */
     std::unordered_map<inet_address, clk::time_point> _unreachable_endpoints;
 
+    seastar::rwlock _endpoint_update_mutex;
+
     /* initial seeds for joining the cluster */
     std::set<inet_address> _seeds;
 
@@ -224,6 +227,9 @@ private:
 
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
+
+    // replicate live endpoints across all other shards.
+    void replicate_live_endpoints_on_change();
 
     void run();
     // Replicates given endpoint_state to all other shards.
