@@ -855,6 +855,45 @@ future<> gossiper::failure_detector_loop() {
     logger.info("failure_detector_loop: Finished main loop");
 }
 
+void gossiper::duplicate_live_endpoints_on_change() {
+    //
+    // Gossiper task runs only on CPU0:
+    //
+    //    - If endpoint_state_map or _live_endpoints have changed - duplicate
+    //      them across all other shards.
+    //    - Reschedule the gossiper only after execution on all nodes is done.
+    //
+    bool live_endpoint_changed = (_live_endpoints != _shadow_live_endpoints);
+    bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
+
+    if (live_endpoint_changed || unreachable_endpoint_changed) {
+        if (live_endpoint_changed) {
+            _shadow_live_endpoints = _live_endpoints;
+        }
+
+        if (unreachable_endpoint_changed) {
+            _shadow_unreachable_endpoints = _unreachable_endpoints;
+        }
+
+        container().invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed, es = _endpoint_state_map] (gossiper& local_gossiper) {
+            // Don't copy gossiper(CPU0) maps into themselves!
+            if (this_shard_id() != 0) {
+                if (live_endpoint_changed) {
+                    local_gossiper._live_endpoints = _shadow_live_endpoints;
+                }
+
+                if (unreachable_endpoint_changed) {
+                    local_gossiper._unreachable_endpoints = _shadow_unreachable_endpoints;
+                }
+
+                for (auto&& e : es) {
+                    local_gossiper._endpoint_state_map[e.first].set_alive(e.second.is_alive());
+                }
+            }
+        }).get();
+    }
+}
+
 // Depends on:
 // - failure_detector
 // - on_remove callbacks, e.g, storage_service -> access token_metadata
@@ -932,42 +971,7 @@ void gossiper::run() {
                 do_status_check().get();
             }
 
-            //
-            // Gossiper task runs only on CPU0:
-            //
-            //    - If endpoint_state_map or _live_endpoints have changed - duplicate
-            //      them across all other shards.
-            //    - Reschedule the gossiper only after execution on all nodes is done.
-            //
-            bool live_endpoint_changed = (_live_endpoints != _shadow_live_endpoints);
-            bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
-
-            if (live_endpoint_changed || unreachable_endpoint_changed) {
-                if (live_endpoint_changed) {
-                    _shadow_live_endpoints = _live_endpoints;
-                }
-
-                if (unreachable_endpoint_changed) {
-                    _shadow_unreachable_endpoints = _unreachable_endpoints;
-                }
-
-                container().invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed, es = _endpoint_state_map] (gossiper& local_gossiper) {
-                    // Don't copy gossiper(CPU0) maps into themselves!
-                    if (this_shard_id() != 0) {
-                        if (live_endpoint_changed) {
-                            local_gossiper._live_endpoints = _shadow_live_endpoints;
-                        }
-
-                        if (unreachable_endpoint_changed) {
-                            local_gossiper._unreachable_endpoints = _shadow_unreachable_endpoints;
-                        }
-
-                        for (auto&& e : es) {
-                            local_gossiper._endpoint_state_map[e.first].set_alive(e.second.is_alive());
-                        }
-                    }
-                }).get();
-            }
+            duplicate_live_endpoints_on_change();
 
     }).then_wrapped([this] (auto&& f) {
         try {
