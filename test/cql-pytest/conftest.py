@@ -9,6 +9,7 @@
 # be set up only once - while still allowing the user to run individual tests
 # and automatically setting up the fixtures they need.
 
+import logging
 import pytest
 
 from cassandra.cluster import Cluster, NoHostAvailable
@@ -18,6 +19,12 @@ import time
 import random
 
 from util import unique_name, new_test_table, cql_session
+
+
+logger = logging.getLogger(__name__)
+logger.warning("Driver name %s", DRIVER_NAME)
+logger.warning("Driver version %s", DRIVER_VERSION)
+
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
