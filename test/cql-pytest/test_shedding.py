@@ -54,10 +54,6 @@ def disable_compression():
 # Such errors occurred before, when before closing the connection, the remaining
 # bytes of the current request were not read to the end and were treated as
 # the beginning of the next request.
-#
-# Have no idea why, but on CI the actual memory limit for CQL requests is ~100MiB,
-# so we use ~60MiB request (which is estimated to take ~120MiB according to the logic above)
-# to guarantee shedding.
 def test_shed_too_large_request(cql, table1, scylla_only):
     def get_protocol_errors():
         result = 0
@@ -86,12 +82,10 @@ def test_shed_too_large_request(cql, table1, scylla_only):
             # and we get InvalidRequest exception.
             with pytest.raises((NoHostAvailable, InvalidRequest),
                                match="request size too large|Unable to complete the operation against any hosts"):
-                a_5mb_string = 'x'*10*1024*1024
+                a_5mb_string = 'x'*5*1024*1024
                 ncql.execute(prepared, [a_5mb_string]*6)
     protocol_errors_after = get_protocol_errors()
     assert protocol_errors_after == protocol_errors_before
     cql.execute(prepared, ["small_string"]*6)
     res = [row for row in cql.execute(f"SELECT p, t3 FROM {table1}")]
     assert len(res) == 1 and res[0].p == 42 and res[0].t3 == "small_string"
-
-
