@@ -39,6 +39,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/shared_mutex.hh>
 #include "locator/token_metadata.hh"
 
 namespace db {
@@ -208,6 +209,8 @@ private:
 
     /* unreachable member set */
     std::unordered_map<inet_address, clk::time_point> _unreachable_endpoints;
+
+    seastar::shared_mutex _endpoint_update_mutex;
 
     /* initial seeds for joining the cluster */
     std::set<inet_address> _seeds;
