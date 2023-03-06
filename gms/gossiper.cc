@@ -863,51 +863,47 @@ future<> gossiper::failure_detector_loop() {
 
 void gossiper::replicate_live_endpoints_on_change() {
     assert(this_shard_id() == 0);
-    (void)seastar::async([this] {
-        with_lock(_endpoint_update_mutex, [this] () -> future<> {
-            //
-            // Gossiper task runs only on CPU0:
-            //
-            //    - If endpoint_state_map or _live_endpoints have changed - replicate
-            //      them across all other shards.
-            //    - Reschedule the gossiper only after execution on all nodes is done.
-            //
-            bool live_endpoint_changed = (_live_endpoints != _shadow_live_endpoints);
-            bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
+    with_lock(_endpoint_update_mutex, [this] () -> future<> {
+        //
+        // Gossiper task runs only on CPU0:
+        //
+        //    - If endpoint_state_map or _live_endpoints have changed - replicate
+        //      them across all other shards.
+        //    - Reschedule the gossiper only after execution on all nodes is done.
+        //
+        bool live_endpoint_changed = (_live_endpoints != _shadow_live_endpoints);
+        bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
 
-            if (live_endpoint_changed || unreachable_endpoint_changed) {
-                logger.debug("replicating live endpoints to other shards");
+        if (live_endpoint_changed || unreachable_endpoint_changed) {
+            logger.debug("replicating live endpoints to other shards");
 
-                if (live_endpoint_changed) {
-                    _shadow_live_endpoints = _live_endpoints;
-                }
-
-                if (unreachable_endpoint_changed) {
-                    _shadow_unreachable_endpoints = _unreachable_endpoints;
-                }
-
-                co_await container().invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed,
-                                           es = _endpoint_state_map] (gossiper& local_gossiper) {
-                    // Don't copy gossiper(CPU0) maps into themselves!
-                    if (this_shard_id() != 0) {
-                        if (live_endpoint_changed) {
-                            local_gossiper._live_endpoints = _shadow_live_endpoints;
-                        }
-
-                        if (unreachable_endpoint_changed) {
-                            local_gossiper._unreachable_endpoints = _shadow_unreachable_endpoints;
-                        }
-
-                        for (auto&& e : es) {
-                            local_gossiper._endpoint_state_map[e.first].set_alive(e.second.is_alive());
-                        }
-                    }
-                });
+            if (live_endpoint_changed) {
+                _shadow_live_endpoints = _live_endpoints;
             }
+
+            if (unreachable_endpoint_changed) {
+                _shadow_unreachable_endpoints = _unreachable_endpoints;
+            }
+
+            co_await container().invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed,
+                                       es = _endpoint_state_map] (gossiper& local_gossiper) {
+                // Don't copy gossiper(CPU0) maps into themselves!
+                if (this_shard_id() != 0) {
+                    if (live_endpoint_changed) {
+                        local_gossiper._live_endpoints = _shadow_live_endpoints;
+                    }
+
+                    if (unreachable_endpoint_changed) {
+                        local_gossiper._unreachable_endpoints = _shadow_unreachable_endpoints;
+                    }
+
+                    for (auto&& e : es) {
+                        local_gossiper._endpoint_state_map[e.first].set_alive(e.second.is_alive());
+                    }
+                }
+            });
+        }
         }).get();
-    }).handle_exception([] (auto ep) {
-        logger.warn("Fail to replicate alive endpoints: {}", ep);
-    });
 }
 
 // Depends on:
