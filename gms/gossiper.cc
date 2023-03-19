@@ -758,9 +758,11 @@ future<> gossiper::update_live_endpoints_version() {
 }
 
 future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
-    auto live_members = gossiper::get_live_members();
-    co_await replicate_live_endpoints_on_change();
-    co_return live_members;
+    return run_on_shard0_with_endpoint_update_semaphore([this] (gms::gossiper& g) -> future<std::set<inet_address>> {
+        std::set<inet_address> live_members = get_live_members();
+        co_await g.replicate_live_endpoints_on_change();
+        co_return live_members;
+    });
 }
 
 future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version) {
@@ -863,7 +865,6 @@ future<> gossiper::failure_detector_loop() {
 
 future<> gossiper::replicate_live_endpoints_on_change() {
     assert(this_shard_id() == 0);
-    auto lock = co_await get_units(_endpoint_update_semaphore, 1);
     //
     // Gossiper task runs only on CPU0:
     //

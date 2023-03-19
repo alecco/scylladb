@@ -227,7 +227,7 @@ private:
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
 
-    // replicate live endpoints across all other shards.
+    // replicate shard 0 live endpoints across all other shards.
     future<> replicate_live_endpoints_on_change();
 
     void run();
@@ -434,6 +434,16 @@ private:
      */
     future<> handle_major_state_change(inet_address ep, const endpoint_state& eps);
 
+    template <typename Func>
+    auto run_on_shard0_with_endpoint_update_semaphore(Func&& func) {
+        return container().invoke_on(0, [this, func = std::forward<Func>(func)] (gms::gossiper& g) {
+            return get_units(_endpoint_update_semaphore, 1).then([&g, func = std::move(func)] (auto units) {
+                return func(g).then([units = std::move(units)] (auto res) {
+                    return res;
+                });
+            });
+        });
+    }
 public:
     bool is_alive(inet_address ep) const;
     bool is_dead_state(const endpoint_state& eps) const;
