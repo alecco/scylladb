@@ -227,8 +227,8 @@ private:
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
 
-    // replicate live endpoints across all other shards.
-    future<> replicate_live_endpoints_on_change();
+    // replicate shard 0 live endpoints across all other shards.
+    future<> replicate_live_endpoints_on_change(std::set<inet_address>* live_members_out);
 
     void run();
     // Replicates given endpoint_state to all other shards.
