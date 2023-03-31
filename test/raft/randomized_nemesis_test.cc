@@ -112,6 +112,9 @@ class impure_state_machine : public raft::state_machine {
     // in their instances of `_output_channels` so they just drop the output.
     std::unordered_map<cmd_id_t, promise<typename M::output_t>> _output_channels;
 
+    // Set apply() to throw
+    bool _throw_exception_on_apply = false;
+
 public:
     impure_state_machine(raft::server_id id, snapshots_t<typename M::state_t>& snapshots)
         : _id(id), _val(M::init), _snapshots(snapshots) {}
@@ -120,6 +123,13 @@ public:
         co_await with_gate(_gate, [this, cmds = std::move(cmds)] () mutable -> future<> {
             for (auto& cref : cmds) {
                 _gate.check();
+
+                if (_throw_exception_on_apply) {
+                    tlogger.warn("XXX {} sm.apply() throwing timeout error ", _id); // XXX
+                    throw timed_out_error{};
+                } else {
+                    tlogger.warn("XXX {} sm.apply() NOT throwing timeout error {}", _id, _throw_exception_on_apply); // XXX
+                }
 
                 auto is = ser::as_input_stream(cref);
                 auto cmd_id = ser::deserialize(is, boost::type<cmd_id_t>{});
@@ -194,6 +204,12 @@ public:
 
     const typename M::state_t& state() const {
         return _val;
+    }
+
+    // Set apply() to throw
+    void enable_throw_exception_on_apply() {
+        _throw_exception_on_apply = true;
+        tlogger.warn("XXX {} sm.enable_throw_exception_on_apply() {} \n\n", _id, _throw_exception_on_apply); // XXX
     }
 };
 
@@ -1431,7 +1447,9 @@ public:
             // _server may try to add/remove endpoints after _fd_service is stopped but it's allowed.
             _fd_subscription = std::nullopt;
             co_await _fd_service->stop();
+            _sm.enable_throw_exception_on_apply();
             co_await _server->abort();
+            tlogger.warn("XXX raft_server.abort() done calling _server->abort() ^^^^^^^^^^\n"); // XXX
 
             {
                 std::vector<raft::snapshot_id> snapshot_ids;
@@ -2092,6 +2110,7 @@ future<> ping_shards() {
 }
 
 SEASTAR_TEST_CASE(basic_test) {
+tlogger.warn("XXX ------------------ basic_test ---------"); // XXX
     logical_timer timer;
     environment_config cfg {
         .rnd{0},
@@ -2163,6 +2182,7 @@ SEASTAR_TEST_CASE(basic_test) {
 }
 
 SEASTAR_TEST_CASE(test_frequent_snapshotting) {
+tlogger.warn("XXX ------------------ test_frequent_snapshotting ---------"); // XXX
     auto seed = tests::random::get_int<int32_t>();
     std::mt19937 random_engine{seed};
 
@@ -2246,6 +2266,7 @@ SEASTAR_TEST_CASE(test_frequent_snapshotting) {
 // A snapshot was being taken with the wrong term (current term instead of the term at the snapshotted index).
 // This is a regression test for that bug.
 SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
+tlogger.warn("XXX ------------------ snapshot_uses_correct_term_test ---------"); // XXX
     logical_timer timer;
     environment_config cfg {
         .rnd{0},
@@ -2326,6 +2347,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
 // Regression test for the following bug: when we took a snapshot, we forgot to save the configuration.
 // This caused each node in the cluster to eventually forget the cluster configuration.
 SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
+tlogger.warn("XXX ------------------ snapshotting_preserves_config_test ---------"); // XXX
     logical_timer timer;
     environment_config cfg {
         .rnd{0},
@@ -2387,6 +2409,7 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
 
 // Regression test for #9981.
 SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
+tlogger.warn("XXX ------------------ removed_follower_with_forwarding_learns_about_removal ---------"); // XXX
     logical_timer timer;
     environment_config cfg {
         .rnd{0},
@@ -2424,6 +2447,7 @@ SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
 
 // Regression test for #10010, #11235.
 SEASTAR_TEST_CASE(remove_leader_with_forwarding_finishes) {
+tlogger.warn("XXX ------------------ remove_leader_with_forwarding_finishes ---------"); // XXX
     auto seed = tests::random::get_int<int32_t>();
     std::mt19937 random_engine{seed};
 
@@ -3176,6 +3200,7 @@ std::ostream& operator<<(std::ostream& os, const AppendReg::ret& r) {
 }
 
 SEASTAR_TEST_CASE(basic_generator_test) {
+tlogger.warn("XXX ------------------ basic_generator_test ---------"); // XXX
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
             raft_read<AppendReg>,

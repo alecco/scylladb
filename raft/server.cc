@@ -1169,8 +1169,10 @@ future<> server_impl::applier_fiber() {
                     try {
                         co_await _state_machine->apply(std::move(commands));
                     } catch (abort_requested_exception& e) {
-                        logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _id, e);
-                        throw stop_apply_fiber{};
+                        logger.info("[{}] applier fiber stopped because state machine was aborted: {} XXX", _id, e);
+throw request_aborted(); // XXX
+                        co_return; // XXX
+                        // XXX throw stop_apply_fiber{};
                     } catch (...) {
                         std::throw_with_nested(raft::state_machine_error{});
                     }
@@ -1371,6 +1373,7 @@ void server_impl::handle_background_error(const char* fiber_name) {
 
 future<> server_impl::abort(sstring reason) {
     _aborted = std::move(reason);
+    logger.warn("[{}]: server_impl::abort() called", _id); // XXX
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
 
