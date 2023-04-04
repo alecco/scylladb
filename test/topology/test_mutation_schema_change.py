@@ -11,7 +11,6 @@ import logging
 import time
 from functools import partial
 from test.pylib.rest_client import inject_error_one_shot, inject_error
-from test.pylib.util import wait_for
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import IPAddress, ServerInfo
 import pytest
@@ -21,11 +20,6 @@ from cassandra.query import SimpleStatement              # type: ignore # pylint
 
 logger = logging.getLogger(__name__)
 
-
-async def server_sees_another_server(server: ServerInfo, manager: ManagerClient):
-    alive_nodes = await manager.api.get_alive_endpoints(server.ip_addr)
-    if len(alive_nodes) > 1:
-        return True
 
 @pytest.mark.asyncio
 async def test_mutation_schema_change(manager, random_tables):
@@ -70,9 +64,7 @@ async def test_mutation_schema_change(manager, random_tables):
     logger.info("Stopping B %s", server_b)
     await manager.server_stop_gracefully(server_b.server_id)
     logger.info("Starting C %s", server_c)
-    await manager.server_start(server_c.server_id)
-
-    await wait_for(partial(server_sees_another_server, server_c, manager), time.time() + 45, period=.1)
+    await manager.server_start(server_c.server_id, None, True, 1)
 
     logger.info("Driver connecting to C %s", server_c)
     await manager.driver_connect(server=server_c)
@@ -137,11 +129,10 @@ async def test_mutation_schema_change_restart(manager, random_tables):
     logger.info("Restarting A %s", server_a)
     await manager.server_restart(server_a.server_id)
     logger.info("Starting C %s", server_c)
-    await manager.server_start(server_c.server_id)
+    await manager.server_start(server_c.server_id, None, True, 1) # Wait C to see another one (A)
 
-    # Wait for C and A to see each other
-    await wait_for(partial(server_sees_another_server, server_c, manager), time.time() + 45, period=.1)
-    await wait_for(partial(server_sees_another_server, server_a, manager), time.time() + 45, period=.1)
+    # Wait for A to see C
+    await manager.server_sees_other_server(server_a.ip_addr, server_c.ip_addr)
 
     logger.info("Driver connecting to A %s", server_a)
     await manager.driver_connect(server=server_a)
