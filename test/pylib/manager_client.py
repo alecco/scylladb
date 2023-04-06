@@ -51,6 +51,7 @@ class ManagerClient():
     async def driver_connect(self, server=None) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
+            self.driver_close()
             targets = [server] if server else await self.running_servers()
             servers = [s_info.ip_addr for s_info in targets]
             logger.debug("driver connecting to %s", servers)
