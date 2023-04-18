@@ -30,6 +30,8 @@ async def test_remove_node_add_column(manager: ManagerClient, random_tables: Ran
     await manager.server_stop_gracefully(servers[1].server_id)              # stop     [1]
     await manager.remove_node(servers[0].server_id, servers[1].server_id)   # Remove   [1]
     await check_token_ring_and_group0_consistency(manager)
+    logger.debug(f'waiting for {servers[2]} to see {servers[1]} is down')
+    await manager.server_not_sees_other_server(servers[2].ip_addr, servers[1].ip_addr)
     await table.add_column()
     await random_tables.verify_schema()
 
