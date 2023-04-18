@@ -175,6 +175,7 @@ async def manager_internal(event_loop, request):
     yield manager_int
     await manager_int.stop()  # Stop client session and close driver after last test
 
+@pytest.mark.asyncio
 @pytest.fixture(scope="function")
 async def manager(request, manager_internal):
     """Per test fixture to notify Manager client object when tests begin so it can
@@ -221,6 +222,7 @@ def fails_without_consistent_cluster_management(request, check_pre_consistent_cl
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after test finishes
 # unless the cluster is dirty or the test has failed.
+@pytest.mark.asyncio
 @pytest.fixture(scope="function")
 async def random_tables(request, manager):
     rf_marker = request.node.get_closest_marker("replication_factor")
