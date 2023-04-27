@@ -187,7 +187,7 @@ private:
 
     future<> passive_announce();
 
-    void schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
+    future<> schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
 
     future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint);
 

@@ -173,13 +173,16 @@ future<> migration_notifier::unregister_listener(migration_listener* listener)
     return _listeners.remove(listener);
 }
 
-void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
+future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
 {
+    auto guard = co_await start_group0_operation();
+    if (guard.with_raft()) {
+        co_return;
+    }
     const auto* value = state.get_application_state_ptr(gms::application_state::SCHEMA);
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
-        // FIXME: discarded future
-        (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value()}), endpoint).handle_exception([endpoint] (auto ep) {
+        co_await maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value()}), endpoint).handle_exception([endpoint] (auto ep) {
             mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
         });
     }
@@ -1129,8 +1132,7 @@ future<column_mapping> get_column_mapping(table_id table_id, table_schema_versio
 }
 
 future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    schedule_schema_pull(endpoint, ep_state);
-    return make_ready_future();
+    co_await schedule_schema_pull(endpoint, ep_state);
 }
 
 future<> migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
@@ -1138,18 +1140,16 @@ future<> migration_manager::on_change(gms::inet_address endpoint, gms::applicati
         auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
-            return make_ready_future();
+            co_return;
         }
         if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(endpoint)) {
-            schedule_schema_pull(endpoint, *ep_state);
+            co_await schedule_schema_pull(endpoint, *ep_state);
         }
     }
-    return make_ready_future();
 }
 
 future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    schedule_schema_pull(endpoint, state);
-    return make_ready_future();
+    co_await schedule_schema_pull(endpoint, state);
 }
 
 void migration_manager::set_concurrent_ddl_retries(size_t n) {
