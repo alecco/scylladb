@@ -1151,8 +1151,10 @@ future<column_mapping> get_column_mapping(table_id table_id, table_schema_versio
 }
 
 future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    schedule_schema_pull(endpoint, ep_state);
-    return make_ready_future();
+    auto [upgrade_lock_holder, upgrade_state] = co_await _group0_client.get_group0_upgrade_state();
+    if (upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
+        schedule_schema_pull(endpoint, ep_state);
+    }
 }
 
 future<> migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
@@ -1160,18 +1162,22 @@ future<> migration_manager::on_change(gms::inet_address endpoint, gms::applicati
         auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
-            return make_ready_future();
+            co_return;
         }
         if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(endpoint)) {
-            schedule_schema_pull(endpoint, *ep_state);
+            auto [upgrade_lock_holder, upgrade_state] = co_await _group0_client.get_group0_upgrade_state();
+            if (upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
+                schedule_schema_pull(endpoint, *ep_state);
+            }
         }
     }
-    return make_ready_future();
 }
 
 future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    schedule_schema_pull(endpoint, state);
-    return make_ready_future();
+    auto [upgrade_lock_holder, upgrade_state] = co_await _group0_client.get_group0_upgrade_state();
+    if (upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
+        schedule_schema_pull(endpoint, state);
+    }
 }
 
 void migration_manager::set_concurrent_ddl_retries(size_t n) {
