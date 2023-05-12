@@ -759,7 +759,7 @@ public:
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
 
 private:
-    std::unordered_set<gms::inet_address> _normal_state_handled_on_boot;
+    std::unordered_map<gms::inet_address, gms::generation_type> _normal_state_handled_on_boot;
     bool is_normal_state_handled_on_boot(gms::inet_address);
     future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes);
 

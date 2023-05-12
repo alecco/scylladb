@@ -2075,7 +2075,8 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
             bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) { return _gossiper.is_left(node); });
             if (left) {
                 slogger.info("Skip to set host_id={} to be owned by node={}, because the node is removed from the cluster, nodes {} used to own the host_id", host_id, endpoint, nodes);
-                _normal_state_handled_on_boot.insert(endpoint);
+                // XXX here insert endpoint::gms::generation_type
+                _normal_state_handled_on_boot[endpoint] = gms::generation_type(co_await _sys_ks.local().increment_and_get_generation());
                 co_return;
             }
             slogger.info("Set host_id={} to be owned by node={}", host_id, endpoint);
@@ -2194,7 +2195,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
             slogger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}", ver, x.first, x.second);
         }
     }
-    _normal_state_handled_on_boot.insert(endpoint);
+    _normal_state_handled_on_boot[endpoint] = gms::generation_type(co_await _sys_ks.local().increment_and_get_generation());
 }
 
 future<> storage_service::handle_state_leaving(inet_address endpoint) {
