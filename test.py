@@ -7,6 +7,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 import argparse
+import ast
 import asyncio
 import collections
 import colorama
@@ -184,8 +185,11 @@ class TestSuite(ABC):
     def pattern(self) -> str:
         pass
 
+    def cases(self, shortname: str) -> List[str]:
+        return []
+
     @abstractmethod
-    async def add_test(self, shortname: str) -> None:
+    async def add_test(self, shortname: str, case: Optional[str]) -> None:
         pass
 
     async def run(self, test: 'Test', options: argparse.Namespace):
@@ -227,20 +231,34 @@ class TestSuite(ABC):
                 continue
 
             t = os.path.join(self.name, shortname)
-            patterns = options.name if options.name else [t]
+
+            # TODO: support skip for test cases ('not casename' for pytest)
             if options.skip_pattern and options.skip_pattern in t:
                 continue
 
-            async def add_test(shortname) -> None:
+            async def add_test(shortname, case) -> None:
                 # Add variants of the same test sequentially
                 # so that case cache has a chance to populate
                 for i in range(options.repeat):
-                    await self.add_test(shortname)
+                    await self.add_test(shortname, case)
                     self.pending_test_count += 1
 
-            for p in patterns:
-                if p in t:
-                    pending.add(asyncio.create_task(add_test(shortname)))
+            if not options.name:
+                pending.add(asyncio.create_task(add_test(shortname, None)))
+            else:
+                # Try to match whole shortname (test file) first
+                for p in options.name:
+                    if p.count('/') < 2 and p in t:
+                        pending.add(asyncio.create_task(add_test(shortname, None)))
+                        break  # single test running all cases, no need for per-case check
+                else:
+                    # No whole shortname (test file) match, try matching cases
+                    for case in self.cases(shortname):
+                        case_t = os.path.join(t, case)
+                        for p in options.name:
+                            if p in case_t:
+                                pending.add(asyncio.create_task(add_test(shortname, case)))
+
         if len(pending) == 0:
             return
         try:
@@ -270,7 +288,7 @@ class UnitTestSuite(TestSuite):
         test = UnitTest(self.next_id((shortname, self.suite_key)), shortname, suite, args)
         self.tests.append(test)
 
-    async def add_test(self, shortname) -> None:
+    async def add_test(self, shortname: str, case: Optional[str]) -> None:
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
         # Skip tests which are not configured, and hence are not built
@@ -308,7 +326,6 @@ class BoostTestSuite(UnitTestSuite):
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
             fqname = os.path.join(self.mode, self.name, shortname)
             if fqname not in self._case_cache:
-                exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
                 process = await asyncio.create_subprocess_exec(
                     exe, *['--list_content'],
                     stderr=asyncio.subprocess.PIPE,
@@ -432,8 +449,19 @@ class PythonTestSuite(TestSuite):
     def pattern(self) -> str:
         assert False
 
-    async def add_test(self, shortname) -> None:
-        test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, self)
+    def cases(self, shortname: str) -> List[str]:
+        # Find test cases in pytest file (without importing), so they can be invoked separately
+        pytest_file = str(self.suite_path / (shortname + ".py"))
+        with open(pytest_file, "rt") as file:
+            tree = ast.parse(file.read(), filename=pytest_file)
+        cases = [f.name for f in tree.body
+                if (isinstance(f, ast.FunctionDef) or isinstance(f, ast.AsyncFunctionDef)) and
+                 f.name.startswith("test_")]
+        return cases
+
+
+    async def add_test(self, shortname: str, case: Optional[str]) -> None:
+        test = PythonTest(self.next_id((shortname, case, self.suite_key)), shortname, self, case)
         self.tests.append(test)
 
 
@@ -446,7 +474,11 @@ class CQLApprovalTestSuite(PythonTestSuite):
     def build_test_list(self) -> List[str]:
         return TestSuite.build_test_list(self)
 
-    async def add_test(self, shortname: str) -> None:
+    def cases(self, shortname: str) -> List[str]:
+        return []   # There are no separate test cases for Approval suite
+
+    async def add_test(self, shortname: str, case: Optional[str]) -> None:
+        assert not case, "CQLApprovalTest doesn't support cases"
         test = CQLApprovalTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
@@ -466,9 +498,9 @@ class TopologyTestSuite(PythonTestSuite):
         """Build list of Topology python tests"""
         return TestSuite.build_test_list(self)
 
-    async def add_test(self, shortname: str) -> None:
+    async def add_test(self, shortname: str, case: Optional[str]) -> None:
         """Add test to suite"""
-        test = TopologyTest(self.next_id((shortname, 'topology', self.mode)), shortname, self)
+        test = TopologyTest(self.next_id((shortname, 'topology', case, self.mode)), shortname, self, case)
         self.tests.append(test)
 
     @property
@@ -489,7 +521,8 @@ class RunTestSuite(TestSuite):
             self.scylla_env = dict()
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
-    async def add_test(self, shortname) -> None:
+    async def add_test(self, shortname, case: Optional[str]) -> None:
+        assert not case, "RunTest doesn't support cases"
         test = RunTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
@@ -511,8 +544,9 @@ class Test:
         self.shortname = shortname
         self.mode = suite.mode
         self.suite = suite
+        casename = f".{self.casename}" if hasattr(self, "casename") and self.casename else ""
         # Unique file name, which is also readable by human, as filename prefix
-        self.uname = "{}.{}.{}".format(self.suite.name, self.shortname, self.id)
+        self.uname = "{}.{}{}.{}".format(self.suite.name, self.shortname, casename, self.id)
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
@@ -828,7 +862,8 @@ class RunTest(Test):
 class PythonTest(Test):
     """Run a pytest collection of cases against a standalone Scylla"""
 
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
+    def __init__(self, test_no: int, shortname: str, suite, casename: Optional[str]) -> None:
+        self.casename = casename
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
@@ -849,6 +884,9 @@ class PythonTest(Test):
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
+        if self.casename:
+            # TODO: invoke multiple cases, or not case
+            self.args.append(f"-k={self.casename}")
         self.args.append(str(self.suite.suite_path / (self.shortname + ".py")))
 
     def _reset(self) -> None:
@@ -908,8 +946,8 @@ class TopologyTest(PythonTest):
     """Run a pytest collection of cases against Scylla clusters handling topology changes"""
     status: bool
 
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
-        super().__init__(test_no, shortname, suite)
+    def __init__(self, test_no: int, shortname: str, suite, casename: Optional[str]) -> None:
+        super().__init__(test_no, shortname, suite, casename)
 
     async def run(self, options: argparse.Namespace) -> Test:
 
