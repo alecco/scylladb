@@ -85,6 +85,8 @@ class TestSuite(ABC):
     hosts = HostRegistry()
     FLAKY_RETRIES = 5
     _next_id = collections.defaultdict(int) # (test_key -> id)
+    # The number of failed tests
+    n_failed = 0
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         self.suite_path = pathlib.Path(path)
@@ -93,10 +95,7 @@ class TestSuite(ABC):
         self.options = options
         self.mode = mode
         self.suite_key = os.path.join(path, mode)
-        self.tests: List['Test'] = []
         self.pending_test_count = 0
-        # The number of failed tests
-        self.n_failed = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
@@ -174,11 +173,6 @@ class TestSuite(ABC):
             TestSuite.suites[suite_key] = suite
         return suite
 
-    @staticmethod
-    def all_tests() -> Iterable['Test']:
-        return itertools.chain(*[suite.tests for suite in
-                                 TestSuite.suites.values()])
-
     @property
     @abstractmethod
     def pattern(self) -> str:
@@ -205,10 +199,6 @@ class TestSuite(ABC):
                 await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
         return test
 
-    def junit_tests(self):
-        """Tests which participate in a consolidated junit report"""
-        return self.tests
-
     def build_test_list(self) -> List[str]:
         return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
                 self.suite_path.glob(self.pattern)]
@@ -216,10 +206,6 @@ class TestSuite(ABC):
     async def add_test_list(self) -> None:
         options = self.options
         lst = self.build_test_list()
-        if lst:
-            # Some tests are long and are better to be started earlier,
-            # so pop them up while sorting the list
-            lst.sort(key=lambda x: (x not in self.run_first_tests, x))
 
         pending = set()
         for shortname in lst:
@@ -268,7 +254,8 @@ class UnitTestSuite(TestSuite):
             print(palette.warn(f"Unit test executable {exe} not found."))
             return
         test = UnitTest(self.next_id((shortname, self.suite_key)), shortname, suite, args)
-        self.tests.append(test)
+        test.run_first = shortname in self.run_first_tests
+        TestSuite.tests.append(test)
 
     async def add_test(self, shortname) -> None:
         """Create a UnitTest class with possibly custom command line
@@ -324,18 +311,16 @@ class BoostTestSuite(UnitTestSuite):
             case_list = self._case_cache[fqname]
             if len(case_list) == 1:
                 test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None, allows_compaction_groups)
-                self.tests.append(test)
+                TestSuite.tests.append(test)
             else:
                 for case in case_list:
                     test = BoostTest(self.next_id((shortname, self.suite_key, case)), shortname, suite, args, case, allows_compaction_groups)
-                    self.tests.append(test)
+                    TestSuite.tests.append(test)
         else:
             test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None, allows_compaction_groups)
-            self.tests.append(test)
-
-    def junit_tests(self) -> Iterable['Test']:
-        """Boost tests produce an own XML output, so are not included in a junit report"""
-        return []
+            test.run_first = shortname in self.run_first_tests
+            test.junit_test = False
+            TestSuite.tests.append(test)
 
 
 class PythonTestSuite(TestSuite):
@@ -433,6 +418,7 @@ class PythonTestSuite(TestSuite):
 
     async def add_test(self, shortname) -> None:
         test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, self)
+        test.run_first = shortname in self.run_first_tests
         self.tests.append(test)
 
 
@@ -447,6 +433,7 @@ class CQLApprovalTestSuite(PythonTestSuite):
 
     async def add_test(self, shortname: str) -> None:
         test = CQLApprovalTest(self.next_id((shortname, self.suite_key)), shortname, self)
+        test.run_first = shortname in self.run_first_tests
         self.tests.append(test)
 
     @property
@@ -468,6 +455,7 @@ class TopologyTestSuite(PythonTestSuite):
     async def add_test(self, shortname: str) -> None:
         """Add test to suite"""
         test = TopologyTest(self.next_id((shortname, 'topology', self.mode)), shortname, self)
+        test.run_first = shortname in self.run_first_tests
         self.tests.append(test)
 
     @property
@@ -490,6 +478,7 @@ class RunTestSuite(TestSuite):
 
     async def add_test(self, shortname) -> None:
         test = RunTest(self.next_id((shortname, self.suite_key)), shortname, self)
+        test.run_first = shortname in self.run_first_tests
         self.tests.append(test)
 
     @property
@@ -521,6 +510,9 @@ class Test:
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
         Test._reset(self)
+        # Marked to be run first (i.e. long running tests)
+        self.run_first: bool = False
+        self.junit_test: bool = True
 
     def reset(self) -> None:
         """Reset this object, including all derived state."""
@@ -1216,11 +1208,12 @@ def parse_cmd_line() -> argparse.Namespace:
 
 async def find_tests(options: argparse.Namespace) -> None:
 
+    tests: List['Test'] = []
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
                 suite = TestSuite.opt_create(f, options, mode)
-                await suite.add_test_list()
+                await suite.add_test_list(tests)
 
     if not TestSuite.test_count():
         if len(options.name):
@@ -1231,8 +1224,9 @@ async def find_tests(options: argparse.Namespace) -> None:
             sys.exit(0)
 
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
-                 TestSuite.test_count(), options.repeat, options.jobs)
-    print("Found {} tests.".format(TestSuite.test_count()))
+                 len(tests), options.repeat, options.jobs)
+    print(f"Found {len(tests)} tests.")
+    return tests
 
 
 async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
@@ -1264,7 +1258,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     console.print_start_blurb()
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
-        for test in TestSuite.all_tests():
+        for test in TestSuite.tests:
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
                 # Wait for some task to finish
@@ -1340,7 +1334,9 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
     failed = 0
     xml_results = ET.Element("testsuite", name="non-boost tests", errors="0")
     for suite in TestSuite.suites.values():
-        for test in suite.junit_tests():
+        for test in suite.junit_tests():   # XXX in tests
+            if not test.junit_test:
+                continue
             if test.mode != mode:
                 continue
             total += 1
@@ -1392,7 +1388,7 @@ async def main() -> int:
 
     await find_tests(options)
     if options.list_tests:
-        print('\n'.join([t.name for t in TestSuite.all_tests()]))
+        print('\n'.join([t.name for t in TestSuite.tests]))
         return 0
 
     signaled = asyncio.Event()
@@ -1408,7 +1404,7 @@ async def main() -> int:
     if signaled.is_set():
         return -signaled.signo      # type: ignore
 
-    failed_tests = [t for t in TestSuite.all_tests() if t.success is not True]
+    failed_tests = [t for t in TestSuite.tests if t.success is not True]
 
     print_summary(failed_tests, options)
 
