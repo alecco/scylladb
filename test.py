@@ -93,7 +93,6 @@ class TestSuite(ABC):
         self.options = options
         self.mode = mode
         self.suite_key = os.path.join(path, mode)
-        self.tests: List['Test'] = []
         self.pending_test_count = 0
         # The number of failed tests
         self.n_failed = 0
@@ -173,11 +172,6 @@ class TestSuite(ABC):
             assert suite is not None
             TestSuite.suites[suite_key] = suite
         return suite
-
-    @staticmethod
-    def all_tests() -> Iterable['Test']:
-        return itertools.chain(*[suite.tests for suite in
-                                 TestSuite.suites.values()])
 
     @property
     @abstractmethod
@@ -1215,11 +1209,12 @@ def parse_cmd_line() -> argparse.Namespace:
 
 async def find_tests(options: argparse.Namespace) -> None:
 
+    tests: List['Test'] = []
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
                 suite = TestSuite.opt_create(f, options, mode)
-                await suite.add_test_list()
+                await suite.add_test_list(tests)
 
     if not TestSuite.test_count():
         if len(options.name):
@@ -1230,8 +1225,9 @@ async def find_tests(options: argparse.Namespace) -> None:
             sys.exit(0)
 
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
-                 TestSuite.test_count(), options.repeat, options.jobs)
-    print("Found {} tests.".format(TestSuite.test_count()))
+                 len(tests), options.repeat, options.jobs)
+    print(f"Found {len(tests)} tests.")
+    return tests
 
 
 async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
@@ -1263,7 +1259,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     console.print_start_blurb()
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
-        for test in TestSuite.all_tests():
+        for test in TestSuite.tests:
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
                 # Wait for some task to finish
@@ -1391,7 +1387,7 @@ async def main() -> int:
 
     await find_tests(options)
     if options.list_tests:
-        print('\n'.join([t.name for t in TestSuite.all_tests()]))
+        print('\n'.join([t.name for t in TestSuite.tests]))
         return 0
 
     signaled = asyncio.Event()
@@ -1407,7 +1403,7 @@ async def main() -> int:
     if signaled.is_set():
         return -signaled.signo      # type: ignore
 
-    failed_tests = [t for t in TestSuite.all_tests() if t.success is not True]
+    failed_tests = [t for t in TestSuite.tests if t.success is not True]
 
     print_summary(failed_tests, options)
 
