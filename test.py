@@ -205,10 +205,6 @@ class TestSuite(ABC):
                 await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
         return test
 
-    def junit_tests(self):
-        """Tests which participate in a consolidated junit report"""
-        return self.tests
-
     def build_test_list(self) -> List[str]:
         return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
                 self.suite_path.glob(self.pattern)]
@@ -331,11 +327,8 @@ class BoostTestSuite(UnitTestSuite):
                     self.tests.append(test)
         else:
             test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None, allows_compaction_groups)
+            # Boost tests produce an own XML output, so are not included in a junit report
             self.tests.append(test)
-
-    def junit_tests(self) -> Iterable['Test']:
-        """Boost tests produce an own XML output, so are not included in a junit report"""
-        return []
 
 
 class PythonTestSuite(TestSuite):
@@ -521,6 +514,7 @@ class Test:
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
         Test._reset(self)
+        self.junit_test: bool = False
 
     def reset(self) -> None:
         """Reset this object, including all derived state."""
@@ -615,6 +609,8 @@ class BoostTest(UnitTest):
         BoostTest._reset(self)
         self.__junit_etree: Optional[ET.ElementTree] = None
         self.allows_compaction_groups = allows_compaction_groups
+        # Boost tests produce an own XML output, so are not included in a junit report
+        test.junit_test = False
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
@@ -1340,8 +1336,8 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
     failed = 0
     xml_results = ET.Element("testsuite", name="non-boost tests", errors="0")
     for suite in TestSuite.suites.values():
-        for test in suite.junit_tests():
-            if test.mode != mode:
+        for test in suite.tests:
+            if not test.junit_test or test.mode != mode:
                 continue
             total += 1
             # add the suite name to disambiguate tests named "run"
