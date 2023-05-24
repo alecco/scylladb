@@ -1268,7 +1268,9 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
                 # Wait for some task to finish
+                print(f"XXX {test.shortname}, waiting... ")
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                print(f"       wait returned done {len(done)} pending {len(pending)}")
                 await reap(done, pending, signaled)
             pending.add(asyncio.create_task(test.suite.run(test, options)))
         # Wait & reap ALL tasks but signaled_task
