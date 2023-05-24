@@ -38,12 +38,16 @@ from test.pylib.pool import Pool
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
-from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
+from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, Tuple
 
 output_is_a_tty = sys.stdout.isatty()
 
 all_modes = set(['debug', 'release', 'dev', 'sanitize', 'coverage'])
 debug_modes = set(['debug', 'sanitize'])
+
+# Slow modes and suites to run firs
+mode_order = ["debug", "release"]
+suite_order = ["TopologyTestSuite", "BoostTestSuite"]
 
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
@@ -1132,6 +1136,9 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Skip tests which match the provided pattern")
     parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
                         help="Do not run individual test cases in parallel")
+    parser.add_argument('--slow-first', default=False,
+                        dest="slow_first", action="store_true",
+                        help="Run modes (debug, release) and suites (Topology, Boost) first.")
     parser.add_argument('--cpus', action="store",
                         help="Run the tests on those CPUs only (in taskset"
                         " acceptable format). Consider using --jobs too")
@@ -1391,9 +1398,17 @@ async def main() -> int:
     open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
 
     await find_tests(options)
+    if True:   # XXX options.slow_first:  XXX FORCE RUN WITH REORDER XXX
+        # Reorder suites, first debug, release; then within each mode, first Boost, Topology
+        mode_index = {key: i for i, key in enumerate(mode_order)}
+        suite_index = {key: i for i, key in enumerate(suite_order)}
+        def key_mode_kind(i: Tuple[int, TestSuite]):
+            return mode_index.get(i[1].mode, len(mode_index)), \
+                    suite_index.get(type(i[1]).__name__, len(suite_index))
+        TestSuite.suites = dict(sorted(TestSuite.suites.items(), key=key_mode_kind))
+
     if options.list_tests:
-        print('\n'.join([t.name for t in TestSuite.all_tests()]))
-        return 0
+        print('\n'.join([f"{t.suite.mode:>8} {type(t.suite).__name__:>8} {t.name}" for t in TestSuite.all_tests()]))
 
     signaled = asyncio.Event()
 
