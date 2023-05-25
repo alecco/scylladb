@@ -234,6 +234,7 @@ class TestSuite(ABC):
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
             lst.sort(key=lambda x: (x not in self.run_first_tests, x))
+            print(f"{self.name}: first 2: {lst[0]} {lst[1]}")  # XXX
 
         pending = set()
         for shortname in lst:
@@ -727,7 +728,9 @@ class CQLApprovalTest(Test):
                 logger.info("Server log:\n%s", self.server_log)
 
         # TODO: consider dirty_on_exception=True
+        print(f"{self.name} will wait for cluster")
         async with (cm := self.suite.clusters.instance(False, logger)) as cluster:
+            print(f"{self.name} got cluster")
             try:
                 cluster.before_test(self.uname)
                 logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -884,7 +887,9 @@ class PythonTest(Test):
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
+        print(f"{self.name} will wait for cluster")
         cluster = await self.suite.clusters.get(logger)
+        print(f"{self.name} got cluster")
         try:
             cluster.before_test(self.uname)
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -1279,10 +1284,14 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
         for test in TestSuite.all_tests():
+            print(f"adding test {test.suite.mode:<8} {type(test.suite).__name__[:-9]:<11} {test.name}")
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
+                # print(f"--- waiting")
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                # print(f"--- done wait done {len(done)} pending {len(pending)} / {options.jobs}")
+                # XXX is this slow??
                 await reap(done, pending, signaled)
             pending.add(asyncio.create_task(test.suite.run(test, options)))
         # Wait & reap ALL tasks but signaled_task

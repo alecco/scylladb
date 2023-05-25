@@ -926,7 +926,9 @@ class ScyllaClusterManager:
         if self.is_running:
             self.logger.warning("ScyllaClusterManager already running")
             return
+        print(f"{self.test_uname} will wait for cluster")
         self.cluster = await self.clusters.get(self.logger)
+        print(f"{self.test_uname} got cluster")
         self.logger.info("First Scylla cluster: %s", self.cluster)
         self.cluster.setLogger(self.logger)
         await self.runner.setup()
