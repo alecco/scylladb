@@ -95,6 +95,7 @@ class TestSuite(ABC):
         self.suite_key = os.path.join(path, mode)
         self.tests: List['Test'] = []
         self.pending_test_count = 0
+        self.stime: Optional[float] = None   # XXX
         # The number of failed tests
         self.n_failed = 0
 
@@ -189,6 +190,9 @@ class TestSuite(ABC):
         pass
 
     async def run(self, test: 'Test', options: argparse.Namespace):
+        if not self.stime:
+            print(f"{self.name:<60} first test ------------")
+            self.stime = time.time()   # XXX suite testing initial time
         try:
             for i in range(1, self.FLAKY_RETRIES):
                 if i > 1:
@@ -202,6 +206,7 @@ class TestSuite(ABC):
             self.pending_test_count -= 1
             self.n_failed += int(not test.success)
             if self.pending_test_count == 0:
+                print(f"{self.name:<60} total time {time.time() - self.stime:.2f}s <<<<<<<<<<<<")
                 await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
         return test
 
@@ -220,6 +225,7 @@ class TestSuite(ABC):
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
             lst.sort(key=lambda x: (x not in self.run_first_tests, x))
+            print(f"{self.name}: first 2: {lst[:2]}")  # XXX
 
         pending = set()
         for shortname in lst:
@@ -713,7 +719,10 @@ class CQLApprovalTest(Test):
                 logger.info("Server log:\n%s", self.server_log)
 
         # TODO: consider dirty_on_exception=True
+        print(f"{self.name} will wait for cluster")
+        stime = time.time()
         async with (cm := self.suite.clusters.instance(False, logger)) as cluster:
+            print(f"{self.name} got cluster {time.time() - stime:.2f}s")
             try:
                 cluster.before_test(self.uname)
                 logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -870,7 +879,10 @@ class PythonTest(Test):
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
+        print(f"{self.name} will wait for cluster")
+        stime = time.time()
         cluster = await self.suite.clusters.get(logger)
+        print(f"{self.name} got cluster {time.time() - stime:.2f}s")
         try:
             cluster.before_test(self.uname)
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -1265,10 +1277,14 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
         for test in TestSuite.all_tests():
+            print(f"adding test {test.suite.mode:<8} {type(test.suite).__name__[:-9]:<11} {test.name}")
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
+                # print(f"--- waiting")
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                # print(f"--- done wait done {len(done)} pending {len(pending)} / {options.jobs}")
+                # XXX is this slow??
                 await reap(done, pending, signaled)
             pending.add(asyncio.create_task(test.suite.run(test, options)))
         # Wait & reap ALL tasks but signaled_task
