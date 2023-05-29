@@ -99,6 +99,8 @@ class TestSuite(ABC):
         self.pending_test_count = 0
         # The number of failed tests
         self.n_failed = 0
+        # How many shares of CPU to count for test runner, default 1
+        self.num_shares = 1
 
         # Relative load of suite, higher values will be scheduled to run first
         self.load = cfg.get("suite_load", 1)
@@ -218,6 +220,14 @@ class TestSuite(ABC):
             if self.pending_test_count == 0:
                 await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
         return test
+
+    def run_all(self, pool: ResourcePool):
+        """Run all tests"""
+        while not resource_pool.acquire(self.num_shares):
+            time.sleep(0.1)      # Wait 100ms before trying again
+        self.run_init()  # XXX e.g. setup clusters
+        for test in self.tests:
+            await self.run(test)
 
     def junit_tests(self):
         """Tests which participate in a consolidated junit report"""
@@ -367,6 +377,8 @@ class PythonTestSuite(TestSuite):
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
         cluster_size = cluster_cfg["initial_size"]
         pool_size = cfg.get("pool_size", 2)
+        # How many CPU shares to reserve
+        self.num_shares = pool_size * cluster_size
 
         self.create_cluster = self.get_cluster_factory(cluster_size, options)
         async def recycle_cluster(cluster: ScyllaCluster) -> None:
@@ -1249,6 +1261,24 @@ async def find_tests(options: argparse.Namespace) -> None:
     print("Found {} tests.".format(TestSuite.test_count()))
 
 
+class ResourcePool:
+    def __init__(self, total_shares):
+        self.lock = multiprocessing.Lock()
+        self.total_shares = multiprocessing.Value('i', total_shares)
+
+    def acquire(self, num_shares):
+        with self.run_lock:
+            if self.total_shares.value >= num_shares:
+                self.total_shares.value -= num_shares
+                return True
+            else:
+                return False
+
+    def release(self, num_shares):
+        with self.run_lock:
+            self.total_shares.value += num_shares
+
+
 async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     signaled_task = asyncio.create_task(signaled.wait())
@@ -1274,27 +1304,20 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     ms = MinioServer(options.tmpdir, TestSuite.hosts, LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+    TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
 
+    # Start a sub-process for each suite and count shares of CPU to limit concurrency
     console.print_start_blurb()
-    try:
-        TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
-        for test in TestSuite.all_tests():
-            # +1 for 'signaled' event
-            if len(pending) > options.jobs:
-                # Wait for some task to finish
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                await reap(done, pending, signaled)
-            pending.add(asyncio.create_task(test.suite.run(test, options)))
-        # Wait & reap ALL tasks but signaled_task
-        # Do not use asyncio.ALL_COMPLETED to print a nice progress report
-        while len(pending) > 1:
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            await reap(done, pending, signaled)
+    pool = ResourcePool(options.jobs)   # limit to concurrent work
+    test_runners = []                   # suite test runner sub-processes
+    for suite in TestSuite.suites.values():
+        p = multiprocessing.Process(target=suite.run_all, args=(pool))
+        test_runners.append(p)
+        p.start()
+    for p in processes:
+        p.join()
 
-    except asyncio.CancelledError:
-        return
-    finally:
-        await TestSuite.artifacts.cleanup_before_exit()
+    await TestSuite.artifacts.cleanup_before_exit()
 
     console.print_end_blurb()
 
