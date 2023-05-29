@@ -3,4 +3,13 @@ type: Python
 run_first:
     - cassandra_tests/validation/entities/uf_types_test
     - test_tools
+    - cql-pytest.cassandra_tests/validation/entities/collections_test
+    - cql-pytest.cassandra_tests/validation/operations/compact_storage_test
+    - cql-pytest.cassandra_tests/validation/operations/select_test
+    - cql-pytest.cassandra_tests/validation/entities/secondary_index_test
+    - cql-pytest.test_materialized_view
+    - cassandra_tests/validation/entities/frozen_collections_test
+    - test_sstable_validation
+    - test_permissions
+    - cassandra_tests/validation/operations/select_order_by_test
 pool_size: 4
