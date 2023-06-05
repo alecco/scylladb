@@ -28,6 +28,7 @@ import time
 import traceback
 import xml.etree.ElementTree as ET
 import yaml
+import psutil
 
 from abc import ABC, abstractmethod
 from io import StringIO
@@ -38,14 +39,17 @@ from test.pylib.pool import Pool
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
-from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, Tuple
+from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, Tuple, NamedTuple
 
 output_is_a_tty = sys.stdout.isatty()
 
 all_modes = set(['debug', 'release', 'dev', 'sanitize', 'coverage'])
 debug_modes = set(['debug', 'sanitize'])
 # Slow modes to run first
-mode_run_order = ["debug", "release"]
+mode_run_order = ["debug", "release", "coverage", "sanitize", "dev"]
+mode_run_idx = {mode: index for index, mode in enumerate(mode_run_order)}
+# Minimum required memory to start a new Scylla instance
+SCYLLA_MIN_MEMORY = collections.defaultdict(lambda: 1000, {"debug": 1500})
 
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
@@ -87,6 +91,15 @@ class TestSuite(ABC):
     hosts = HostRegistry()
     FLAKY_RETRIES = 5
     _next_id = collections.defaultdict(int) # (test_key -> id)
+    _runner_newid = itertools.count(start=1).__next__
+
+    class TestRunnerResult(NamedTuple):
+        """Result for a test runner, has failed tests"""
+        failed: int
+        tests: list["Test"]
+        def __str__(self):
+            return f"TestRunnerResult(failed={self.failed}, " \
+                   f"tests={','.join([test.name for test in self.tests])})"
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         self.suite_path = pathlib.Path(path)
@@ -95,10 +108,15 @@ class TestSuite(ABC):
         self.options = options
         self.mode = mode
         self.suite_key = os.path.join(path, mode)
+        # order suites by mode, name
+        self.suite_idx = (mode_run_idx[mode], path)
+
         self.tests: List['Test'] = []
-        self.pending_test_count = 0
-        # The number of failed tests
-        self.n_failed = 0
+        # There can be more than one test runner for this suite
+        self.runner_lock = asyncio.Lock()
+        self.runners: int = 0       # Current number of runners for this suite
+        self.remaining: int = 0     # Remaining tests to run
+        self.run_first: int = 0     # Remaining tests to run first (included in total)
 
         # Relative load of suite, higher values will be scheduled to run first
         self.load = cfg.get("suite_load", 1)
@@ -125,6 +143,16 @@ class TestSuite(ABC):
                 continue
             skip_in_m = set(self.cfg.get("run_in_" + a, []))
             self.disabled_tests.update(skip_in_m - run_in_m)
+
+    def __lt__(self, other):
+        if isinstance(other, TestSuite):
+            return self.suite_idx < other.suite_idx
+        return NotImplemented
+
+    def __cmp__(self, other):
+        if isinstance(other, TestSuite):
+            return self.suite_idx == other.suite_idx
+        return NotImplemented
 
     # Generate a unique ID for `--repeat`ed tests
     # We want these tests to have different XML IDs so test result
@@ -195,6 +223,12 @@ class TestSuite(ABC):
 
     @property
     @abstractmethod
+    def memory_required(self) -> int:
+        """Minimum memory required by each runner of this suite"""
+        pass
+
+    @property
+    @abstractmethod
     def pattern(self) -> str:
         pass
 
@@ -202,22 +236,49 @@ class TestSuite(ABC):
     async def add_test(self, shortname: str) -> None:
         pass
 
-    async def run(self, test: 'Test', options: argparse.Namespace):
-        try:
-            for i in range(1, self.FLAKY_RETRIES):
-                if i > 1:
-                    test.is_flaky_failure = True
-                    logging.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
-                    test.reset()
-                await test.run(options)
-                if test.success or not test.is_flaky or test.is_cancelled:
-                    break
-        finally:
-            self.pending_test_count -= 1
-            self.n_failed += int(not test.success)
-            if self.pending_test_count == 0:
-                await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
-        return test
+    @abstractmethod
+    async def test_runner(self):
+        pass
+
+    async def _test_runner(self, runner_id: int, logger: LogPrefixAdapter, **kwargs):
+        """Run tests for this suite"""
+        done: List[Test] = []     # finished tests
+        failed: int = 0
+        while True:
+            async with self.runner_lock:
+                if self.remaining:
+                    test = self.tests.pop(self.remaining - len(self.tests))    # pick next test
+                    self.remaining -= 1
+                    self.run_first -= test.run_first
+                    # print(f"XXX {self.mode}/{self.name} TestSuite.test_runner() {runner_id} scheduling test {test.name} run_first {test.run_first} remaining {self.remaining}")
+                    logger.info("Suite %s - %s runner %s scheduling test %s",
+                                self.mode, self.name, runner_id, test.name)
+                else:
+                    # print(f"XXX {self.mode}/{self.name} TestSuite.test_runner() NO MORE TESTS")
+                    break   # no more tests for this suite
+
+            try:
+                for i in range(1, self.FLAKY_RETRIES):
+                    if i > 1:
+                        test.is_flaky_failure = True
+                        logger.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
+                        test.reset()
+                    await test.run(self.options, **kwargs)
+                    # print(f"XXX TestSuite.test_runner: {test.uname} result {test.success}") # XXX
+                    if test.success or not test.is_flaky or test.is_cancelled:
+                        break
+            # except Exception as e:
+                # print(f"\nXXX TestSuite.test_runner: EXCEPTION {e} <<<<<<<<<<<<<<<< \n") # XXX
+            finally:
+                # print(f"\nXXX TestSuite.test_runner: {test.uname} success: {test.success}") # XXX
+                failed += not test.success
+                done.append(test)
+
+        async with self.runner_lock:
+            self.runners -= 1
+        # print(f"XXX TestSuite.test_runner: failed {failed}, done {len(done)}") # XXX
+        logger.info("DONE")
+        return TestSuite.TestRunnerResult(failed, done)
 
     def junit_tests(self):
         """Tests which participate in a consolidated junit report"""
@@ -254,7 +315,6 @@ class TestSuite(ABC):
                 # so that case cache has a chance to populate
                 for i in range(options.repeat):
                     await self.add_test(shortname)
-                    self.pending_test_count += 1
 
             for p in patterns:
                 if p in t:
@@ -268,6 +328,9 @@ class TestSuite(ABC):
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             raise
+
+        self.remaining = len(self.tests)
+        self.run_first = sum(test.run_first for test in self.tests)
 
 
 class UnitTestSuite(TestSuite):
@@ -302,8 +365,15 @@ class UnitTestSuite(TestSuite):
             await self.create_test(shortname, self, a)
 
     @property
+    def memory_required(self) -> int:
+        return self.min_memory
+
+    @property
     def pattern(self) -> str:
         return "*_test.cc"
+
+    async def test_runner(self):
+        raise Exception  # XXX
 
 
 class BoostTestSuite(UnitTestSuite):
@@ -355,9 +425,12 @@ class BoostTestSuite(UnitTestSuite):
         """Boost tests produce an own XML output, so are not included in a junit report"""
         return []
 
+    async def test_runner(self):
+        raise Exception  # XXX
+
 
 class PythonTestSuite(TestSuite):
-    """A collection of Python pytests against a single Scylla instance"""
+    """A collection of Python pytests against a single Scylla cluster instance"""
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
@@ -367,31 +440,19 @@ class PythonTestSuite(TestSuite):
         else:
             self.scylla_env = dict()
         self.scylla_env['SCYLLA'] = self.scylla_exe
-
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
-        cluster_size = cluster_cfg["initial_size"]
-        pool_size = cfg.get("pool_size", 2)
+        self.cluster_size = cluster_cfg["initial_size"]
+        self.min_memory = SCYLLA_MIN_MEMORY[mode] * self.cluster_size
 
-        self.create_cluster = self.get_cluster_factory(cluster_size, options)
-        async def recycle_cluster(cluster: ScyllaCluster) -> None:
-            """When a dirty cluster is returned to the cluster pool,
-               stop it and release the used IPs. We don't necessarily uninstall() it yet,
-               which would delete the log file and directory - we might want to preserve
-               these if it came from a failed test.
-            """
-            await cluster.stop()
-            await cluster.release_ips()
+    async def _create_cluster(self, logger: Union[logging.Logger, logging.LoggerAdapter]) -> ScyllaCluster:
 
-        self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
-
-    def get_cluster_factory(self, cluster_size: int, options: argparse.Namespace) -> Callable[..., Awaitable]:
         def create_server(create_cfg: ScyllaCluster.CreateServerParams):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
             cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
-            if options.x_log2_compaction_groups:
-                cmdline_options = merge_cmdline_options(cmdline_options, [ '--x-log2-compaction-groups={}'.format(options.x_log2_compaction_groups) ])
+            if self.options.x_log2_compaction_groups:
+                cmdline_options = merge_cmdline_options(cmdline_options, [ '--x-log2-compaction-groups={}'.format(self.options.x_log2_compaction_groups) ])
 
             # There are multiple sources of config options, with increasing priority
             # (if two sources provide the same config option, the higher priority one wins):
@@ -417,27 +478,9 @@ class PythonTestSuite(TestSuite):
 
             return server
 
-        async def create_cluster(logger: Union[logging.Logger, logging.LoggerAdapter]) -> ScyllaCluster:
-            cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server)
-
-            async def stop() -> None:
-                await cluster.stop()
-
-            # Suite artifacts are removed when
-            # the entire suite ends successfully.
-            self.artifacts.add_suite_artifact(self, stop)
-            if not self.options.save_log_on_success:
-                # If a test fails, we might want to keep the data dirs.
-                async def uninstall() -> None:
-                    await cluster.uninstall()
-
-                self.artifacts.add_suite_artifact(self, uninstall)
-            self.artifacts.add_exit_artifact(self, stop)
-
-            await cluster.install_and_start()
-            return cluster
-
-        return create_cluster
+        cluster = ScyllaCluster(logger, self.hosts, self.cluster_size, create_server)
+        await cluster.install_and_start()
+        return cluster
 
     def build_test_list(self) -> List[str]:
         """For pytest, search for directories recursively"""
@@ -446,12 +489,39 @@ class PythonTestSuite(TestSuite):
         return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
 
     @property
+    def memory_required(self) -> int:
+        return self.min_memory
+
+    @property
     def pattern(self) -> str:
         assert False
 
     async def add_test(self, shortname) -> None:
         test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
+
+    async def test_runner(self):
+        """Run tests on a cluster.
+           There can be multiple concurrent executions of this method (i.e. workers)
+        """
+        runner_id = TestSuite._runner_newid()    # id for this running task for this suite
+        # logger for suite runner, tests will change cluster logger when they use it
+        loggerPrefix = f"{self.mode}/{self.name}-{runner_id}"
+        logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
+        # print(f"XXX PythonTestSuite.test_runner() {runner_id} starting cluster")
+        cluster = await self._create_cluster(logger)
+
+        result = await super()._test_runner(runner_id, logger, cluster = cluster)
+
+        #print(f"XXX PythonTestSuite.test_runner() {runner_id} stoping cluster")
+        await cluster.stop()
+        await cluster.release_ips()
+
+        # Keep data dirs if a test failed or if it was requested
+        if result.failed or not self.options.save_log_on_success:
+            #print(f"XXX PythonTestSuite.test_runner() {runner_id} removing cluster")
+            await cluster.uninstall()
+        return result
 
 
 class CQLApprovalTestSuite(PythonTestSuite):
@@ -468,8 +538,15 @@ class CQLApprovalTestSuite(PythonTestSuite):
         self.tests.append(test)
 
     @property
+    def memory_required(self) -> int:
+        return self.min_memory
+
+    @property
     def pattern(self) -> str:
         return "*test.cql"
+
+    async def test_runner(self):
+        raise Exception  # XXX
 
 
 class TopologyTestSuite(PythonTestSuite):
@@ -489,9 +566,16 @@ class TopologyTestSuite(PythonTestSuite):
         self.tests.append(test)
 
     @property
+    def memory_required(self) -> int:
+        return self.min_memory
+
+    @property
     def pattern(self) -> str:
         """Python pattern"""
         return "test_*.py"
+
+    async def test_runner(self):
+        raise Exception  # XXX
 
 
 class RunTestSuite(TestSuite):
@@ -511,8 +595,15 @@ class RunTestSuite(TestSuite):
         self.tests.append(test)
 
     @property
+    def memory_required(self) -> int:
+        return self.min_memory
+
+    @property
     def pattern(self) -> str:
         return "run"
+
+    async def test_runner(self):
+        raise Exception  # XXX
 
 
 class Test:
@@ -539,6 +630,8 @@ class Test:
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
         Test._reset(self)
+        # Some tests are long and are better to be started earlier
+        self.run_first = shortname in suite.run_first_tests
 
     def reset(self) -> None:
         """Reset this object, including all derived state."""
@@ -554,7 +647,7 @@ class Test:
         self.time_end: float = 0
 
     @abstractmethod
-    async def run(self, options: argparse.Namespace) -> 'Test':
+    async def run(self, options: argparse.Namespace, **kwargs: Dict[str, Any]) -> 'Test':
         pass
 
     @abstractmethod
@@ -606,7 +699,7 @@ class UnitTest(Test):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
 
-    async def run(self, options) -> Test:
+    async def run(self, options, **kwargs: Dict[str, Any]) -> Test:
         self.success = await run_test(self, options, env=self.env)
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
@@ -668,7 +761,7 @@ class BoostTest(UnitTest):
         self.get_junit_etree()
         super().check_log(trim)
 
-    async def run(self, options):
+    async def run(self, options, **kwargs: Dict[str, Any]):
         if options.random_seed:
             self.args += ['--random-seed', options.random_seed]
         if self.allows_compaction_groups and options.x_log2_compaction_groups:
@@ -717,7 +810,7 @@ class CQLApprovalTest(Test):
             "--output={}".format(self.tmpfile),
         ]
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace, **kwargs: Dict[str, Any]) -> Test:
         self.success = False
         self.summary = "failed"
 
@@ -835,7 +928,7 @@ class RunTest(Test):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace, **kwargs: Dict[str, Any]) -> Test:
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
         self.success = await run_test(self, options, gentle_kill=True, env=self.suite.scylla_env)
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
@@ -882,15 +975,17 @@ class PythonTest(Test):
             print("Server log of the first server:")
             print(self.server_log)
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace, **kwargs: Dict[str, Any]) -> Test:
 
         self._prepare_pytest_params(options)
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        cluster = await self.suite.clusters.get(logger)
+        assert "cluster" in kwargs and isinstance(kwargs["cluster"], ScyllaCluster)
+        cluster: ScyllaCluster = kwargs["cluster"]
         try:
             cluster.before_test(self.uname)
+            # print(f"\nXXX PythonTest.run() Leasing Scylla cluster {cluster} for test {self.uname}")  # XXX
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
             self.args.insert(0, "--host={}".format(cluster.endpoint()))
             self.is_before_test_ok = True
@@ -910,7 +1005,6 @@ class PythonTest(Test):
                 print("Test {} post-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
-        await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
@@ -928,7 +1022,7 @@ class TopologyTest(PythonTest):
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace, **kwargs: Dict[str, Any]) -> Test:
 
         self._prepare_pytest_params(options)
 
@@ -1254,6 +1348,7 @@ async def find_tests(options: argparse.Namespace) -> None:
 
 
 async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
+    """For each suite, create test runner tasks running multiple tests each"""
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     signaled_task = asyncio.create_task(signaled.wait())
     pending = set([signaled_task])
@@ -1271,24 +1366,87 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
             await cancel(pending)
         for coro in done:
             result = coro.result()
-            if isinstance(result, bool):
-                continue    # skip signaled task result
-            console.print_progress(result)
+            # skip signaled task result
+            # print(f"XXX reap() result type {type(result)}")  # XXX
+            if isinstance(result, TestSuite.TestRunnerResult):
+                # print(f"XXX reap() result {result}")  # XXX
+                for test in result.tests:
+                    console.print_progress(test)
+
+    # Place suites in a PriorityQueue. Worker tasks (e.g. 1 per CPU) pick suites to run.
+    # There can be more than 1 worker running for a suite (executing a TestSuite.runner).
+    # Suites with less/no runners are picked first as heuristic to avoid over-parallelization
+    # of concurrent workers on the same suite (each runner extra resources).
+    # If there are no other suites, more parallel runners are created as resources available.
+    # Also workers mind memory available and required memory for a suite runner.
+    # XXX  consider run first too!
+    # (pending run first - runners, suite) ???
+    pq = asyncio.PriorityQueue()
+    memory_lock = asyncio.Lock()
+
+    async def worker(name, queue):   # XXX , memory_lock):  ??
+        while True:
+            task = await queue.get()
+            if task is None:
+                queue.task_done()
+                logging.info(f"{name} closing")
+                break
+
+            # Check if enough memory is available
+            async with memory_lock:
+                available_memory = psutil.virtual_memory().available
+                if available_memory < task.memory_required:
+                    print(f"Task {task.task_id} waiting for sufficient memory. Required: {task.memory_required}, Available: {available_memory}")
+                    await memory_lock.acquire()
+                    print(f"Task {task.task_id} has obtained sufficient memory.")
+                else:
+                    print(f"{name} is starting task {task.task_id}.")
+
+            # Simulate task execution
+            await asyncio.sleep(1)
+            
+            # Release the memory used by the task.
+            async with memory_lock:
+                print(f"{name} has completed task {task.task_id}.")
+
+            # XXX place suite again if pending > suite.runners  (run-first - runners)
+
+            # Notify the queue that the task is complete.
+            queue.task_done()
 
     ms = MinioServer(options.tmpdir, TestSuite.hosts, LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
 
     console.print_start_blurb()
+
+    # XXX insert suites in queue   (runners=0, suite)
+    # XXX insert end of task (float("inf"), None)   XXX try first without this
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
-        for test in TestSuite.all_tests():
+        suites = list(TestSuite.suites.values())
+
+        while not pq.empty():
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 await reap(done, pending, signaled)
-            pending.add(asyncio.create_task(test.suite.run(test, options)))
+
+            # Start a runner for suites, first try ones with long tests pending to run
+            # But only start runners if there are tests still to run.
+            #  suites: A-2f0r, B-2f0r, C-1f0r, D-0f1r, E-0f1r
+            #  we want runners: A, B, C, A, B, D, E
+            suite = next((suite for suite in suites if suite.run_first > suite.runners), None) or \
+                    next((suite for suite in suites if suite.remaining > suite.runners), None)
+            if not suite:
+                break       # no more suites with tests to run
+            # TODO: logic to define how much parallelism should there be for first tests
+            print(f"XXX run_all_tests: {suite.mode}/{suite.name}, first {suite.run_first}, all {suite.remaining}, runners {suite.runners}")
+            # create suite test runner for suite
+            pending.add(asyncio.create_task(suite.test_runner()))
+            suite.runners += 1    # suite runner must decrement when done (with lock)
+
         # Wait & reap ALL tasks but signaled_task
         # Do not use asyncio.ALL_COMPLETED to print a nice progress report
         while len(pending) > 1:
