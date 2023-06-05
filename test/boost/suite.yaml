@@ -3,15 +3,118 @@ type: boost
 suite_load: 10
 # A list of long tests, which should be started early
 run_first:
-    - index_with_paging_test
+    - cql_functions_test
+    - database_test 
     - schema_changes_test
-    - sstable_conforms_to_mutation_source_test
-    - secondary_index_test
-    - mutation_reader_test
-    - multishard_combining_reader_as_mutation_source_test
-    - database_test
-    - cql_function_test
+    - index_with_paging_test
     - memtable_test
+    - mutation_reader_test
+    - secondary_index_test
+    - sstable_conforms_to_mutation_source_test
+    - mutation_fragment_test
+    - network_topology_strategy_test
+    - multishard_combining_reader_as_mutation_source_test
+    - aggregate_fcts_test
+    - sstable_3_x_test
+    - cql_query_test
+    - tablets_test
+    - reader_concurrency_semaphore_test
+    - virtual_table_mutation_source_test
+    - row_cache_test
+    - rate_limiter_test
+    - sstable_mutation_test
+    - sstable_compaction_test
+    - sstable_resharding_test
+    - view_build_test
+    - flat_mutation_reader_test
+    - sstable_datafile_test
+    - schema_change_test
+    - cdc_test
+    - multishard_mutation_query_test
+    - sstable_directory_test
+    - user_types_test
+test_memory:
+  default:
+    debug: 1800
+    release: 594
+    dev: 594
+  index_with_paging_test:
+    debug: 5000
+    release: 1650
+    dev: 1650
+  user_types_test:
+    debug: 3500
+    release: 1155
+    dev: 1155
+  tablets_test:
+    debug: 3500
+    release: 1155
+    dev: 1155
+  logalloc_standard_allocator_segment_pool_backend_test:
+    debug: 3200
+    release: 1056
+    dev: 1056
+  database_test:
+    debug: 3000
+    release: 990
+    dev: 990
+  memtable_test:
+    debug: 2800
+    release: 924
+    dev: 924
+  secondary_index_test:
+    debug: 2800
+    release: 924
+    dev: 924
+  sstable_mutation_test:
+    debug: 2800
+    release: 924
+    dev: 924
+  mutation_reader_test:
+    debug: 2800
+    release: 924
+    dev: 924
+  row_cache_test:
+    debug: 2600
+    release: 858
+    dev: 858
+  mutation_writer_test:
+    debug: 2400
+    release: 792
+    dev: 792
+  dirty_memory_manager_test:
+    debug: 2400
+    release: 792
+    dev: 792
+  logalloc_test:
+    debug: 2400
+    release: 792
+    dev: 792
+  multishard_combining_reader_as_mutation_source_test:
+    debug: 2200
+    release: 726
+    dev: 726
+  view_build_test:
+    debug: 2200
+    release: 726
+    dev: 726
+  cql_query_test:
+    debug: 2100
+    release: 693
+    dev: 693
+  cql_functions_test:
+    debug: 2100
+    release: 693
+    dev: 693
+  view_schema_test:
+    debug: 2000
+    release: 660
+    dev: 660
+  aggregate_fcts_test:
+    debug: 2000
+    release: 660
+    dev: 660
+
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:
