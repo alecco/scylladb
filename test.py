@@ -1249,6 +1249,41 @@ async def find_tests(options: argparse.Namespace) -> None:
     print("Found {} tests.".format(TestSuite.test_count()))
 
 
+async def _test_run_worker(queue: asyncio.PriorityQueue):
+    while True:
+        test = await queue.get() # Get a "work item" out of the queue.
+
+        # XXX run test
+        # Notify the queue that the "work item" has been processed.
+        queue.task_done()
+
+
+class ResourcePool:
+    """A pool to control concurrency based on given resource count
+       Callers (workers) can acquire more than one share at a time.
+       This enables controlling concurrency with variable load workers.
+    """
+    def __init__(self, total_shares):
+        self.lock = asyncio.Lock()
+        self.total_shares = total_shares
+
+    async def acquire(self, num_shares) -> bool:
+        async with self.lock:
+            if self.total_shares >= num_shares:
+                self.total_shares -= num_shares
+                return True
+            else:
+                return False
+
+    async def release(self, num_shares) -> None:
+        async with self.lock:
+            self.total_shares += num_shares
+
+    async def available(self) -> int:
+        async with self.lock:
+            return self.total_shares
+
+
 async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     signaled_task = asyncio.create_task(signaled.wait())
@@ -1275,10 +1310,17 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
 
+
+    """Go through the suites and schedules tests into the queue.
+       First schedules the run_first tests, one from each suite.
+    """
+    test_queue = multiprocessing.Queue()
+
     console.print_start_blurb()
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
-        for test in TestSuite.all_tests():
+        for suite in TestSuite.suites:
+            # XXX for test in TestSuite.all_tests():
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
                 # Wait for some task to finish
