@@ -14,4 +14,3 @@ run_first:
     - test_sstable_validation
     - test_permissions
     - cassandra_tests/validation/operations/select_order_by_test
-pool_size: 4
