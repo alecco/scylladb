@@ -12,3 +12,7 @@ skip_in_release:
 skip_in_debug:
   - test_shutdown_hang
   - test_replace_ignore_nodes
+# Tests with bigger than initial_size clusters
+cluster_max:
+  test_topology_smp: 3
+  test_shutdown_hang: 2
