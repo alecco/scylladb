@@ -12,6 +12,14 @@ run_first:
     - database_test
     - cql_function_test
     - memtable_test
+extra_memory:
+  index_with_paging: .9
+  user_types: .9
+  tablets: 0.4
+  memtable:  0.4
+  logalloc:  0.4
+  index_paging: 0.4
+  mutation_reader:  0.4
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:
