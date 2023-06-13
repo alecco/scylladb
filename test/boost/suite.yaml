@@ -3,15 +3,25 @@ type: boost
 suite_load: 10
 # A list of long tests, which should be started early
 run_first:
-    - index_with_paging_test
+    - database_test
     - schema_changes_test
+    - index_with_paging_test
     - sstable_conforms_to_mutation_source_test
     - secondary_index_test
     - mutation_reader_test
     - multishard_combining_reader_as_mutation_source_test
-    - database_test
     - cql_function_test
     - memtable_test
+test_memory:
+  default: 1800
+  database_test:  6000
+  index_with_paging_test: 6000
+  user_types_test: 5000
+  mutation_reader_test:  5000
+  memtable_test: 5000
+  tablets_test: 3000
+  logalloc_test: 3000
+  index_paging_test: 3000
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:
