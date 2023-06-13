@@ -29,6 +29,7 @@ import traceback
 import xml.etree.ElementTree as ET
 import yaml
 import psutil                                          # type: ignore
+from functools import partial
 
 from abc import ABC, abstractmethod
 from io import StringIO
@@ -38,7 +39,8 @@ from test.pylib.pool import Pool
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
-from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, Tuple, NamedTuple
+from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, Tuple, \
+        Final, NamedTuple
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -49,7 +51,7 @@ mode_run_order = ["debug", "release", "coverage", "sanitize", "dev"]
 mode_run_idx = collections.defaultdict(lambda: len(mode_run_order), \
         {mode: index for index, mode in enumerate(mode_run_order)})
 # Required memory for each Scylla instance
-SCYLLA_MEMORY = collections.defaultdict(lambda: 1100, {"debug": 1600})
+SCYLLA_MEMORY = collections.defaultdict(lambda: 2200, {"dev": 1000})
 
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
@@ -85,7 +87,7 @@ class TestSuite(ABC):
     """A test suite is a folder with tests of the same type.
     E.g. it can be unit tests, boost tests, or CQL tests."""
     # Precedence to run this suite  (lower goes first)
-    # A suite with no runners has precedence over one with runners
+    # A suite with less (or no) workers active has precedence over one with more active workers
     # The more run first test pending the higher the priority, so use negative values
     # After that the same for the remaining tests
     # Scale all by the run mode precedence (e.g. debug before release)
@@ -108,10 +110,10 @@ class TestSuite(ABC):
 
         self.tests: List['Test'] = []
         # NOTE: there can be more multiple workers active on this suite
-        self.remaining: int = 0              # Remaining total tests to run
-        self.remaining_first: int = 0        # Remaining tests to run first (included in total)
-        self.runners: int = 0                # How many workers are running this suite
-        self.mode_idx = mode_run_idx[mode]   # Run mode precedence for this suite
+        self._remaining: int = 0              # Remaining total tests to run
+        self._remaining_first: int = 0        # Remaining tests to run first (included in total)
+        self._workers: int = 0                # How many workers are waiting/running on this suite
+        self._mode_idx = mode_run_idx[mode]   # Run mode precedence for this suite
 
         # Relative load of suite, higher values will be scheduled to run first
         self.load = cfg.get("suite_load", 1)
@@ -139,14 +141,40 @@ class TestSuite(ABC):
             skip_in_m = set(self.cfg.get("run_in_" + a, []))
             self.disabled_tests.update(skip_in_m - run_in_m)
 
-    def update_run_state(self, runners: Optional[int] = 0, remaining_first: Optional[int] = None,
-                         remaining: Optional[int] = None):
-        """Set/update this suite's running state, and updates precedence tuple"""
-        self.runners = runners if runners else self.runners
-        self.remaining_first = remaining_first if remaining_first else self.remaining_first
-        self.remaining = remaining if remaining else self.remaining
-        self.precedence = (self.runners * self.mode_idx, -self.remaining_first * self.mode_idx,
-                           -self.remaining * self.mode_idx)
+    @property
+    def remaining(self):
+        return self._remaining
+
+    @remaining.setter
+    def remaining(self, remaining: int):
+        self._remaining = remaining
+        self._update_run_priority()
+
+    @property
+    def remaining_first(self):
+        return self._remaining_first
+
+    @remaining_first.setter
+    def remaining_first(self, remaining_first: int):
+        self._remaining_first = remaining_first
+        self._update_run_priority()
+
+    @property
+    def workers(self):
+        return self._workers
+
+    @workers.setter
+    def workers(self, workers: int):
+        self._workers = workers
+        self._update_run_priority()
+
+    def _update_run_priority(self):
+        """Set/update this suite's running state, and updates precedence tuple.
+           Scale the values by the mode execution index (debug > release > ...).
+           Make negative as lower gets scheduled earlier."""
+        # print(f"XXX _update_run_priority() workers {self._workers} remaining_first {self._remaining_first} remaining {self._remaining} <<<<<<<<<<<")
+        self.precedence = (self.workers * self._mode_idx, -self.remaining_first * self._mode_idx,
+                           -self.remaining * self._mode_idx)
 
     def __lt__(self, other):
         return self.precedence < other.precedence
@@ -204,25 +232,18 @@ class TestSuite(ABC):
         return suite
 
     @staticmethod
-    def sort_suites() -> None:
-        """Reorder suites by configured slowness factor"""
-        mode_index = {key: i for i, key in enumerate(mode_run_order)}
-        def key_mode_load(i: Tuple[str, TestSuite]):
-            """Order suites by mode (debug/release/dev) and load (config)"""
-            # Note: flip sign so higher load values go first
-            return mode_index.get(i[1].mode, len(mode_index)), - i[1].load
-        TestSuite.suites = dict(sorted(TestSuite.suites.items(), key=key_mode_load))
-
-    @staticmethod
     def all_tests() -> Iterable['Test']:
         return itertools.chain(*[suite.tests for suite in
                                  TestSuite.suites.values()])
 
     @property
-    @abstractmethod
-    def memory_required(self) -> int:
-        """Memory required by each runner of this suite"""
-        pass
+    def min_memory(self) -> int:
+        """Minimum memory required by each runner of this suite"""
+        return 100
+
+    def _test_memory(self, shortname: str) -> int:
+        """Memory units used to calculate memory for each test"""
+        return 0
 
     @property
     @abstractmethod
@@ -233,39 +254,77 @@ class TestSuite(ABC):
     async def add_test(self, shortname: str) -> None:
         pass
 
-    @abstractmethod
     async def _run_init(self, logger) -> Dict[str, Any]:
-        pass
+        """Initialize test runner, return extra test_args (e.g. cluster)"""
+        return {}
 
-    @abstractmethod
     async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
                               **test_args: Any) -> Dict[str, Any]:
+        """Handle after test bookkeeping. updates test_args (e.g. cluster)"""
+        return {}
+
+    async def _run_teardown(self, logger, remove_logs: bool = True, **test_args: Any):
         pass
 
-    async def run(self, logger: LogPrefixAdapter, lock: asyncio.Lock,
-                  console: "TabularConsoleOutput", **test_args) -> None:
+    def skip_remaining(self, console: "TabularConsoleOutput"):
+        """Mark remaining tests SKIPped and print.
+           Worker tasks need to hold lock to call."""
+        while self.remaining:
+            test = self.tests[len(self.tests) - self.remaining]    # pick next test
+            test.is_skipped = True
+            console.print_progress(test)
+            self.remaining -= 1
+
+    async def run(self, lock: asyncio.Lock, console: "TabularConsoleOutput", 
+                  memory_manager: "MemoryManager", worker_name: str) -> None:
         """Run tests for this suite"""
         runner_id = self._runner_newid()    # id for this running task for this specific suite
         # logger for suite runner, tests will change cluster logger when they use it
         loggerPrefix = f"{self.mode}/{self.name}-{runner_id}"
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
+        # logger.info("starting test runner")
         failed: int = 0   # failed tests
-        async with lock:
-            self.update_run_state(runners = self.runners + 1)    # register this runner
-            test_args = await self._run_init(logger)                   # runner setup (e.g. cluster)
+        test_args = await self._run_init(logger)                   # runner setup (e.g. cluster)
+
+        # NOTE: an already running worker may complete this suite before memory is
+        #       available, so check if there are tests remaining to run
+        # Wait for minimum available memory before starting a runner for this suite
+        print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} requesting initial memory {self.min_memory}")
+        if not await memory_manager.reserve(self.min_memory, lambda: self.remaining > 0):
+            async with lock:
+                if self.workers == 1 and self.remaining:
+                    # mark all tests skipped
+                    await self.skip_remaining(console)
+            return
 
         while True:
+            # Get next test
             async with lock:
                 if self.remaining:
-                    test = self.tests.pop(self.remaining - len(self.tests))    # pick next test
-                    self.update_run_state(remaining = self.remaining - 1,
-                                           remaining_first = self.remaining_first - test.run_first)
-                    print(f"XXX {self.mode}/{self.name} TestSuite.run() {runner_id} scheduling test {test.name} run_first {test.run_first} remaining {self.remaining}")
+                    # print(f"XXX {worker_name} {runner_id} TestSuite.run() remaining={self.remaining} - len {len(self.tests)} - picking {len(self.tests) - self.remaining}")
+                    test = self.tests[len(self.tests) - self.remaining]    # pick next test
+                    logger.info("Suite %s - %s runner %s scheduling test %s  REMAINING=%s",
+                                   self.mode, self.name, runner_id, test.name, self.remaining)
+                    self.remaining -= 1
+                    self.remaining_first -= test.run_first
+                    # print(f"XXX {self.mode}/{self.name} TestSuite.run() {worker_name} {runner_id} scheduling test {test.name} run_first {test.run_first} remaining {self.remaining}")
                     logger.info("Suite %s - %s runner %s scheduling test %s",
                                 self.mode, self.name, runner_id, test.name)
                 else:
-                    print(f"XXX {self.mode}/{self.name} TestSuite.run() NO MORE TESTS")
+                    print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} NO MORE TESTS")
                     break   # no more tests for this suite
+
+            # Reserve extra memory for this test (if non-zero)
+            # XXX shortname is not really short name for Boost
+            print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} test {test.shortname} going to reserve test memory {self._test_memory(test.shortname)}")
+            if not await memory_manager.reserve(self._test_memory(test.shortname)
+                                                , debugmsg=f"{worker_name}-{runner_id} {self.mode}/{self.name} test {test.shortname}"  # XXX debug
+                                                ):
+                test.is_skipped = True
+                async with lock:
+                    console.print_progress(test)
+                    self.remaining -= 1
+                continue     # next test
 
             try:
                 for i in range(1, self.FLAKY_RETRIES):
@@ -273,23 +332,34 @@ class TestSuite(ABC):
                         test.is_flaky_failure = True
                         logger.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
                         test.reset()
+                    # print(f"XXX {worker_name} {runner_id} TestSuite.run() starting: {test.uname}")
                     await test.run(self.options, **test_args)
-                    print(f"XXX TestSuite.run: {test.uname} result {test.success}") # XXX
+                    # print(f"XXX {worker_name} {runner_id} TestSuite.run: {test.uname} result {test.success}") # XXX
                     if test.success or not test.is_flaky or test.is_cancelled:
+                        # print(f"XXX {worker_name} {runner_id} TestSuite.run: DONE {test.uname} result {test.success} is_cancelled {test.is_cancelled}") # XXX
                         break
-            # except Exception as e:
-                # print(f"\nXXX TestSuite.run: EXCEPTION {e} <<<<<<<<<<<<<<<< \n") # XXX
+            except Exception as e:
+                print(f"XXX {worker_name} {runner_id} TestSuite.run: EXCEPTION {e} <<<<<<<<<<<<<<<< \n") # XXX
+                pass
             finally:
-                print(f"\nXXX TestSuite.run: {test.uname} success: {test.success}") # XXX
                 async with lock:
                     remaining = self.remaining
+                # XXX option keep log?
+                failed += not test.success
                 test_args = await self._run_after_test(logger, remove_logs = not test.success,
                                                        last_test = (remaining == 0), **test_args)
                 async with lock:
                     console.print_progress(test)
+                await memory_manager.release(self._test_memory(test.shortname))
 
-        async with lock:
-            self.update_run_state(runners = self.runners - 1)
+            if test.is_cancelled:   # XXX refactor
+                break
+
+        await memory_manager.release(self.min_memory)
+        await self._run_teardown(logger, remove_logs = not failed, **test_args)
+        # print(f"XXX {worker_name} {runner_id} TestSuite.run: DONE") # XXX
+        logger.info("finished")
+
 
     def junit_tests(self):
         """Tests which participate in a consolidated junit report"""
@@ -308,6 +378,7 @@ class TestSuite(ABC):
             front_s = set(self.run_first_tests)
             lst_s = set(lst)
             l_front = [t for t in self.run_first_tests if t in lst_s]
+            # XXX sort by original position!
             l_back  = [t for t in lst if not t in front_s]
             lst = l_front + l_back
 
@@ -340,8 +411,8 @@ class TestSuite(ABC):
             await asyncio.gather(*pending, return_exceptions=True)
             raise
 
-        self.update_run_state(remaining_first = sum(test.run_first for test in self.tests),
-                              remaining = len(self.tests))
+        self.remaining_first = sum(test.run_first for test in self.tests)
+        self.remaining = len(self.tests)
 
 
 class UnitTestSuite(TestSuite):
@@ -353,6 +424,10 @@ class UnitTestSuite(TestSuite):
         self.custom_args = cfg.get("custom_args", {})
         # Map of tests that cannot run with compaction groups
         self.all_can_run_compaction_groups_except = cfg.get("all_can_run_compaction_groups_except")
+        # Per test memory
+        cfg_test_memory = self.cfg.get("test_memory", {})
+        cfg_test_memory_default = cfg_test_memory.get("default", 0.0)
+        self.test_memory = collections.defaultdict(lambda: cfg_test_memory_default, cfg_test_memory)
 
     async def create_test(self, shortname, suite, args):
         exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
@@ -376,20 +451,16 @@ class UnitTestSuite(TestSuite):
             await self.create_test(shortname, self, a)
 
     @property
-    def memory_required(self) -> int:
-        # TODO: proper measures
-        return 300 if self.mode == "debug" else 200
+    def min_memory(self) -> int:
+        return 0
+
+    def _test_memory(self, shortname: str) -> int:
+        shortname = shortname.split('.')[0]   # remove test case if present
+        return float(self.test_memory[shortname])
 
     @property
     def pattern(self) -> str:
         return "*_test.cc"
-
-    async def _run_init(self, logger) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
-    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
-                              **test_args: Any) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
 
 
 class BoostTestSuite(UnitTestSuite):
@@ -441,13 +512,6 @@ class BoostTestSuite(UnitTestSuite):
         """Boost tests produce an own XML output, so are not included in a junit report"""
         return []
 
-    async def _run_init(self, logger) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
-    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
-                              **test_args: Any) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
 
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla cluster instance"""
@@ -462,7 +526,6 @@ class PythonTestSuite(TestSuite):
         self.scylla_env['SCYLLA'] = self.scylla_exe
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
         self.cluster_size = cluster_cfg["initial_size"]
-        self.memory = SCYLLA_MEMORY[mode] * self.cluster_size
 
     async def _create_cluster(self, logger: Union[logging.Logger, logging.LoggerAdapter]) \
             -> ScyllaCluster:
@@ -506,6 +569,7 @@ class PythonTestSuite(TestSuite):
 
     async def _dispose_cluster(self, cluster: ScyllaCluster, logger: logging.LoggerAdapter,
                                remove_logs: bool) -> None:
+        # print(f"XXX PythonTestSuite stopping cluster {cluster}")
         logger.info("PythonTestSuite stopping cluster %s", cluster)
         cluster.setLogger(logger)
         await cluster.stop()
@@ -520,8 +584,11 @@ class PythonTestSuite(TestSuite):
         return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
 
     @property
-    def memory_required(self) -> int:
-        return self.memory
+    def min_memory(self) -> int:
+        return SCYLLA_MEMORY[self.mode] * self.cluster_size
+
+    def _test_memory(self, shortname: str) -> int:
+        return SCYLLA_MEMORY[self.mode] * self.test_memory[shortname]
 
     @property
     def pattern(self) -> str:
@@ -533,8 +600,9 @@ class PythonTestSuite(TestSuite):
 
     async def _run_init(self, logger) -> Dict[str, Any]:
         """Setup a cluster to run PythonTests on"""
-        print(f"XXX PythonTestSuite.run() {runner_id} starting cluster")
+        # print(f"XXX PythonTestSuite._run_init() starting cluster")
         cluster = await self._create_cluster(logger)
+        # print(f"XXX PythonTestSuite._run_init() new cluster")
         logger.info("PythonTestSuite new cluster %s", cluster)
         return {"cluster": cluster}    # test_args for test
 
@@ -552,6 +620,7 @@ class PythonTestSuite(TestSuite):
         return test_args
 
     async def _run_teardown(self, logger, remove_logs: bool = True, **test_args: Any):
+        # print(f"XXX PythonTestSuite._run_teardown() ")
         cluster = test_args["cluster"]
         assert isinstance(cluster, ScyllaCluster)
         await self._dispose_cluster(cluster, logger, remove_logs)
@@ -669,12 +738,15 @@ class Test:
         self.is_flaky = self.shortname in suite.flaky_tests
         # True if the test was retried after it failed
         self.is_flaky_failure = False
+        # True if for some reason (e.g. lack of memory) the test could not be run
+        self.is_skipped = False
         # True if the test was cancelled by a ctrl-c or timeout, so
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
         Test._reset(self)
         # Some tests are long and are better to be started earlier
         self.run_first = shortname in suite.run_first_tests
+        self.test_memory: int = 0
 
     def reset(self) -> None:
         """Reset this object, including all derived state."""
@@ -1029,7 +1101,7 @@ class PythonTest(Test):
         assert isinstance(cluster, ScyllaCluster)
         try:
             cluster.before_test(self.uname)
-            print(f"\nXXX PythonTest.run() Leasing Scylla cluster {cluster} for test {self.uname}")  # XXX
+            # print(f"\nXXX PythonTest.run() Leasing Scylla cluster {cluster} for test {self.uname}")  # XXX
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
             self.args.insert(0, "--host={}".format(cluster.endpoint()))
             self.is_before_test_ok = True
@@ -1120,6 +1192,8 @@ class TabularConsoleOutput:
                 status = palette.warn("[ FLKY ]")
             else:
                 status = palette.ok("[ PASS ]")
+        elif test.is_skipped:
+            status = palette.warn("[ SKIP ]")
         else:
             status = palette.fail("[ FAIL ]")
         msg = "{:10s} {:^8s} {:^7s} {:8s} {}".format(
@@ -1186,6 +1260,9 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
+            # XXX added for stats
+            path = '/usr/bin/time'
+            args = ['-v', test.path, *test.args]
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -1201,7 +1278,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                          ),
                 preexec_fn=os.setsid,
             )
-            stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
+            await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
             if process.returncode not in test.valid_exit_codes:
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
@@ -1391,6 +1468,68 @@ async def find_tests(options: argparse.Namespace) -> None:
     print("Found {} tests.".format(TestSuite.test_count()))
 
 
+class MemoryManager:
+    """Memory allocation concurrency control.
+       Workers wait until the required memory is available (in MiB).
+       Exponential retry delay is controlled with base_delay and max_delay.
+       No-op if reserving/releasing zero mb.
+       Note: do not hold the lock when calling reserve() and release()
+    """
+    def __init__(self, lock: asyncio.Lock, base_delay: float = 0.1, max_delay: float = 4.):
+        self.lock: Final[asyncio.Lock] = lock
+        self.mb_available: Final[float] = psutil.virtual_memory().available / 1024 ** 2
+        # print(f"XXX MemoryManager.__init__(available {self.mb_available:.02f} <<<")
+        self.mb_reserved: float = 0.
+        self.base_delay: Final[float] = base_delay
+        self.max_delay: Final[float] = max_delay
+
+    async def reserve(self, mb_required: int, check: Callable[[], bool] = lambda: True,
+                      debugmsg: str = "???"   # XXX debug
+                      ) -> bool:
+        """Try to reserve memory while the condition check() is true.
+           If condition check() fails, returns False.
+        """
+        if mb_required == 0:
+            return True
+        if mb_required > self.mb_available:
+            return False                   # Requires more memory than available
+
+        # print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) available {self.mb_available:.02f}, mb_reserved={self.mb_reserved} <<<")
+
+        actual = psutil.virtual_memory().available / 1024 ** 2
+        expected = self.mb_available - self.mb_reserved
+        if actual < expected * .8:
+            # print(f"\n\nXXX MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
+            return False   # XXX debug
+
+        retries = 0
+        delay = self.base_delay
+        while True:
+            async with self.lock:
+                # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries}")
+                if not check():
+                    # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} FAILED CHECK RETURNING")
+                    return False     # Condition no longer valid, stop trying to reserve
+                if mb_required < (self.mb_available - self.mb_reserved):
+                    # Verify if there is sufficient available memory
+                    # if mb_required < psutil.virtual_memory().available / 1024 ** 2:
+                    if mb_required < actual:
+                        self.mb_reserved += mb_required
+                        # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) mb_reserved={self.mb_reserved} SUCCESS")
+                        return True
+            delay = min(self.max_delay, delay * 2**retries)
+            retries += 1
+            # print(f"\nXXX MemoryManager(mb_required={mb_required}) > {self.mb_available - self.mb_reserved:.02f} available, SLEEPing for {delay:.02f} <<")
+            await asyncio.sleep(delay)
+
+    async def release(self, mb_reserved: int):
+        # print(f"\nXXX MemoryManager.release(mb_reserved={mb_reserved}) <<")
+        if mb_reserved > 0:
+            async with self.lock:
+                # XXX ARGH THIS DUPE LINE WAS TAKING IT TO ZERO self.mb_reserved -= mb_reserved
+                self.mb_reserved = max(0, self.mb_reserved - mb_reserved)
+
+
 async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
     """Create a pool of worker tasks picking (ordered) TestSuites to run from a PriorityQueue.
        Create as many workers as options.jobs. Track memory usage. If a worker needs more memory
@@ -1399,153 +1538,92 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
        The goal is to utilize as much memory/cpu as available while scheduling long running tests
        first and not wasting with over-parallelizing a suite if there are other suites to run.
     """
+    logger = LogPrefixAdapter(logging.getLogger('run_all_tests'), {'prefix': 'run_all_tests'})
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     console.print_start_blurb()
 
     ms = MinioServer(options.tmpdir, TestSuite.hosts, LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
-    print(f"run_all_tests() ms.start()")
     await ms.start()
-
-    async def cancel(pending):
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        print("... done.")
-        raise asyncio.CancelledError
-
-    class MemoryManager:
-        """Memory allocation concurrency control.
-           Workers wait until the required memory is available (in MiB).
-           Exponential retry delay is controlled with base_delay and max_delay.
-        """
-        def __init__(self, lock: asyncio.Lock, base_delay: float = 0.1, max_delay: float = 10.):
-            self.available = psutil.virtual_memory().available / 1024 ** 2
-            self.mb_reserved = 0
-            self.lock = lock
-            self.base_delay = base_delay
-            self.max_delay = max_delay
-
-        async def reserve(self, mb_required: int, check: Callable[[], bool]) -> bool:
-            """Try to reserve memory while the condition check() is true.
-               If condition check() fails, returns False.
-            """
-            retries = 0
-            delay = self.base_delay
-            while True:
-                async with self.lock:
-                    if not check():
-                        return False     # Condition no longer valid, stop trying to reserve
-                    if mb_required < (self.available + self.mb_reserved):
-                        # Verify if there is sufficient available memory
-                        if mb_required < psutil.virtual_memory().available / 1024 ** 2:
-                            self.mb_reserved += mb_required
-                            return True
-                delay = min(self.max_delay, delay * 2**retries)
-                await asyncio.sleep(delay)
-
-        async def release(self, memory_reserved):
-            async with self.lock:
-                self.mb_reserved -= memory_reserved
-                self.mb_reserved = max(0, self.mb_reserved - memory_reserved)
-
-    class Worker:
-        def __init__(self, name: str, queue: asyncio.PriorityQueue, lock: asyncio.Lock,
-                     memory_manager: MemoryManager):
-            self.name = name
-            self.queue = queue
-            self.memory_manager = memory_manager
-            self.lock = lock
-
-        async def run(self):
-            async with self.lock:
-                print(f"worker {self.name} run()")
-            logger = LogPrefixAdapter(logging.getLogger(self.name), {'prefix': self.name})
-            while True:
-                suite = await self.queue.get()
-                assert isinstance(suite, TestSuite)
-
-                def check_remaining():
-                    return suite.remaining > 0
-
-                # Wait for available memory before starting a test runner for this suite
-                # NOTE: a previous worker may complete this suite before memory is available
-                res = await self.memory_manager.reserve(suite.memory_required, check_remaining)
-
-                if res:
-                    with lock:
-                        if suite.remaining - suite.runners > 0:
-                            self.queue.put(suite)   # Let other workers try to work on this suite
-
-                    logger.info("starting test runner for {suite.mode} {suite.path}")
-                    await suite.run()   # START TEST RUNNER
-                    logger.info("finished {suite.mode} {suite.path}")
-                    self.memory_manager.release(suite.memory_required)
-
-                self.queue.task_done()     # Notify the queue that the task is complete.
 
     # PriorityQueue of TestSuites to run
     work_pq: asyncio.PriorityQueue = asyncio.PriorityQueue()
-    total_tests = 0
-    for suite in TestSuite.suites.values():
-        if len(suite.tests):
-            total_tests += len(suite.tests)
-            print(f"XXX run_all_tests: adding suite {suite.mode} / {suite.path}")
-            await work_pq.put(suite)
-
-    # Worker tasks
+    suites_with_tests = [suite for suite in TestSuite.suites.values() if suite.tests]
+    total_tests = sum(len(suite.tests) for suite in suites_with_tests)
     worker_lock: asyncio.Lock = asyncio.Lock()         # Lock across *all* workers/suites
+
     memory_manager = MemoryManager(worker_lock)
-    workers = [Worker(f"worker-{i}", work_pq, worker_lock, memory_manager)
-               for i in max(total_tests, range(options.jobs))]
+    for suite in suites_with_tests:
+        if suite.tests:
+            if suite.min_memory > memory_manager.mb_available:
+                suite.skip_remaining(console)    # Not enough memory for suite
+            else:
+                await work_pq.put(suite)
 
-    signaled_task = asyncio.create_task(signaled.wait())
-    pending_tasks = set([signaled_task])
-    for worker in workers:
-        pending_tasks.add(asyncio.create_task(worker.run()))  # create a task for each worker
+    class Worker:
+        def __init__(self, name: str, queue: asyncio.PriorityQueue):
+            self.name = name
+            self.queue = queue
 
-    try:
-        while len(pending_tasks) > 1:
-            done, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
-            if signaled.is_set():
-                await cancel(pending_tasks)
-    except asyncio.CancelledError:
-        return
-    finally:
-        await TestSuite.hosts.cleanup()
-        await ms.stop()
+        async def run(self):
+            nonlocal console, signaled 
+            logger = LogPrefixAdapter(logging.getLogger(self.name), {'prefix': self.name})
+            while True:
+                try:
+                    # print(f"{self.name} get() <<<<<<<<<<<<<\n")
+                    suite = await self.queue.get()
+                    assert isinstance(suite, TestSuite)
+
+                    # print(f"XXX {self.name} starting test runner for {suite.mode} {suite.name}")
+                    # If there's more than 1 test remaining, other workers can work on this suite
+                    async with worker_lock:
+                        suite.workers += 1
+                        if suite.remaining - suite.workers > 1:
+                            # print(f"XXX {self.name} putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers}")
+                            await self.queue.put(suite)
+
+                    # NOTE asyncio.CancelledError is caught at run_test()
+                    # to print failures and so this loop can release the reserved memory
+                    # print(f"XXX {self.name} running suite {suite.mode}/{suite.name}")
+                    await suite.run(worker_lock, console, memory_manager, self.name)   # START TEST RUNNER
+                    async with worker_lock:
+                        suite.workers -= 1
+                    # print(f"XXX {self.name} done test runner for {suite.mode} {suite.name}")
+
+                    self.queue.task_done()     # Notify the queue that the task is complete.
+                except asyncio.CancelledError as e:
+                    print(f"XXX {self.name} cancel exception {e}")
+                    break
+                except Exception as e:
+                    print(f"XXX {self.name} got unexpected exception {e}\n")
+                    raise e
+                if signaled.is_set():
+                    print(f"XXX {self.name} signaled is set, break 3")
+                    break
+                # print(f"XXX {self.name} loop again 4 (qsize {self.queue.qsize()}")
+
+    # print(f"XXX total tests {total_tests} jobs {options.jobs}")
+    workers = [Worker(f"worker-{i}", work_pq) for i in range(min(total_tests, options.jobs))]
+    worker_tasks = [asyncio.create_task(worker.run()) for worker in workers]
+
+
+    signaled_task: asyncio.Task = asyncio.create_task(signaled.wait())
+    pq_task: asyncio.Task = asyncio.create_task(work_pq.join())
+    await asyncio.wait([pq_task, signaled_task], return_when=asyncio.FIRST_COMPLETED)
+
+    if signaled.is_set():
+        print("XXX Signal received, cancelling tasks...")
+        signaled_task.cancel()
+        for task in worker_tasks:
+            task.cancel()
+        # print("XXX waiting queue to join 1")
+        # await asyncio.wait([pq_task], return_when=asyncio.FIRST_COMPLETED)
+        # done, pending = await asyncio.wait(worker_tasks, return_when=asyncio.FIRST_COMPLETED)
+        # print(f"XXX got done {done} pending {pending}")
+        await asyncio.gather(*worker_tasks, pq_task, return_exceptions=True)  # XXX XXX XXX HANGS!
+        # print("XXX 3")
 
     console.print_end_blurb()
-
-
-    # XXX create workers (max(len(options.jobs, tests)))
-    # XXX insert suites in queue   (runners=0, suite)
-    #    suites = list(TestSuite.suites.values())
-    # XXX try:
-
-    # XXX     while not work_pq.empty():
-    # XXX         # +1 for 'signaled' event
-    # XXX         if len(pending) > options.jobs:
-    # XXX             # Wait for some task to finish
-    # XXX             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-    # XXX             await reap(done, pending, signaled)
-
-    # XXX         # TODO: logic to define how much parallelism should there be for first tests
-    # XXX         print(f"XXX run_all_tests: {suite.mode}/{suite.name}, first {suite.run_first}, all {suite.remaining}, runners {suite.runners}")
-    # XXX         # create suite test runner for suite
-    # XXX         pending.add(asyncio.create_task(suite.run()))
-    # XXX         suite.runners += 1    # suite runner must decrement when done (with lock)
-
-    # XXX     # Wait & reap ALL tasks but signaled_task
-    # XXX     # Do not use asyncio.ALL_COMPLETED to print a nice progress report
-    # XXX     while len(pending) > 1:
-    # XXX         done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-    # XXX         await reap(done, pending, signaled)
-
-    # XXX except asyncio.CancelledError:
-    # XXX     return
-    # XXX finally:
-    # XXX     await TestSuite.hosts.cleanup()
-    # XXX     await ms.stop()
+    await ms.stop()
 
 
 def read_log(log_filename: pathlib.Path) -> str:
@@ -1654,8 +1732,6 @@ async def main() -> int:
     open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
 
     await find_tests(options)
-
-    TestSuite.sort_suites()
 
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
