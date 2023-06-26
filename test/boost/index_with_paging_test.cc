@@ -18,11 +18,12 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
         e.execute_cql("CREATE TABLE tab (pk int, ck text, v int, v2 int, v3 text, PRIMARY KEY (pk, ck))").get();
         e.execute_cql("CREATE INDEX ON tab (v)").get();
 
-        sstring big_string(4096, 'j');
+        sstring big_string(16384, 'j');
+        int nrows = 16 * 1024;
         // There should be enough rows to use multiple pages
         auto prepared_id = e.prepare("INSERT INTO tab (pk, ck, v, v2, v3) VALUES (?, ?, 1, ?, ?)").get0();
         auto big_string_v = cql3::raw_value::make_value(serialized(big_string));
-        max_concurrent_for_each(boost::irange(0, 64 * 1024), 50, [&] (auto i) {
+        max_concurrent_for_each(boost::irange(0, nrows), 50, [&] (auto i) {
             return e.execute_prepared(prepared_id, {
                 cql3::raw_value::make_value(serialized(i % 3)),                     // pk
                 cql3::raw_value::make_value(serialized(format("hello{}", i))),      // ck
@@ -31,9 +32,9 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
             }).discard_result();
         }).get();
 
-        e.db().invoke_on_all([] (replica::database& db) {
+        e.db().invoke_on_all([nrows] (replica::database& db) {
             // The semaphore's queue has to able to absorb one read / row in this test.
-            db.get_reader_concurrency_semaphore().set_max_queue_length(64 * 1024);
+            db.get_reader_concurrency_semaphore().set_max_queue_length(nrows);
         }).get();
 
         eventually([&] {
@@ -46,9 +47,9 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
             BOOST_REQUIRE_LE(rows->rs().get_metadata().column_count(), 4321);
         });
 
-        eventually([&] {
+        eventually([&, nrows] {
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1").get0();
-            assert_that(res).is_rows().with_size(64 * 1024);
+            assert_that(res).is_rows().with_size(nrows);
         });
     });
 }
