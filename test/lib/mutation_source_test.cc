@@ -947,9 +947,9 @@ static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& sema
 void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    const auto query_time = gc_clock::now();
+    for_each_mutation([&semaphore, &populate] (const mutation& m) mutable {
+        const auto query_time = gc_clock::now();
 
-    for_each_mutation([&semaphore, &populate, query_time] (const mutation& m) mutable {
         auto ms = populate(m.schema(), {m}, query_time);
         mutation copy(m);
         copy.partition().compact_for_compaction(*copy.schema(), always_gc, copy.decorated_key(), query_time, tombstone_gc_state(nullptr));
