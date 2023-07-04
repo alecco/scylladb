@@ -947,10 +947,10 @@ static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& sema
 void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    const auto query_time = gc_clock::now();
-
-    for_each_mutation([&semaphore, &populate, query_time] (const mutation& m) mutable {
-        auto ms = populate(m.schema(), {m}, query_time);
+    for_each_mutation([&semaphore, &populate] (const mutation& m) mutable {
+        auto ms = populate(m.schema(), {m}, gc_clock::now());
+        // In case populate ignores time_point, take new one (e.g. database_test::test_database())
+        const auto query_time = gc_clock::now();
         mutation copy(m);
         copy.partition().compact_for_compaction(*copy.schema(), always_gc, copy.decorated_key(), query_time, tombstone_gc_state(nullptr));
         assert_that(ms.make_reader_v2(m.schema(), semaphore.make_permit())).produces_compacted(copy, query_time);
