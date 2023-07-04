@@ -948,7 +948,7 @@ void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& sem
     testlog.info(__PRETTY_FUNCTION__);
 
     for_each_mutation([&semaphore, &populate] (const mutation& m) mutable {
-        const auto query_time = gc_clock::now();
+        const auto query_time = gc_clock::time_point::max();
 
         auto ms = populate(m.schema(), {m}, query_time);
         mutation copy(m);
