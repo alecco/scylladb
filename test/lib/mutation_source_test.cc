@@ -1598,23 +1598,39 @@ void run_mutation_reader_tests_basic(tests::reader_concurrency_semaphore_wrapper
         populate_fn_ex populate, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
 
+testlog.info("XXX run_mutation_reader_tests_basic 1"); // XXX
     test_range_tombstones_v2(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 2"); // XXX
     test_date_tiered_clustering_slicing(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 3"); // XXX
     test_clustering_slices(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 4"); // XXX
     test_streamed_mutation_forwarding_across_range_tombstones(semaphore, populate);
-    test_streamed_mutation_forwarding_guarantees(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 5"); // XXX
+    test_streamed_mutation_forwarding_guarantees(semaphore, populate);   // 15s
+testlog.info("XXX run_mutation_reader_tests_basic 6"); // XXX
     test_streamed_mutation_slicing_returns_only_relevant_tombstones(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 7"); // XXX
     test_streamed_mutation_forwarding_is_consistent_with_slicing(semaphore, populate);
-    test_range_queries(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 8"); // XXX
+    test_range_queries(semaphore, populate);                             // 24s
+testlog.info("XXX run_mutation_reader_tests_basic 9"); // XXX
     test_query_only_static_row(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 10"); // XXX
     test_query_no_clustering_ranges_no_static_columns(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 11"); // XXX
     test_next_partition(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 12"); // XXX
     test_streamed_mutation_forwarding_succeeds_with_no_data(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 13"); // XXX
     test_slicing_with_overlapping_range_tombstones(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 14"); // XXX
     
     if (with_partition_range_forwarding) {
         test_fast_forwarding_across_partitions_to_empty_range(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 15"); // XXX
         test_slicing_and_fast_forwarding(semaphore, populate);
+testlog.info("XXX run_mutation_reader_tests_basic 16"); // XXX
     }
 }
 
