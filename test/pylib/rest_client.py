@@ -237,7 +237,7 @@ class InjectionHandler():
         await self.api.message_injection(self.node_ip, self.injection)
 
 @asynccontextmanager
-async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str, parameters: dict[str, Any] = {}) -> InjectionHandler:
+async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str, parameters: dict[str, Any] = {}):
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
        It will trigger a test to be skipped if attempting to enable an injection has no effect.
        This is a context manager for enabling and disabling when done, therefore it can't be
