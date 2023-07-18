@@ -182,7 +182,7 @@ class TestSuite(ABC):
         self.precedence = (self.workers * self._mode_idx, -self.remaining_first * self._mode_idx,
                            -self.remaining * self._mode_idx)
 
-    def __lt__(self, other: TestSuite):
+    def __lt__(self, other: "TestSuite"):
         return self.precedence < other.precedence
 
     # Generate a unique ID for `--repeat`ed tests
@@ -677,13 +677,6 @@ class TopologyTestSuite(PythonTestSuite):
         """Python pattern"""
         return "test_*.py"
 
-    async def _run_init(self, logger) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
-    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
-                              **test_args: Any) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
 
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
@@ -1149,9 +1142,10 @@ class TopologyTest(PythonTest):
     async def run(self, options: argparse.Namespace, **test_args: Any) -> Test:
 
         self._prepare_pytest_params(options)
-
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
-        async with get_cluster_manager(self.mode + '/' + self.uname, self.suite.clusters, test_path) as manager:
+        async with get_cluster_manager(self.mode + '/' + self.uname, self.suite._create_cluster,
+                                       self.suite._dispose_cluster,
+                                       self.suite.options.save_log_on_success, test_path) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
             try:
