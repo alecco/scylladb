@@ -648,13 +648,6 @@ class CQLApprovalTestSuite(PythonTestSuite):
     def pattern(self) -> str:
         return "*test.cql"
 
-    async def _run_init(self, logger) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
-    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
-                              **test_args: Any) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
 
 class TopologyTestSuite(PythonTestSuite):
     """A collection of Python pytests against Scylla instances dealing with topology changes.
@@ -939,63 +932,62 @@ class CQLApprovalTest(Test):
             if self.server_log is not None:
                 logger.info("Server log:\n%s", self.server_log)
 
+        cluster = test_args["cluster"]
         # TODO: consider dirty_on_exception=True
-        async with (cm := self.suite.clusters.instance(False, logger)) as cluster:
-            try:
-                cluster.before_test(self.uname)
-                logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-                self.args.insert(1, "--host={}".format(cluster.endpoint()))
-                # If pre-check fails, e.g. because Scylla failed to start
-                # or crashed between two tests, fail entire test.py
-                self.is_before_test_ok = True
-                cluster.take_log_savepoint()
-                self.is_executed_ok = await run_test(self, options, env=self.env)
-                cluster.after_test(self.uname, self.is_executed_ok)
-                cm.dirty = cluster.is_dirty
-                self.is_after_test_ok = True
+        try:
+            cluster.before_test(self.uname)
+            logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+            self.args.insert(1, "--host={}".format(cluster.endpoint()))
+            # If pre-check fails, e.g. because Scylla failed to start
+            # or crashed between two tests, fail entire test.py
+            self.is_before_test_ok = True
+            cluster.take_log_savepoint()
+            self.is_executed_ok = await run_test(self, options, env=self.env)
+            cluster.after_test(self.uname, self.is_executed_ok)
+            self.is_after_test_ok = True
 
-                if self.is_executed_ok is False:
-                    set_summary("""returned non-zero return status.\n
+            if self.is_executed_ok is False:
+                set_summary("""returned non-zero return status.\n
 Check test log at {}.""".format(self.log_filename))
-                elif not os.path.isfile(self.tmpfile):
-                    set_summary("failed: no output file")
-                elif not os.path.isfile(self.result):
-                    set_summary("failed: no result file")
-                    self.is_new = True
+            elif not os.path.isfile(self.tmpfile):
+                set_summary("failed: no output file")
+            elif not os.path.isfile(self.result):
+                set_summary("failed: no result file")
+                self.is_new = True
+            else:
+                self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
+                if self.is_equal_result is False:
+                    self.unidiff = format_unidiff(str(self.result), self.tmpfile)
+                    set_summary("failed: test output does not match expected result")
+                    assert self.unidiff is not None
+                    logger.info("\n{}".format(palette.nocolor(self.unidiff)))
                 else:
-                    self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
-                    if self.is_equal_result is False:
-                        self.unidiff = format_unidiff(str(self.result), self.tmpfile)
-                        set_summary("failed: test output does not match expected result")
-                        assert self.unidiff is not None
-                        logger.info("\n{}".format(palette.nocolor(self.unidiff)))
-                    else:
-                        self.success = True
-                        set_summary("succeeded")
-            except Exception as e:
-                # Server log bloats the output if we produce it in all
-                # cases. So only grab it when it's relevant:
-                # 1) failed pre-check, e.g. start failure
-                # 2) failed test execution.
-                if self.is_executed_ok is False:
-                    self.server_log = cluster.read_server_log()
-                    self.server_log_filename = cluster.server_log_filename()
-                    if self.is_before_test_ok is False:
-                        set_summary("pre-check failed: {}".format(e))
-                        print("Test {} {}".format(self.name, self.summary))
-                        print("Server log  of the first server:\n{}".format(self.server_log))
-                        # Don't try to continue if the cluster is broken
-                        raise
-                set_summary("failed: {}".format(e))
-            finally:
-                if os.path.exists(self.tmpfile):
-                    if self.is_executed_ok and (self.is_new or self.is_equal_result is False):
-                        # Move the .reject file close to the .result file
-                        # so that it's easy to analyze the diff or overwrite .result
-                        # with .reject.
-                        shutil.move(self.tmpfile, self.reject)
-                    else:
-                        pathlib.Path(self.tmpfile).unlink()
+                    self.success = True
+                    set_summary("succeeded")
+        except Exception as e:
+            # Server log bloats the output if we produce it in all
+            # cases. So only grab it when it's relevant:
+            # 1) failed pre-check, e.g. start failure
+            # 2) failed test execution.
+            if self.is_executed_ok is False:
+                self.server_log = cluster.read_server_log()
+                self.server_log_filename = cluster.server_log_filename()
+                if self.is_before_test_ok is False:
+                    set_summary("pre-check failed: {}".format(e))
+                    print("Test {} {}".format(self.name, self.summary))
+                    print("Server log  of the first server:\n{}".format(self.server_log))
+                    # Don't try to continue if the cluster is broken
+                    raise
+            set_summary("failed: {}".format(e))
+        finally:
+            if os.path.exists(self.tmpfile):
+                if self.is_executed_ok and (self.is_new or self.is_equal_result is False):
+                    # Move the .reject file close to the .result file
+                    # so that it's easy to analyze the diff or overwrite .result
+                    # with .reject.
+                    shutil.move(self.tmpfile, self.reject)
+                else:
+                    pathlib.Path(self.tmpfile).unlink()
 
         return self
 
