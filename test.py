@@ -696,13 +696,6 @@ class RunTestSuite(TestSuite):
     def pattern(self) -> str:
         return "run"
 
-    async def _run_init(self, logger) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
-    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
-                              **test_args: Any) -> Dict[str, Any]:
-        raise NotImplemented  # XXX
-
 
 class Test:
     """Base class for CQL, Unit and Boost tests"""
