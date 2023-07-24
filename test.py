@@ -53,7 +53,7 @@ mode_run_order = ["debug", "release", "coverage", "sanitize", "dev"]
 mode_run_idx = collections.defaultdict(lambda: len(mode_run_order), \
         {mode: index for index, mode in enumerate(mode_run_order)})
 # Required memory for each Scylla instance
-SCYLLA_MEMORY = collections.defaultdict(lambda: 2200, {"dev": 1000})
+SCYLLA_MEMORY = collections.defaultdict(lambda: 2400, {"dev": 400, "release": 800})
 
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
@@ -292,24 +292,22 @@ class TestSuite(ABC):
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
         # logger.info("starting test runner")
         failed: int = 0   # failed tests
-        test_args = await self._run_init(logger)                   # runner setup (e.g. cluster)
 
         # NOTE: an already running worker may complete this suite before memory is
         #       available, so check if there are tests remaining to run
         # Wait for minimum available memory before starting a runner for this suite
-        # print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} requesting initial memory {self.min_memory}")
+        print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} requesting initial memory {self.min_memory}")
         if not await memory_manager.reserve(self.min_memory, lambda: self.remaining > 0):
-            async with lock:
-                if self.workers == 1 and self.remaining:
-                    # mark all tests skipped
-                    await self.skip_remaining(console)
+            logger.warning("Suite %s/%s runner %s not enough memory", self.mode, self.name, runner_id)
             return
+
+        test_args = await self._run_init(logger)                   # runner setup (e.g. cluster)
 
         while True:
             # Get next test
             async with lock:
                 if self.remaining:
-                    # print(f"XXX {worker_name} {runner_id} TestSuite.run() remaining={self.remaining} - len {len(self.tests)} - picking {len(self.tests) - self.remaining}")
+                    print(f"XXX {worker_name} {runner_id} TestSuite.run() remaining={self.remaining} - len {len(self.tests)} - picking {len(self.tests) - self.remaining}")
                     test = self.tests[len(self.tests) - self.remaining]    # pick next test
                     logger.info("Suite %s - %s runner %s scheduling test %s  REMAINING=%s",
                                    self.mode, self.name, runner_id, test.name, self.remaining)
@@ -324,7 +322,7 @@ class TestSuite(ABC):
 
             # Reserve extra memory for this test (if non-zero)
             # XXX shortname is not really short name for Boost
-            #print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} test {test.shortname} going to reserve test memory {self._test_memory(test.shortname)}")
+            print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} test {test.shortname} going to reserve test memory {self._test_memory(test.shortname)}")
             if not await memory_manager.reserve(self._test_memory(test.shortname)
                                                 , debugmsg=f"{worker_name}-{runner_id} {self.mode}/{self.name} test {test.shortname}"  # XXX debug
                                                 ):
@@ -340,14 +338,14 @@ class TestSuite(ABC):
                         test.is_flaky_failure = True
                         logger.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
                         test.reset()
-                    # print(f"XXX {worker_name} {runner_id} TestSuite.run() starting: {test.uname} {test_args}")
+                    print(f"XXX {worker_name} {runner_id} TestSuite.run() starting: {test.uname} {test_args}")
                     await test.run(self.options, **test_args)
                     # print(f"XXX {worker_name} {runner_id} TestSuite.run: {test.uname} result {test.success}") # XXX
                     if test.success or not test.is_flaky or test.is_cancelled:
-                        # print(f"XXX {worker_name} {runner_id} TestSuite.run: DONE {test.uname} result {test.success} is_cancelled {test.is_cancelled}") # XXX
+                        print(f"XXX {worker_name} {runner_id} TestSuite.run: DONE {test.uname} result {test.success} is_cancelled {test.is_cancelled}") # XXX
                         break
             except Exception as e:
-                # print(f"XXX {worker_name} {runner_id} TestSuite.run: EXCEPTION {e} args {test_args} <<<<<<<<<<<<<<<< \n") # XXX
+                print(f"XXX {worker_name} {runner_id} TestSuite.run: EXCEPTION {e} args {test_args} <<<<<<<<<<<<<<<< \n") # XXX
                 print(traceback.format_exc())
                 pass
             finally:
@@ -563,15 +561,19 @@ class PythonTestSuite(TestSuite):
 
             return server
 
+        print(f"XXX PythonTestSuite._create_cluster() 1")
         cluster = ScyllaCluster(logger, self.hosts, self.cluster_size, create_server)
+        print(f"XXX PythonTestSuite._create_cluster() 2")
         await cluster.install_and_start()
+        print(f"XXX PythonTestSuite._create_cluster() 3")
         logger.info("PythonTestSuite new cluster %s", cluster)
         return cluster
 
     async def _dispose_cluster(self, cluster: ScyllaCluster, logger: logging.LoggerAdapter,
                                remove_logs: bool) -> None:
         # print(f"XXX PythonTestSuite stopping cluster {cluster}")
-        logger.info("PythonTestSuite stopping cluster %s", cluster)
+        logger.info("PythonTestSuite disposing cluster %s and %sremoving logs", cluster,
+                    "" if remove_logs else "not ")
         cluster.setLogger(logger)
         await cluster.stop()
         await cluster.release_ips()
@@ -1134,6 +1136,7 @@ class TopologyTest(PythonTest):
                                        self.suite._dispose_cluster,
                                        self.suite.options.save_log_on_success, test_path) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
+            print(f"XXX TopologyTest.run() starting: {self.uname} {test_args['cluster']}")
 
             try:
                 # Note: start manager here so cluster (and its logs) is availale in case of failure
@@ -1467,7 +1470,7 @@ class MemoryManager:
     def __init__(self, lock: asyncio.Lock, base_delay: float = 0.1, max_delay: float = 4.):
         self.lock: Final[asyncio.Lock] = lock
         self.mb_available: Final[float] = psutil.virtual_memory().available / 1024 ** 2
-        # print(f"XXX MemoryManager.__init__(available {self.mb_available:.02f} <<<")
+        print(f"XXX MemoryManager.__init__() available {self.mb_available:.02f} <<<")
         self.mb_reserved: float = 0.
         self.base_delay: Final[float] = base_delay
         self.max_delay: Final[float] = max_delay
@@ -1483,12 +1486,12 @@ class MemoryManager:
         if mb_required > self.mb_available:
             return False                   # Requires more memory than available
 
-        # print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
+        print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
 
         actual = psutil.virtual_memory().available / 1024 ** 2
         expected = self.mb_available - self.mb_reserved
         if actual < expected * .8:
-            # print(f"\n\nXXX MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
+            print(f"\n\nXXX MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
             return False   # XXX debug
 
         retries = 0
@@ -1567,12 +1570,12 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                     suite = await self.queue.get()
                     assert isinstance(suite, TestSuite)
 
-                    # print(f"XXX {self.name} starting test runner for {suite.mode} {suite.name}")
+                    print(f"XXX {self.name} starting test runner for {suite.mode} {suite.name}")
                     # If there's more than 1 test remaining, other workers can work on this suite
                     async with worker_lock:
                         suite.workers += 1
                         if suite.remaining - suite.workers > 1:
-                            # print(f"XXX {self.name} putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers}")
+                            print(f"XXX {self.name} putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers}")
                             await self.queue.put(suite)
                         else:
                             print(f"XXX {self.name} NOT putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers} ----")
