@@ -296,8 +296,10 @@ class TestSuite(ABC):
         # NOTE: an already running worker may complete this suite before memory is
         #       available, so check if there are tests remaining to run
         # Wait for minimum available memory before starting a runner for this suite
-        print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} requesting initial memory {self.min_memory}")
-        if not await memory_manager.reserve(self.min_memory, lambda: self.remaining > 0):
+        print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} requesting INITIAL memory {self.min_memory}")
+        if not await memory_manager.reserve(self.min_memory, lambda: self.remaining > 0
+                                            , debugmsg=f"{worker_name}-{runner_id} {self.mode}/{self.name} INITIAL"  # XXX debug
+                                            ):
             logger.warning("Suite %s/%s runner %s not enough memory", self.mode, self.name, runner_id)
             return
 
@@ -322,7 +324,7 @@ class TestSuite(ABC):
 
             # Reserve extra memory for this test (if non-zero)
             # XXX shortname is not really short name for Boost
-            print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} test {test.shortname} going to reserve test memory {self._test_memory(test.shortname)}")
+            print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} test {test.shortname} going to RESERVE TEST MEMORY {self._test_memory(test.shortname)}")
             if not await memory_manager.reserve(self._test_memory(test.shortname)
                                                 , debugmsg=f"{worker_name}-{runner_id} {self.mode}/{self.name} test {test.shortname}"  # XXX debug
                                                 ):
@@ -1500,7 +1502,7 @@ class MemoryManager:
         actual = psutil.virtual_memory().available / 1024 ** 2
         expected = self.mb_available - self.mb_reserved
         if actual < expected * .8:
-            print(f"\n\nXXX MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
+            print(f"XXX {debugmsg} MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
             return False   # XXX debug
 
         retries = 0
@@ -1520,12 +1522,14 @@ class MemoryManager:
                         # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) mb_reserved={self.mb_reserved} SUCCESS")
                         return True
                     else:
-                        print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} 2")
+                        # print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} 2")
+                        pass
                 else:
-                    print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} 3")
+                    # print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} 3")
+                    pass
             delay = min(self.max_delay, delay * 2**retries)
             retries += 1
-            print(f"\nXXX MemoryManager(mb_required={mb_required}) > {self.mb_available - self.mb_reserved:.02f} available, SLEEPing for {delay:.02f} <<")
+            print(f"XXX {debugmsg} MemoryManager(mb_required={mb_required}) > {self.mb_available - self.mb_reserved:.02f} available, SLEEPing for {delay:.02f} <<")
             await asyncio.sleep(delay)
 
     async def release(self, mb_reserved: int):
