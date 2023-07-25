@@ -674,6 +674,15 @@ class TopologyTestSuite(PythonTestSuite):
         """Python pattern"""
         return "test_*.py"
 
+    async def _run_init(self, logger) -> Dict[str, Any]:
+        # Topology tests have a manager to create and dispose clusters
+        return {}
+
+    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
+                              **test_args: Any) -> Dict[str, Any]:
+        # Topology tests have a manager to create and dispose clusters
+        return {}
+
 
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
@@ -1136,7 +1145,7 @@ class TopologyTest(PythonTest):
                                        self.suite._dispose_cluster,
                                        self.suite.options.save_log_on_success, test_path) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
-            print(f"XXX TopologyTest.run() starting: {self.uname} {test_args['cluster']}")
+            print(f"XXX TopologyTest.run() starting: {self.uname}")
 
             try:
                 # Note: start manager here so cluster (and its logs) is availale in case of failure
