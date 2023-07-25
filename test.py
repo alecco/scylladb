@@ -296,7 +296,7 @@ class TestSuite(ABC):
         # NOTE: an already running worker may complete this suite before memory is
         #       available, so check if there are tests remaining to run
         # Wait for minimum available memory before starting a runner for this suite
-        print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} requesting INITIAL memory {self.min_memory}")
+        # print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} requesting INITIAL memory {self.min_memory}")
         if not await memory_manager.reserve(self.min_memory, lambda: self.remaining > 0
                                             , debugmsg=f"{worker_name}-{runner_id} {self.mode}/{self.name} INITIAL"  # XXX debug
                                             ):
@@ -309,7 +309,7 @@ class TestSuite(ABC):
             # Get next test
             async with lock:
                 if self.remaining:
-                    print(f"XXX {worker_name} {runner_id} TestSuite.run() remaining={self.remaining} - len {len(self.tests)} - picking {len(self.tests) - self.remaining}")
+                    # print(f"XXX {worker_name} {runner_id} TestSuite.run() remaining={self.remaining} - len {len(self.tests)} - picking {len(self.tests) - self.remaining}")
                     test = self.tests[len(self.tests) - self.remaining]    # pick next test
                     logger.info("Suite %s - %s runner %s scheduling test %s  REMAINING=%s",
                                    self.mode, self.name, runner_id, test.name, self.remaining)
@@ -324,7 +324,7 @@ class TestSuite(ABC):
 
             # Reserve extra memory for this test (if non-zero)
             # XXX shortname is not really short name for Boost
-            print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} test {test.shortname} going to RESERVE TEST MEMORY {self._test_memory(test.shortname)}")
+            # print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} test {test.shortname} going to RESERVE TEST MEMORY {self._test_memory(test.shortname)}")
             if not await memory_manager.reserve(self._test_memory(test.shortname)
                                                 , debugmsg=f"{worker_name}-{runner_id} {self.mode}/{self.name} test {test.shortname}"  # XXX debug
                                                 ):
@@ -340,15 +340,15 @@ class TestSuite(ABC):
                         test.is_flaky_failure = True
                         logger.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
                         test.reset()
-                    print(f"XXX {worker_name} {runner_id} TestSuite.run() starting: {test.uname} {test_args}")
+                    # print(f"XXX {worker_name} {runner_id} TestSuite.run() starting: {test.uname} {test_args}")
                     await test.run(self.options, **test_args)
                     # print(f"XXX {worker_name} {runner_id} TestSuite.run: {test.uname} result {test.success}") # XXX
                     if test.success or not test.is_flaky or test.is_cancelled:
-                        print(f"XXX {worker_name} {runner_id} TestSuite.run: DONE {test.uname} result {test.success} is_cancelled {test.is_cancelled}") # XXX
+                        # print(f"XXX {worker_name} {runner_id} TestSuite.run: DONE {test.uname} result {test.success} is_cancelled {test.is_cancelled}") # XXX
                         break
             except Exception as e:
-                print(f"XXX {worker_name} {runner_id} TestSuite.run: EXCEPTION {e} args {test_args} <<<<<<<<<<<<<<<< \n") # XXX
-                print(traceback.format_exc())
+                # print(f"XXX {worker_name} {runner_id} TestSuite.run: EXCEPTION {e} args {test_args} <<<<<<<<<<<<<<<< \n") # XXX
+                print(traceback.format_exc()) # XXX
                 pass
             finally:
                 async with lock:
@@ -563,11 +563,11 @@ class PythonTestSuite(TestSuite):
 
             return server
 
-        print(f"XXX PythonTestSuite._create_cluster() 1")
+        # print(f"XXX PythonTestSuite._create_cluster() 1")
         cluster = ScyllaCluster(logger, self.hosts, self.cluster_size, create_server)
-        print(f"XXX PythonTestSuite._create_cluster() 2")
+        # print(f"XXX PythonTestSuite._create_cluster() 2")
         await cluster.install_and_start()
-        print(f"XXX PythonTestSuite._create_cluster() 3")
+        # print(f"XXX PythonTestSuite._create_cluster() 3")
         logger.info("PythonTestSuite new cluster %s", cluster)
         return cluster
 
@@ -1147,7 +1147,7 @@ class TopologyTest(PythonTest):
                                        self.suite._dispose_cluster,
                                        self.suite.options.save_log_on_success, test_path) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
-            print(f"XXX TopologyTest.run() starting: {self.uname}")
+            # print(f"XXX TopologyTest.run() starting: {self.uname}")
 
             try:
                 # Note: start manager here so cluster (and its logs) is availale in case of failure
@@ -1481,7 +1481,7 @@ class MemoryManager:
     def __init__(self, lock: asyncio.Lock, base_delay: float = 0.1, max_delay: float = 4.):
         self.lock: Final[asyncio.Lock] = lock
         self.mb_available: Final[float] = psutil.virtual_memory().available / 1024 ** 2
-        print(f"XXX MemoryManager.__init__() available {self.mb_available:.02f} <<<")
+        # print(f"XXX MemoryManager.__init__() available {self.mb_available:.02f} <<<")
         self.mb_reserved: float = 0.
         self.base_delay: Final[float] = base_delay
         self.max_delay: Final[float] = max_delay
@@ -1497,12 +1497,12 @@ class MemoryManager:
         if mb_required > self.mb_available:
             return False                   # Requires more memory than available
 
-        print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
+        # print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
 
         actual = psutil.virtual_memory().available / 1024 ** 2
         expected = self.mb_available - self.mb_reserved
         if actual < expected * .8:
-            print(f"XXX {debugmsg} MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
+            # print(f"XXX {debugmsg} MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
             return False   # XXX debug
 
         retries = 0
@@ -1511,7 +1511,7 @@ class MemoryManager:
             async with self.lock:
                 # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries}")
                 if not check():
-                    print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} FAILED CHECK RETURNING")
+                    # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} FAILED CHECK RETURNING")
                     return False     # Condition no longer valid, stop trying to reserve
                 if mb_required < (self.mb_available - self.mb_reserved):
                     # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} 1")
@@ -1529,7 +1529,7 @@ class MemoryManager:
                     pass
             delay = min(self.max_delay, delay * 2**retries)
             retries += 1
-            print(f"XXX {debugmsg} MemoryManager(mb_required={mb_required}) > {self.mb_available - self.mb_reserved:.02f} available, SLEEPing for {delay:.02f} <<")
+            # print(f"XXX {debugmsg} MemoryManager(mb_required={mb_required}) > {self.mb_available - self.mb_reserved:.02f} available, SLEEPing for {delay:.02f} <<")
             await asyncio.sleep(delay)
 
     async def release(self, mb_reserved: int):
@@ -1583,16 +1583,16 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                     suite = await self.queue.get()
                     assert isinstance(suite, TestSuite)
 
-                    print(f"XXX {self.name} starting test runner for {suite.mode} {suite.name}")
+                    # print(f"XXX {self.name} starting test runner for {suite.mode} {suite.name}")
                     # If there's more than 1 test remaining, other workers can work on this suite
                     async with worker_lock:
                         suite.workers += 1
                         # TODO: this should be suite-specific to avoid excessive parallelism
                         if suite.remaining > 1:
-                            print(f"XXX {self.name} putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers}")
+                            # print(f"XXX {self.name} putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers}")
                             await self.queue.put(suite)
-                        else:
-                            print(f"XXX {self.name} NOT putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers} ----")
+                        # else:
+                        #     print(f"XXX {self.name} NOT putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers} ----")
 
                     # NOTE asyncio.CancelledError is caught at run_test()
                     # to print failures and so this loop can release the reserved memory
@@ -1608,10 +1608,10 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                     break
                 except Exception as e:
                     print(traceback.format_exc())
-                    print(f"\nXXX {self.name} got unexpected exception {e} {type(e)}\n")
+                    # print(f"\nXXX {self.name} got unexpected exception {e} {type(e)}\n")
                     raise e
                 if signaled.is_set():
-                    print(f"XXX {self.name} signaled is set, break 3")
+                    # print(f"XXX {self.name} signaled is set, break 3")
                     break
                 # print(f"XXX {self.name} loop again 4 (qsize {self.queue.qsize()}")
 
