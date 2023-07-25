@@ -53,7 +53,7 @@ mode_run_order = ["debug", "release", "coverage", "sanitize", "dev"]
 mode_run_idx = collections.defaultdict(lambda: len(mode_run_order), \
         {mode: index for index, mode in enumerate(mode_run_order)})
 # Required memory for each Scylla instance
-SCYLLA_MEMORY = collections.defaultdict(lambda: 2400, {"dev": 400, "release": 800})
+SCYLLA_MEMORY = collections.defaultdict(lambda: 2400, {"dev": 200, "release": 200})
 
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
