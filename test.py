@@ -1581,8 +1581,9 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                     # If there's more than 1 test remaining, other workers can work on this suite
                     async with worker_lock:
                         suite.workers += 1
-                        if suite.remaining - suite.workers > 1:
-                            # print(f"XXX {self.name} putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers}")
+                        # TODO: this should be suite-specific to avoid excessive parallelism
+                        if suite.remaining > 1:
+                            print(f"XXX {self.name} putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers}")
                             await self.queue.put(suite)
                         else:
                             print(f"XXX {self.name} NOT putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers} ----")
