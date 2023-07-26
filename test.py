@@ -1400,7 +1400,8 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if not args.jobs:
         if not args.cpus:
-            nr_cpus = multiprocessing.cpu_count()
+            # nr_cpus = multiprocessing.cpu_count() * 2   # XXX  old, includes hyper-thread
+            nr_cpus = psutil.cpu_count(logical=False) * 4   # XXX bumping for CI test
         else:
             nr_cpus = int(subprocess.check_output(
                 ['taskset', '-c', args.cpus, 'python3', '-c',
