@@ -1393,7 +1393,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if not args.jobs:
         if not args.cpus:
-            nr_cpus = multiprocessing.cpu_count()
+            nr_cpus = multiprocessing.cpu_count() * 2   # XXX
         else:
             nr_cpus = int(subprocess.check_output(
                 ['taskset', '-c', args.cpus, 'python3', '-c',
