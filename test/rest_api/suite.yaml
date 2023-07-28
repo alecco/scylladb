@@ -2,3 +2,4 @@ type: Python
 
 skip_in_release:
     - test_task_manager
+suite_load: 9
