@@ -49,13 +49,14 @@ output_is_a_tty = sys.stdout.isatty()
 all_modes = set(['debug', 'release', 'dev', 'sanitize', 'coverage'])
 debug_modes = set(['debug', 'sanitize'])
 # Slow modes to run first
-mode_run_order = ["debug", "release", "coverage", "sanitize", "dev"]
+mode_run_order = ["dev", "sanitize", "coverage", "release", "debug"]
 mode_run_idx = collections.defaultdict(lambda: len(mode_run_order), \
-        {mode: index for index, mode in enumerate(mode_run_order)})
+        {mode: index + 1 for index, mode in enumerate(mode_run_order)})
 # Required memory for each Scylla instance
 SCYLLA_MEMORY = collections.defaultdict(lambda: 2400, {"dev": 200, "release": 200})
-MAX_SUITE_LOAD = 100       # max load for a suite
-MAX_SUITE_TESTS = 10000    # max tests in a single suite
+
+# How much load to account for a worker actively running tests in a test suite
+WORKER_FACTOR = .5
 
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
@@ -120,7 +121,7 @@ class TestSuite(ABC):
         self._mode_idx = mode_run_idx[mode]   # Run mode precedence for this suite
 
         # Relative load of suite, higher values will be scheduled to run first
-        self.suite_load = min(cfg.get("suite_load", 1), MAX_SUITE_LOAD)
+        self.suite_load = cfg.get("suite_load", 1)
         self.run_first_tests = cfg.get("run_first", [])
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
         # Skip tests disabled in suite.yaml
@@ -180,15 +181,10 @@ class TestSuite(ABC):
         """Set/update this suite's running state, and updates precedence tuple.
            Scale the values by the mode execution index (debug > release > ...).
            Make negative as lower gets scheduled earlier."""
-        # XXX XXX XXX combine mode_idx and suite_load !  (so not just go by mode only)
-        precedence = [self._mode_idx,
-                      MAX_SUITE_LOAD - self.suite_load,
-                      MAX_SUITE_TESTS - self.remaining_first,
-                      MAX_SUITE_TESTS - self.remaining]
-        # print(f"XXX 1 {self.mode}/{self.name} {precedence}")
-        # Scale values by number of active workers (+1 to avoid multiply by zero)
-        self.precedence = [x + self.workers for x in precedence]
-        # print(f"XXX 1 {self.mode}/{self.name} _update_run_priority() w {self._workers} rem_f {self._remaining_first} rem {self._remaining}: prec {self.precedence}")
+        # Make the values negative as PriorityQueue picks lower values first
+        precedence = [- (self._mode_idx * self.suite_load + self.remaining_first - self.workers), - self.remaining - self.workers]
+        self.precedence = [int(x / (self.workers * WORKER_FACTOR + 1)) for x in precedence]
+        # print(f"XXX _update_run_priority: {self.mode}/{self.name} _update_run_priority() w {self._workers} rem_f {self._remaining_first} rem {self._remaining}: prec {self.precedence}")
 
     def __lt__(self, other: "TestSuite"):
         return self.precedence < other.precedence
@@ -423,7 +419,6 @@ class TestSuite(ABC):
 
         self.remaining_first = sum(test.run_first for test in self.tests)
         self.remaining = len(self.tests)
-        assert self.remaining < MAX_SUITE_TESTS, "Too many tests for suite"
 
 
 class UnitTestSuite(TestSuite):
@@ -1585,7 +1580,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                     suite = await self.queue.get()
                     assert isinstance(suite, TestSuite)
 
-                    print(f"XXX {self.name} starting test runner for {suite.mode} {suite.name} prec {suite.precedence}") # XXX
+                    print(f"XXX {self.name} starting test runner for {suite.mode} {suite.name}        workers {suite.workers}      prec {suite.precedence}") # XXX
                     # If there's more than 1 test remaining, other workers can work on this suite
                     async with worker_lock:
                         suite.workers += 1
