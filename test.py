@@ -129,8 +129,11 @@ class TestSuite(ABC):
         self.disabled_tests.update(self.cfg.get("skip_in_" + mode, []))
         self.flaky_tests = set(self.cfg.get("flaky", []))
         # Per test extra memory
-        cfg_test_memory = self.cfg.get("test_extra_memory", {})
-        cfg_test_memory_default = cfg_test_memory.get("default", 0.0)
+        cfg_test_memory = self.cfg.get("test_memory", {})
+        if "default" not in cfg_test_memory:
+            logging.warning("Suite %s %s missing default memory config", self.suite_path, self.name)
+            print(f"XXX Suite %s %s missing default memory config" % (self.suite_path, self.name))
+        cfg_test_memory_default = cfg_test_memory.get("default", collections.defaultdict(lambda: SCYLLA_MEMORY))
         self.test_memory = collections.defaultdict(lambda: cfg_test_memory_default, cfg_test_memory)
         # If this mode is one of the debug modes, and there are
         # tests disabled in a debug mode, add these tests to the skip list.
@@ -458,7 +461,7 @@ class UnitTestSuite(TestSuite):
 
     def _test_memory(self, shortname: str) -> int:
         shortname = shortname.split('.')[0]   # remove test case if present
-        return float(self.test_memory[shortname])
+        return float(self.test_memory[shortname][self.mode])
 
     @property
     def pattern(self) -> str:
@@ -1494,7 +1497,7 @@ class MemoryManager:
         if mb_required > self.mb_available:
             return False                   # Requires more memory than available
 
-        # print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
+        print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
 
         actual = psutil.virtual_memory().available / 1024 ** 2
         expected = self.mb_available - self.mb_reserved
