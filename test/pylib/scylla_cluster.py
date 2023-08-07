@@ -18,6 +18,7 @@ import shutil
 import tempfile
 import time
 import traceback
+import resource
 from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
 import uuid
 from enum import Enum
@@ -391,9 +392,13 @@ class ScyllaServer:
     async def start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Start an installed server. May be used for restarts."""
 
+        self.rusage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
+        print(f"XXX {self.exe} {self.cmdline_options}") # XXX
         self.cmd = await asyncio.create_subprocess_exec(
+            # "/usr/bin/time", "-f", "%M", "-o", str(self.log_filename) + ".time",
+            # XXX "/usr/bin/ls", "/", # XXX
             self.exe,
             *self.cmdline_options,
             cwd=self.workdir,
@@ -479,17 +484,27 @@ class ScyllaServer:
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return."""
+
         self.logger.info("stopping %s in %s", self, self.workdir.name)
         if not self.cmd:
             return
 
         await self.shutdown_control_connection()
+        print(f"XXX free -h NOW")
+        await asyncio.sleep(.1)
+        print(f"XXX free -h no more")
         try:
+            time_signal = time.time()
             self.cmd.kill()
         except ProcessLookupError:
+            print(f"XXX ScyllaServer({self.server_id}.stop(), pid: {self.cmd.pid} could not terminate, exit {self.cmd.returncode}") # XXX
             pass
         else:
-            await self.cmd.wait()
+            stdout, stderr = await self.cmd.communicate()
+            time_done = time.time()
+            rusage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+            max_resident_size_kb = rusage_after.ru_maxrss - self.rusage_before.ru_maxrss  # in kilobytes
+            print(f"XXX ScyllaServer({self.server_id}.stop(), max rss: {max_resident_size_kb} KiB time ending {time_done - time_signal:.2f}") # XXX
         finally:
             if self.cmd:
                 self.logger.info("stopped %s in %s", self, self.workdir.name)
