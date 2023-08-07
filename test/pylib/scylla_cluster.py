@@ -210,6 +210,7 @@ class ScyllaServer:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
         self.exe = pathlib.Path(exe).resolve()
+        # self.exe = "/usr/bin/ls" # XXX
         self.vardir = pathlib.Path(vardir)
         self.logger = logger
         self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, cmdline_options)
@@ -394,6 +395,7 @@ class ScyllaServer:
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
         self.cmd = await asyncio.create_subprocess_exec(
+            "/usr/bin/time", "-v",
             self.exe,
             *self.cmdline_options,
             cwd=self.workdir,
@@ -479,17 +481,21 @@ class ScyllaServer:
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return."""
+        print("ScyllaServer.stop() 1") # XXX
         self.logger.info("stopping %s in %s", self, self.workdir.name)
         if not self.cmd:
             return
 
         await self.shutdown_control_connection()
         try:
-            self.cmd.kill()
+            self.cmd.terminate()
         except ProcessLookupError:
             pass
         else:
-            await self.cmd.wait()
+            print(f"XXX stop 1") # XXX
+            await asyncio.sleep(5) # XXX
+            _ = await self.cmd.communicate()
+            #await self.cmd.wait()
         finally:
             if self.cmd:
                 self.logger.info("stopped %s in %s", self, self.workdir.name)
