@@ -650,13 +650,13 @@ class ScyllaCluster:
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
         if self.is_running:
+            self.is_running = False
             self.logger.info("Cluster %s stopping", self)
             self.is_dirty = True
             # If self.running is empty, no-op
             await asyncio.gather(*(server.stop() for server in self.running.values()))
             self.stopped.update(self.running)
             self.running.clear()
-            self.is_running = False
 
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
