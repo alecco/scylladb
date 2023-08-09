@@ -48,6 +48,7 @@ debian_base_packages=(
     libdeflate-dev
     libabsl-dev
     librapidxml-dev
+    sqlite3
 )
 
 fedora_packages=(
@@ -112,6 +113,7 @@ fedora_packages=(
     rust-std-static-wasm32-wasi
     wabt
     binaryen
+    sqlite
 )
 
 # lld is not available on s390x, see

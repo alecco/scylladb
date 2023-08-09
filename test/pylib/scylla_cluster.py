@@ -7,6 +7,7 @@
    Provides helpers to setup and manage clusters of Scylla servers for testing.
 """
 import asyncio
+import psutil
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
 from collections import ChainMap
@@ -18,7 +19,7 @@ import shutil
 import tempfile
 import time
 import traceback
-import resource
+import re
 from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
 import uuid
 from enum import Enum
@@ -207,7 +208,7 @@ class ScyllaServer:
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
                  config_options: Dict[str, Any],
-                 property_file: Dict[str, Any]) -> None:
+                 property_file: Dict[str, Any], stats: bool = False) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
         self.exe = pathlib.Path(exe).resolve()
@@ -234,6 +235,7 @@ class ScyllaServer:
                 cluster_name = self.cluster_name) \
             | config_options
         self.property_file = property_file
+        self.stats = stats
 
     def change_ip(self, ip_addr: IPAddress) -> None:
         """Change IP address of the current server. Pre: the server is
@@ -291,7 +293,7 @@ class ScyllaServer:
             self.config_filename.parent.mkdir(parents=True, exist_ok=True)
             self._write_config_file()
 
-            self.log_file = self.log_filename.open("wb")
+            self.log_file = self.log_filename.open("wb+")
         except:
             try:
                 shutil.rmtree(self.workdir)
@@ -392,13 +394,18 @@ class ScyllaServer:
     async def start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Start an installed server. May be used for restarts."""
 
-        self.rusage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
-        print(f"XXX {self.exe} {self.cmdline_options}") # XXX
+        # print(f"XXX {self.exe} {self.cmdline_options}") # XXX
+        if self.stats:
+            time_exe = "/usr/bin/time"
+            assert os.path.exists(time_exe) and os.access(time_exe, os.X_OK), \
+                    f"Need {time_exe} for ScyllaServer stats"
+            stats_cmd = [time_exe, "-f", "MaxRSS %M time %e"]
+        else:
+            stats_cmd = []
         self.cmd = await asyncio.create_subprocess_exec(
-            # "/usr/bin/time", "-f", "%M", "-o", str(self.log_filename) + ".time",
-            # XXX "/usr/bin/ls", "/", # XXX
+            *stats_cmd,
             self.exe,
             *self.cmdline_options,
             cwd=self.workdir,
@@ -481,7 +488,7 @@ class ScyllaServer:
             self.control_cluster.shutdown()
             self.control_cluster = None
 
-    async def stop(self) -> None:
+    async def stop(self, graceful: bool = False) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return."""
 
@@ -490,26 +497,40 @@ class ScyllaServer:
             return
 
         await self.shutdown_control_connection()
-        print(f"XXX free -h NOW")
-        await asyncio.sleep(.1)
-        print(f"XXX free -h no more")
+        time_signal = time.time()
         try:
-            time_signal = time.time()
-            self.cmd.kill()
+            if self.stats:
+                # kill children of time_exe so it prints the output
+                parent = psutil.Process(self.cmd.pid)
+                for child in parent.children(recursive=True):
+                    os.kill(child.pid, signal.SIGTERM if graceful else signal.SIGKILL)
+            else:
+                if graceful:
+                    self.cmd.terminate()
+                else:
+                    self.cmd.kill()
         except ProcessLookupError:
             print(f"XXX ScyllaServer({self.server_id}.stop(), pid: {self.cmd.pid} could not terminate, exit {self.cmd.returncode}") # XXX
             pass
         else:
             stdout, stderr = await self.cmd.communicate()
             time_done = time.time()
-            rusage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
-            max_resident_size_kb = rusage_after.ru_maxrss - self.rusage_before.ru_maxrss  # in kilobytes
-            print(f"XXX ScyllaServer({self.server_id}.stop(), max rss: {max_resident_size_kb} KiB time ending {time_done - time_signal:.2f}") # XXX
         finally:
             if self.cmd:
                 self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
+            if self.stats:
+                self.log_file.seek(-100, 2)
+                last_lines = self.log_file.read().decode('utf-8')
+                match = re.search(r"MaxRSS (\d+) time (\d+)", last_lines, re.M)
+                if match:
+                    max_rss = int(match.group(1))
+                    time_s = int(match.group(2))
+                    print(f"XXX ScyllaServer({self.server_id}.stop()) rss {max_rss}")
+                else:
+                    print(f"XXX ScyllaServer({self.server_id}.stop()) NO last_lines {last_lines}")
 
+    # XXX unify stops
     async def stop_gracefully(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGTERM to
         stop, so it is graceful. Waits for the process to exit before return."""

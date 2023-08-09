@@ -29,6 +29,7 @@ import time
 import traceback
 import xml.etree.ElementTree as ET
 import yaml
+from datetime import datetime
 
 from abc import ABC, abstractmethod
 from io import StringIO
@@ -40,6 +41,7 @@ from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
+import sqlite3
 
 launch_time = time.monotonic()
 
@@ -399,7 +401,8 @@ class PythonTestSuite(TestSuite):
                 seeds=create_cfg.seeds,
                 cmdline_options=cmdline_options,
                 config_options=config_options,
-                property_file=create_cfg.property_file)
+                property_file=create_cfg.property_file,
+                stats=options.test_stats)
 
             return server
 
@@ -1003,7 +1006,8 @@ class TabularConsoleOutput:
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
     """Run test program, return True if success else False"""
 
-    with test.log_filename.open("wb") as log:
+    with test.log_filename.open("wb+") as log:
+        log.truncate()
 
         def report_error(error):
             msg = "=== TEST.PY SUMMARY START ===\n"
@@ -1042,7 +1046,16 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
+            # Python tests collect stats by themselves
+            if options.test_stats and not isinstance(test, PythonTest):
+                time_exe = "/usr/bin/time"
+                assert os.path.exists(time_exe) and os.access(time_exe, os.X_OK), \
+                        f"Need {time_exe} for ScyllaServer stats"
+                stats_cmd = [time_exe, "-f", "MaxRSS %M time %e"]
+            else:
+                stats_cmd = []
             process = await asyncio.create_subprocess_exec(
+                *stats_cmd,
                 path, *args,
                 stderr=log,
                 stdout=log,
@@ -1059,9 +1072,25 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
+            # XXX check return code of child of /time?
             if process.returncode not in test.valid_exit_codes:
+                print(f"Test exited with code {process.returncode}")  # XXX
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
                 return False
+            if options.test_stats and not isinstance(test, PythonTest):
+                try:
+                    log.seek(-30, 2)
+                    sout = log.read().decode('utf-8')
+                    print(f"XXX run_test() line:   {sout}")
+                    match = re.search(r"MaxRSS (\d+) time (\d+)", sout, re.M)
+                    if match:
+                        max_rss = int(match.group(1))
+                        time_s = int(match.group(2))
+                        print(f"XXX run_test() max rss: {max_rss} kb, time {time_s} seconds")
+                    else:
+                        print(f"XXX run_test() NO max rss")
+                except Exception as exc:
+                    print(f"XXX run_test() EXCEPTION {exc}")
             try:
                 test.check_log(not options.save_log_on_success)
             except Exception as e:
@@ -1070,6 +1099,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 # return False
             return True
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+            # XXX /time
             test.is_cancelled = True
             if process is not None:
                 if gentle_kill:
@@ -1142,6 +1172,8 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument('--skip', default="",
                         dest="skip_pattern", action="store",
                         help="Skip tests which match the provided pattern")
+    parser.add_argument('--stats', dest="test_stats", action="store_true", default=False,
+                        help="Generate a SQLite file with per-test running time and memory usage")
     parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
                         help="Do not run individual test cases in parallel")
     parser.add_argument('--cpus', action="store",
@@ -1247,10 +1279,52 @@ async def find_tests(options: argparse.Namespace) -> None:
     print("Found {} tests.".format(TestSuite.test_count()))
 
 
+TestStats = collections.namedtuple('TestStats', ['test', 'case', 'seconds', 'memory'])
+
+def write_stats_db(stats: List[TestStats]) -> None:
+    """Open a SQLite database to store test statistics"""
+    db_filename = 'test_stats.db'
+
+    # Check if the database file exists and get its modification time if it does
+    timestamp = None
+    if os.path.exists(db_filename):
+        timestamp = os.path.getmtime(db_filename)
+        timestamp = datetime.fromtimestamp(timestamp).strftime('%Y%m%d%H%M%S')
+
+    conn = sqlite3.connect(db_filename)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA locking_mode=EXCLUSIVE;")
+
+    # If there's a timestamp (i.e., the file existed before), and a prev table, rename it
+    if timestamp:
+        try:
+            cursor.execute(f"ALTER TABLE test_stats RENAME TO test_stats_{timestamp};")
+        except sqlite3.Error:
+            pass   # no prev table, no problem
+
+    # Create the table with time_s as an integer column
+    cursor.execute('''
+        CREATE TABLE test_stats (
+            test TEXT PRIMARY KEY,
+            "case" TEXT,
+            seconds INTEGER NOT NULL,
+            memory REAL NOT NULL
+        )
+    ''')
+    # XXX executemany  stats
+    cursor = conn.cursor()
+    cursor.executemany('INSERT INTO test_stats (test, "case", seconds, memory) VALUES (?, ?, ?, ?)', stats)
+
+    conn.commit()
+    conn.close()
+
+
 async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     signaled_task = asyncio.create_task(signaled.wait())
     pending = set([signaled_task])
+
+    stats: List[TestStats] = []
 
     async def cancel(pending):
         for task in pending:
@@ -1267,7 +1341,10 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
             result = coro.result()
             if isinstance(result, bool):
                 continue    # skip signaled task result
+            assert isinstance(result, Test), f"invalid result {type(result)} expected Test"
             console.print_progress(result)
+            if options.test_stats:
+                stats.append(TestStats(result.name, "mycase", 1, 1.0))
 
     ms = MinioServer(options.tmpdir, '127.0.0.1', LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
@@ -1293,6 +1370,9 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         return
     finally:
         await TestSuite.artifacts.cleanup_before_exit()
+
+    if options.test_stats:
+        write_stats_db(stats)
 
     console.print_end_blurb()
 
