@@ -40,6 +40,7 @@ from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
+import sqlite3
 
 launch_time = time.monotonic()
 
@@ -1003,7 +1004,8 @@ class TabularConsoleOutput:
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
     """Run test program, return True if success else False"""
 
-    with test.log_filename.open("wb") as log:
+    with test.log_filename.open("wb+") as log:
+        log.truncate()
 
         def report_error(error):
             msg = "=== TEST.PY SUMMARY START ===\n"
@@ -1043,6 +1045,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
             process = await asyncio.create_subprocess_exec(
+                "/usr/bin/time", "-f", "MaxRSS %M time %e",  #  XXX  time
                 path, *args,
                 stderr=log,
                 stdout=log,
@@ -1059,9 +1062,25 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
+            # XXX check return code of child of /time?
             if process.returncode not in test.valid_exit_codes:
+                print(f"Test exited with code {process.returncode}")  # XXX
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
                 return False
+            try:
+                print(f"XXX 1")
+                log.seek(-30, 2)
+                sout = log.read().decode('utf-8')
+                print(f"XXX run_test() line:   {sout}")
+                match = re.search(r"MaxRSS (\d+) time (\d+)", sout, re.M)
+                if match:
+                    max_rss = int(match.group(1)) 
+                    time_s = int(match.group(2)) 
+                    print(f"XXX run_test() max rss: {max_rss} kb, time {time_s} seconds")
+                else:
+                    print(f"XXX run_test() NO max rss")
+            except Exception as exc:
+                print(f"XXX run_test() EXCEPTION {exc}")
             try:
                 test.check_log(not options.save_log_on_success)
             except Exception as e:
@@ -1070,6 +1089,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 # return False
             return True
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+            # XXX /time
             test.is_cancelled = True
             if process is not None:
                 if gentle_kill:
@@ -1142,6 +1162,8 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument('--skip', default="",
                         dest="skip_pattern", action="store",
                         help="Skip tests which match the provided pattern")
+    parser.add_argument('--stats', dest="test_stats", action="store_true", default=False,
+                        help="Generate a SQLite file with per-test running time and memory usage")
     parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
                         help="Do not run individual test cases in parallel")
     parser.add_argument('--cpus', action="store",
@@ -1272,6 +1294,8 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     ms = MinioServer(options.tmpdir, TestSuite.hosts, LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+
+    if options.test_stats:
 
     console.print_start_blurb()
     try:
