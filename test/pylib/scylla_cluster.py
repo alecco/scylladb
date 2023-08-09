@@ -7,6 +7,7 @@
    Provides helpers to setup and manage clusters of Scylla servers for testing.
 """
 import asyncio
+import psutil
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
 from collections import ChainMap
@@ -395,15 +396,17 @@ class ScyllaServer:
         self.rusage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
-        print(f"XXX {self.exe} {self.cmdline_options}") # XXX
+        # print(f"XXX {self.exe} {self.cmdline_options}") # XXX
+        # XXX here create subprocess with python exec
+        prog_cmd = 'python3', '-c', 'import time; time.sleep(10)',  # this works and shows PID
         self.cmd = await asyncio.create_subprocess_exec(
-            # "/usr/bin/time", "-f", "%M", "-o", str(self.log_filename) + ".time",
+            # "/usr/bin/time", "-f", "%M",  "-o", "/dev/stdout", # "-o", str(self.log_filename) + ".time",
             # XXX "/usr/bin/ls", "/", # XXX
             self.exe,
             *self.cmdline_options,
             cwd=self.workdir,
             stderr=self.log_file,
-            stdout=self.log_file,
+            # XXX stdout=self.log_file,
             env=env,
             preexec_fn=os.setsid,
         )
@@ -490,17 +493,27 @@ class ScyllaServer:
             return
 
         await self.shutdown_control_connection()
-        print(f"XXX free -h NOW")
-        await asyncio.sleep(.1)
-        print(f"XXX free -h no more")
+        print(f"XXX free -k NOW    PID  {self.cmd.pid}")
+        await asyncio.sleep(9)
+        print(f"XXX free -k no more")
+        time_signal = time.time()
+        parent = psutil.Process(self.cmd.pid)
+        for child in parent.children(recursive=True):
+            os.kill(child.pid, signal.SIGKILL)
+            print(f"XXX ScyllaServer({self.server_id}.stop() sent SIGKILL to PID {child}")
+        print("--")
         try:
-            time_signal = time.time()
-            self.cmd.kill()
+            self.cmd.kill()   # XXX XXX XXX  not ls
+            # self.cmd.terminate()
+            # self.cmd.send_signal(signal.SIGTERM)
+            # print(f"XXX ScyllaServer({self.server_id}).stop(), sent SIGTERM") # XXX
+            pass
         except ProcessLookupError:
             print(f"XXX ScyllaServer({self.server_id}.stop(), pid: {self.cmd.pid} could not terminate, exit {self.cmd.returncode}") # XXX
             pass
         else:
             stdout, stderr = await self.cmd.communicate()
+            print(f"XXX ScyllaServer({self.server_id}.stop(), stdout {stdout}") # XXX
             time_done = time.time()
             rusage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
             max_resident_size_kb = rusage_after.ru_maxrss - self.rusage_before.ru_maxrss  # in kilobytes
