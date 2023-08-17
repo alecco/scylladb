@@ -522,13 +522,15 @@ class ScyllaServer:
             if self.stats:
                 self.log_file.seek(-100, 2)
                 last_lines = self.log_file.read().decode('utf-8')
-                match = re.search(r"MaxRSS (\d+) time (\d+)", last_lines, re.M)
+                match = re.search(r"MaxRSS (?P<max_rss>\d+) time (?P<time>\d+)", last_lines, re.M)
                 if match:
-                    max_rss = int(match.group(1))
-                    time_s = int(match.group(2))
-                    print(f"XXX ScyllaServer({self.server_id}.stop()) rss {max_rss}")
+                    group_dict = match.groupdict()
+                    self.max_rss = int(match.group(1))
+                    self.time_s = int(match.group(2))
                 else:
-                    print(f"XXX ScyllaServer({self.server_id}.stop()) NO last_lines {last_lines}")
+                    self.logger.error(f"No stats for {self}", self)
+                    self.max_rss = -1
+                    self.time_s = -1
 
     # XXX unify stops
     async def stop_gracefully(self) -> None:
