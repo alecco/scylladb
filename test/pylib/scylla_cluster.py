@@ -401,7 +401,7 @@ class ScyllaServer:
             time_exe = "/usr/bin/time"
             assert os.path.exists(time_exe) and os.access(time_exe, os.X_OK), \
                     f"Need {time_exe} for ScyllaServer stats"
-            stats_cmd = [time_exe, "-f", "MaxRSS %M time %e"]
+            stats_cmd = [time_exe, "-f", "MaxRSS %M"]
         else:
             stats_cmd = []
         self.cmd = await asyncio.create_subprocess_exec(
@@ -522,13 +522,13 @@ class ScyllaServer:
             if self.stats:
                 self.log_file.seek(-100, 2)
                 last_lines = self.log_file.read().decode('utf-8')
-                match = re.search(r"MaxRSS (\d+) time (\d+)", last_lines, re.M)
+                match = re.search(r"MaxRSS (?P<max_rss>\d+)", last_lines, re.M)
                 if match:
-                    max_rss = int(match.group(1))
-                    time_s = int(match.group(2))
-                    print(f"XXX ScyllaServer({self.server_id}.stop()) rss {max_rss}")
+                    group_dict = match.groupdict()
+                    self.max_rss = int(match.group(1))
                 else:
-                    print(f"XXX ScyllaServer({self.server_id}.stop()) NO last_lines {last_lines}")
+                    self.logger.error(f"No memory stats for ScyllaServer {self.server_id}", self)
+                    self.max_rss = -1
 
     # XXX unify stops
     async def stop_gracefully(self) -> None:
@@ -626,7 +626,7 @@ class ScyllaCluster:
 
     def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
                  host_registry: HostRegistry, replicas: int,
-                 create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
+                 create_server: Callable[[CreateServerParams], ScyllaServer], stats: bool = False):
         self.logger = logger
         self.host_registry = host_registry
         self.leased_ips = set[IPAddress]()
@@ -648,6 +648,8 @@ class ScyllaCluster:
         self.keyspace_count = 0
         self.api = ScyllaRESTAPIClient()
         self.logger.info("Created new cluster %s", self.name)
+        self.stats = stats
+        self.server_mem: Dict[str, float] = {}
 
     async def install_and_start(self) -> None:
         """Setup initial servers and start them.
@@ -693,6 +695,9 @@ class ScyllaCluster:
             await asyncio.gather(*(server.stop() for server in self.running.values()))
             self.stopped.update(self.running)
             self.running.clear()
+            if self.stats:
+                for server_num, server in self.stopped.items():
+                    self.server_mem[server_num] = server.max_rss
 
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
@@ -881,6 +886,8 @@ class ScyllaCluster:
             await server.stop()
         self.running.pop(server_id)
         self.stopped[server_id] = server
+        if self.stats:
+            self.server_mem[server.server_id] = server.max_rss
         return ScyllaCluster.ActionReturn(success=True, msg=f"{server} stopped")
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
@@ -977,6 +984,14 @@ class ScyllaCluster:
                      server_id, server.ip_addr, ip_addr)
         server.change_ip(ip_addr)
         return ip_addr
+
+    def total_mem(self) -> float:
+        """Return the sum of the memory usage of all servers of this cluster.
+           Note: this computes the last run of each server if they were re-started,
+                 and it sums all servers even if they were not running at the same time.
+        """
+        print(f"XXX total_mem() values {len(self.server_mem.values())}")
+        return sum(self.server_mem.values())
 
 
 class ScyllaClusterManager:

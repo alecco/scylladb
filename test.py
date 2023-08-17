@@ -40,7 +40,7 @@ from test.pylib.pool import Pool
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
-from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
+from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, NamedTuple
 import sqlite3
 
 launch_time = time.monotonic()
@@ -80,6 +80,53 @@ class palette:
         return palette.ansi_escape.sub('', text)
 
 
+class TestStats():
+    """Test statistics after running.
+       Shared resources across are grouped with the string group (e.g. cluster reuse)
+       When running all test cases of a test, the case member must be set to None
+
+       example stand alone:
+            BoostTest    TestStatsOne(debub, database_test, snapshot_works, 33, 1234.5, None)
+
+       example group:
+            CQLPytest    TestStatsOne(dev, cql-pytest, group_by, 2, None, ScyllaCluster-1) 
+                         str(<ScyllaCluster UUID>): 300.0
+
+       Tests using more than one cluster are not supported yet. Only the first cluster is used.
+       (these are only a handful at the time of this writing)
+       Note for clusters:
+           If a server is stopped and re-started, the stats of the last process/run is used. 
+           A cluster reports the sum of all the servers it had, as if they all run concurrently.
+    """
+
+    class TestStatsOne(NamedTuple):
+        """Stats for one test. If shared resourced, mark the group."""
+        mode: str                   # mode (e.g. "debug", "release", "dev")
+        name: str                   # test name
+        case: Optional[str]         # test case name, not specified when running all cases together
+        seconds: float              # test running time in seconds
+        memory: float               # memory used (for stand-alone tests, e.g. Boost)
+        group: Optional[str]        # resource group (for shared resources, e.g. "ScyllaCluster-1")
+
+    def __init__(self):
+        self._test_stats: List[TestStatsOne] = []
+        self._test_stats_group: Map[str, float] = {}
+
+    def add(self, mode: str, name: str, case: Optional[str], seconds: float, memory: float,
+            group: Optional[str]):
+        self._test_stats.append(TestStats.TestStatsOne(mode, name, case, seconds, memory, group))
+
+    def add_group(self, name: str, memory: float):
+        self._test_stats_group[name] = memory
+
+    def all(self):
+        """A generator joining test stats with groups"""
+        for entry in self._test_stats:
+            print(f"XXX all() type {type(entry)}")
+            memory = entry.memory if entry.memory else self._test_stats_group[entry.group]
+            yield entry.mode, entry.name, entry.case, entry.seconds, memory, entry.group
+
+
 class TestSuite(ABC):
     """A test suite is a folder with tests of the same type.
     E.g. it can be unit tests, boost tests, or CQL tests."""
@@ -91,7 +138,7 @@ class TestSuite(ABC):
     FLAKY_RETRIES = 5
     _next_id = collections.defaultdict(int) # (test_key -> id)
 
-    def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
+    def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str):
         self.suite_path = pathlib.Path(path)
         self.name = str(self.suite_path.name)
         self.cfg = cfg
@@ -153,7 +200,8 @@ class TestSuite(ABC):
             return cfg
 
     @staticmethod
-    def opt_create(path: str, options: argparse.Namespace, mode: str) -> 'TestSuite':
+    def opt_create(path: str, options: argparse.Namespace, mode: str, test_stats: TestStats) \
+            -> 'TestSuite':
         """Return a subclass of TestSuite with name cfg["type"].title + TestSuite.
         Ensures there is only one suite instance per path."""
         suite_key = os.path.join(path, mode)
@@ -175,6 +223,7 @@ class TestSuite(ABC):
             if not SpecificTestSuite:
                 raise RuntimeError("Failed to load tests in {}: suite type '{}' not found".format(path, kind))
             suite = SpecificTestSuite(path, cfg, options, mode)
+            suite.test_stats = test_stats   # set here to avoid constructor signature pollution
             assert suite is not None
             TestSuite.suites[suite_key] = suite
         return suite
@@ -193,7 +242,7 @@ class TestSuite(ABC):
     async def add_test(self, shortname: str) -> None:
         pass
 
-    async def run(self, test: 'Test', options: argparse.Namespace):
+    async def run(self, test: 'Test', options: argparse.Namespace) -> None:
         try:
             for i in range(1, self.FLAKY_RETRIES):
                 if i > 1:
@@ -260,7 +309,7 @@ class TestSuite(ABC):
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
 
-    def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
+    def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str):
         super().__init__(path, cfg, options, mode)
         # Map of custom test command line arguments, if configured
         self.custom_args = cfg.get("custom_args", {})
@@ -300,7 +349,7 @@ class BoostTestSuite(UnitTestSuite):
     # --list_content. Static to share across all modes.
     _case_cache: Dict[str, List[str]] = dict()
 
-    def __init__(self, path, cfg: dict, options: argparse.Namespace, mode) -> None:
+    def __init__(self, path, cfg: dict, options: argparse.Namespace, mode):
         super().__init__(path, cfg, options, mode)
 
     async def create_test(self, shortname: str, suite, args) -> None:
@@ -346,7 +395,7 @@ class BoostTestSuite(UnitTestSuite):
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
 
-    def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
+    def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str):
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = os.path.join("build", self.mode, "scylla")
         if self.mode == "coverage":
@@ -367,6 +416,10 @@ class PythonTestSuite(TestSuite):
                these if it came from a failed test.
             """
             await cluster.stop()
+            if self.options.test_stats:
+                # print(f"XXX recycle_cluster self.test_stats.add_group({cluster.name}, {cluster.total_mem()})") # XXX
+                print(f"XXX recycle_cluster") # XXX
+                self.test_stats.add_group(cluster.name, cluster.total_mem()) # XXX
             await cluster.release_ips()
 
         self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
@@ -407,10 +460,14 @@ class PythonTestSuite(TestSuite):
             return server
 
         async def create_cluster(logger: Union[logging.Logger, logging.LoggerAdapter]) -> ScyllaCluster:
-            cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server)
+            cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server, options.test_stats)
 
             async def stop() -> None:
                 await cluster.stop()
+                if self.options.test_stats:
+                    print(f"XXX create_cluster-stop()") # XXX
+                    # print(f"XXX create_cluster-stop() self.test_stats.add_group({cluster.name}, {cluster.total_mem()})") # XXX
+                    self.test_stats.add_group(cluster.name, cluster.total_mem()) # XXX
 
             # Suite artifacts are removed when
             # the entire suite ends successfully.
@@ -421,7 +478,6 @@ class PythonTestSuite(TestSuite):
                     await cluster.uninstall()
 
                 self.artifacts.add_suite_artifact(self, uninstall)
-            self.artifacts.add_exit_artifact(self, stop)
 
             await cluster.install_and_start()
             return cluster
@@ -446,7 +502,7 @@ class PythonTestSuite(TestSuite):
 class CQLApprovalTestSuite(PythonTestSuite):
     """Run CQL commands against a single Scylla instance"""
 
-    def __init__(self, path, cfg, options: argparse.Namespace, mode) -> None:
+    def __init__(self, path, cfg, options: argparse.Namespace, mode):
         super().__init__(path, cfg, options, mode)
 
     def build_test_list(self) -> List[str]:
@@ -486,7 +542,7 @@ class TopologyTestSuite(PythonTestSuite):
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
 
-    def __init__(self, path: str, cfg, options: argparse.Namespace, mode: str) -> None:
+    def __init__(self, path: str, cfg, options: argparse.Namespace, mode: str):
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = os.path.join("build", self.mode, "scylla")
         if self.mode == "coverage":
@@ -595,7 +651,7 @@ class UnitTest(Test):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
 
-    async def run(self, options) -> Test:
+    async def run(self, options: argparse.Namespace) -> 'Test':
         self.success = await run_test(self, options, env=self.env)
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
@@ -665,7 +721,7 @@ class BoostTest(UnitTest):
         self.__parse_logger()
         super().check_log(trim)
 
-    async def run(self, options):
+    async def run(self, options: argparse.Namespace) -> 'Test':
         if options.random_seed:
             self.args += ['--random-seed', options.random_seed]
         if self.allows_compaction_groups and options.x_log2_compaction_groups:
@@ -714,7 +770,7 @@ class CQLApprovalTest(Test):
             "--output={}".format(self.tmpfile),
         ]
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace) -> 'Test':
         self.success = False
         self.summary = "failed"
 
@@ -727,9 +783,11 @@ class CQLApprovalTest(Test):
             if self.server_log is not None:
                 logger.info("Server log:\n%s", self.server_log)
 
+        # XXX pass test_stats to cluster or pool or whatever
         # TODO: consider dirty_on_exception=True
         async with (cm := self.suite.clusters.instance(False, logger)) as cluster:
             try:
+                test_cluster = str(cluster)
                 cluster.before_test(self.uname)
                 logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
                 self.args.insert(1, "--host={}".format(cluster.endpoint()))
@@ -886,6 +944,7 @@ class PythonTest(Test):
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
         cluster = await self.suite.clusters.get(logger)
+        self.stat_group = cluster.name  # XXX add to other suites
         try:
             cluster.before_test(self.uname)
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -1046,7 +1105,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
-            # Python tests collect stats by themselves
+            # Python tests run clusters and we want the stats of those, not of pytest process
             if options.test_stats and not isinstance(test, PythonTest):
                 time_exe = "/usr/bin/time"
                 assert os.path.exists(time_exe) and os.access(time_exe, os.X_OK), \
@@ -1076,21 +1135,26 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             if process.returncode not in test.valid_exit_codes:
                 print(f"Test exited with code {process.returncode}")  # XXX
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
-                return False
-            if options.test_stats and not isinstance(test, PythonTest):
-                try:
-                    log.seek(-30, 2)
-                    sout = log.read().decode('utf-8')
-                    print(f"XXX run_test() line:   {sout}")
-                    match = re.search(r"MaxRSS (\d+) time (\d+)", sout, re.M)
-                    if match:
-                        max_rss = int(match.group(1))
-                        time_s = int(match.group(2))
-                        print(f"XXX run_test() max rss: {max_rss} kb, time {time_s} seconds")
-                    else:
-                        print(f"XXX run_test() NO max rss")
-                except Exception as exc:
-                    print(f"XXX run_test() EXCEPTION {exc}")
+                # XXX return False    what do?
+            if options.test_stats:
+                if isinstance(test, PythonTest):
+                    # XXX group to be stored later
+                    test.suite.test_stats.add(test.suite.mode, test.name, "mycase", 1, None, test.stat_group) # XXX values
+                else:
+                    try:
+                        log.seek(-30, 2)
+                        last_lines = log.read().decode('utf-8')
+                        print(f"XXX run_test() line:   {last_lines}")
+                        match = re.search(r"MaxRSS (?P<max_rss>\d+) time (?P<time>\d+)", last_lines, re.M)
+                        if match:
+                            group_dict = match.groupdict()
+                            # XXX no group, case?
+                            print(f"XXX run_test() max rss: {group_dict['max_rss']} kb, time {group_dict['time']} seconds")
+                            test.suite.test_stats.add(test.suite.mode, test.name, "mycase", float(group_dict['time']), int(group_dict['max_rss']), None) # XXX values
+                        else:
+                            report_error(f"Failed to get stats for the test: {test.name}") # XXX
+                    except Exception as exc:
+                        print(f"XXX run_test() EXCEPTION {exc}")
             try:
                 test.check_log(not options.save_log_on_success)
             except Exception as e:
@@ -1258,12 +1322,12 @@ def parse_cmd_line() -> argparse.Namespace:
     return args
 
 
-async def find_tests(options: argparse.Namespace) -> None:
+async def find_tests(options: argparse.Namespace, test_stats: TestStats) -> None:
 
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
-                suite = TestSuite.opt_create(f, options, mode)
+                suite = TestSuite.opt_create(f, options, mode, test_stats)
                 await suite.add_test_list()
 
     if not TestSuite.test_count():
@@ -1279,9 +1343,7 @@ async def find_tests(options: argparse.Namespace) -> None:
     print("Found {} tests.".format(TestSuite.test_count()))
 
 
-TestStats = collections.namedtuple('TestStats', ['test', 'case', 'seconds', 'memory'])
-
-def write_stats_db(stats: List[TestStats]) -> None:
+def write_stats_db(test_stats: TestStats) -> None:
     """Open a SQLite database to store test statistics"""
     db_filename = 'test_stats.db'
 
@@ -1303,18 +1365,21 @@ def write_stats_db(stats: List[TestStats]) -> None:
             pass   # no prev table, no problem
 
     # Create the table with time_s as an integer column
+
     cursor.execute('''
         CREATE TABLE test_stats (
-            test TEXT PRIMARY KEY,
-            "case" TEXT,
-            seconds INTEGER NOT NULL,
-            memory REAL NOT NULL
+            mode TEXT NOT NULL,
+            test_name TEXT NOT NULL,
+            test_case TEXT,
+            seconds REAL NOT NULL,
+            memory REAL,
+            test_group TEXT
         )
     ''')
-    # XXX executemany  stats
     cursor = conn.cursor()
-    cursor.executemany('INSERT INTO test_stats (test, "case", seconds, memory) VALUES (?, ?, ?, ?)', stats)
-
+    cursor.executemany('INSERT INTO test_stats '
+                       '(mode, test_name, test_case, seconds, memory, test_group) '
+                       'VALUES (?, ?, ?, ?, ?, ?)', test_stats.all())
     conn.commit()
     conn.close()
 
@@ -1323,8 +1388,6 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     signaled_task = asyncio.create_task(signaled.wait())
     pending = set([signaled_task])
-
-    stats: List[TestStats] = []
 
     async def cancel(pending):
         for task in pending:
@@ -1343,8 +1406,6 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                 continue    # skip signaled task result
             assert isinstance(result, Test), f"invalid result {type(result)} expected Test"
             console.print_progress(result)
-            if options.test_stats:
-                stats.append(TestStats(result.name, "mycase", 1, 1.0))
 
     ms = MinioServer(options.tmpdir, '127.0.0.1', LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
@@ -1370,9 +1431,6 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         return
     finally:
         await TestSuite.artifacts.cleanup_before_exit()
-
-    if options.test_stats:
-        write_stats_db(stats)
 
     console.print_end_blurb()
 
@@ -1573,7 +1631,9 @@ async def main() -> int:
 
     open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
 
-    await find_tests(options)
+    test_stats: TestStats = TestStats()
+
+    await find_tests(options, test_stats)
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
                          for t in TestSuite.all_tests()]))
@@ -1602,6 +1662,9 @@ async def main() -> int:
 
     if 'coverage' in options.modes:
         coverage.generate_coverage_report("build/coverage", "tests")
+
+    if options.test_stats:
+        write_stats_db(test_stats)
 
     # Note: failure codes must be in the ranges 0-124, 126-127,
     #       to cooperate with git bisect's expectations
