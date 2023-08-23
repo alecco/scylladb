@@ -86,13 +86,37 @@ class TestCase(NamedTuple):
        Representation is  suite::test[::case] where case is ommitted if not present.
        For a match for any suite (specified with ::test in command line), it will show as
        "all::test".
+       For a match for any test of a suite, it's represented as "suite::all"
     """
-    suite_name: str
-    name: str
+    suite_name: Optional[str]
+    name: Optional[str]
     case: Optional[str]
 
     def __str__(self):
-        return f"{self.suite_name}::{self.name}{'::' + self.case if self.case else ''}"
+        """Represent this TestCase as suite::test::case
+           If suite is not specified, 'all::test::case' or 'all::test'.
+           If test is not specified, 'suite::'.
+           If case is not specified, 'suite::test'.
+        """
+        assert self.name or self.suite_name, "Either test name or suite name must be present"
+        suite = f"{self.suite_name}::" if self.suite_name else "all::"
+        assert self.name or (not self.name and not self.case), "No case if test is undefined"
+        test_name = self.name if self.name else ""
+        case_ = f"::{self.case}" if self.case else ""
+        return f"{suite}{test_name}{case_}"
+
+    def match(self, other: "TestCase") -> bool:
+        """
+        Check if the 'other' TestCase matches the pattern specified by this TestCase instance.
+        An attribute in 'self' set to None is considered a wildcard, matching any value in 'other'.
+        """
+        if self.suite_name is not None and self.suite_name != other.suite_name:
+            return False
+        if self.name is not None and not self.name in other.name:
+            return False
+        if self.case is not None and not self.case in other.case:
+            return False
+        return True
 
     def startswith(self, name: str, case: Optional[str]):
         """Checks if self's name string starts with provided name string.
@@ -265,8 +289,13 @@ class TestSuite(ABC):
             test_defs.sort(key=lambda tc: not any(tc.startswith(name, case)
                                                   for name, case in run_first_tc))
 
-        def is_enabled(name: str):
-            return not options.names or any (n in name for n in options.names)
+        def is_enabled(test: TestCase):
+            if not options.names:
+                return True             # no test specified, run all tests
+            # here names are patterns
+            if any (n.match(TestCase(self.name, test, None)) for n in options.names):
+                return True
+            return False
 
         def is_disabled(name: str):
             return name in self.disabled_tests
@@ -599,7 +628,10 @@ class Test:
         self.suite = suite
         # Unique file name, which is also readable by human, as filename prefix
         # TODO: change inner '.' to '-' for a more conventional file naming
-        self.uname = f"{self.full_name.replace('::', '.')}.{self.id}"
+        if test_def.case:
+            self.uname = f"{test_def.suite_name}.{test_def.name}.{test_def.case}.{self.id}"
+        else:
+            self.uname = f"{test_def.suite_name}.{test_def.name}.{self.id}"
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         if test_def.case is None:
@@ -718,8 +750,8 @@ class BoostTest(UnitTest):
     @staticmethod
     def test_path_of_element(test: ET.Element) -> TestCase:
         path = test.attrib['path']
-        suite_name, test_name, case_name = path.rsplit('::')
-        return TestCase(suite_name, test_name, case_name)
+        elems = path.rsplit('::')
+        return TestCase(elems[0], elems[1], elems[2] if len(elems) == 3 else None)
 
     def __parse_logger(self) -> None:
         def attach_path_and_mode(test):
@@ -1239,6 +1271,17 @@ def setup_signal_handlers(loop, signaled) -> None:
         loop.add_signal_handler(signo, lambda: asyncio.create_task(shutdown(loop, signo, signaled)))
 
 
+def pattern_to_case(value: str) -> TestCase:
+    """From a command line test pattern create a TestCase."""
+    pattern = re.compile(r'^(?P<suite>[a-zA-Z0-9_-]*)(::(?P<test>[a-zA-Z0-9_-]+))?(::(?P<case>[a-zA-Z0-9_-]+))?$')
+    match = pattern.match(value)
+    if not match:
+        raise ValueError("Invalid pattern. Must be 'suite', 'suite::test', or 'suite::test::case'.")
+
+    suite = None if match.group('suite') == '' else match.group('suite')
+    return TestCase(suite, match.group('test'), match.group('case'))
+
+
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
 
@@ -1247,12 +1290,19 @@ def parse_cmd_line() -> argparse.Namespace:
         "names",
         nargs="*",
         action="store",
-        help="""Can be empty. List of test names, to look for in
-                suites. Each name is used as a substring to look for in the
-                path to test file, e.g. "mem" will run all tests that have
-                "mem" in their name in all suites, "boost/mem" will only enable
-                tests starting with "mem" in "boost" suite. Default: run all
-                tests in all suites.""",
+        type=pattern_to_case,
+        help="""Can be empty. Space separated list of tests look for.
+                The syntax is either test_suite, test_suite::test_file, or
+                test_suite::test_file::test_case. For example:
+                    boost::database_test::clear_snapshot       runs one test case
+                    topology::test_change_ip                   runs all tests in a file
+                    cql-pytest                                 suite only, runs all its tests
+                    ::test_tablets                             tests matching any suite
+
+                Test and case can be partial match. (e.g. "::tablets" instead of "::test_tablets").
+                Note: if suite is not specified the "::" prefix MUST be placed before test name.
+
+                If no name is specified, all tests in all suites will be run.""",
     )
     parser.add_argument(
         "--tmpdir",
