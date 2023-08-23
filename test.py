@@ -188,7 +188,7 @@ class TestSuite(ABC):
         pass
 
     @abstractmethod
-    async def add_test(self, shortname: str) -> None:
+    async def add_test(self, name: str) -> int:
         pass
 
     async def run(self, test: 'Test', options: argparse.Namespace):
@@ -225,25 +225,29 @@ class TestSuite(ABC):
             lst.sort(key=lambda x: (x not in self.run_first_tests, x))
 
         pending = set()
-        for shortname in lst:
-            if shortname in self.disabled_tests:
+        for test_name in lst:
+            if not isinstance(self, BoostTestSuite):
+                continue  # XXX
+            if test_name in self.disabled_tests:
                 continue
 
-            t = os.path.join(self.name, shortname)
-            patterns = options.name if options.name else [t]
-            if options.skip_pattern and options.skip_pattern in t:
+            # e.g. self.name "boost" test_name "database_test"   XXX
+            test_full_name = f"{self.name}::{test_name}"
+            patterns = options.name if options.name else [test_full_name]
+            if options.skip_pattern and options.skip_pattern in test_full_name:
+                print(f"XXX skipping {test_full_name} because of skip pattern {options.skip_pattern}") # XXX
                 continue
 
-            async def add_test(shortname) -> None:
+            async def add_test_entries(test_name) -> None:
                 # Add variants of the same test sequentially
                 # so that case cache has a chance to populate
                 for i in range(options.repeat):
-                    await self.add_test(shortname)
-                    self.pending_test_count += 1
+                    # add_test() might add multiple cases
+                    self.pending_test_count += await self.add_test(test_name)
 
             for p in patterns:
-                if p in t:
-                    pending.add(asyncio.create_task(add_test(shortname)))
+                if p in test_full_name:
+                    pending.add(asyncio.create_task(add_test_entries(test_name)))
         if len(pending) == 0:
             return
         try:
@@ -265,26 +269,27 @@ class UnitTestSuite(TestSuite):
         # Map of tests that cannot run with compaction groups
         self.all_can_run_compaction_groups_except = cfg.get("all_can_run_compaction_groups_except")
 
-    async def create_test(self, shortname, suite, args):
-        exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+    async def create_test(self, name, suite, args):
+        exe = os.path.join("build", suite.mode, "test", suite.name, name)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Unit test executable {exe} not found."))
             return
-        test = UnitTest(self.next_id((shortname, self.suite_key)), shortname, suite, args)
+        test = UnitTest(self.next_id((name, self.suite_key)), name, suite, args)
         self.tests.append(test)
 
-    async def add_test(self, shortname) -> None:
+    async def add_test(self, name: str) -> int:
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
         # Skip tests which are not configured, and hence are not built
-        if os.path.join("test", self.name, shortname) not in self.options.tests:
-            return
+        if os.path.join("test", self.name, name) not in self.options.tests:
+            return 0
 
         # Default seastar arguments, if not provided in custom test options,
         # are two cores and 2G of RAM
-        args = self.custom_args.get(shortname, ["-c2 -m2G"])
+        args = self.custom_args.get(name, ["-c2 -m2G"])
         for a in args:
-            await self.create_test(shortname, self, a)
+            await self.create_test(name, self, a)
+        return len(args)
 
     @property
     def pattern(self) -> str:
@@ -301,15 +306,15 @@ class BoostTestSuite(UnitTestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
 
-    async def create_test(self, shortname: str, suite, args) -> None:
-        exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+    async def create_test(self, name: str, suite, args) -> None:
+        exe = os.path.join("build", suite.mode, "test", suite.name, name)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Boost test executable {exe} not found."))
             return
         options = self.options
-        allows_compaction_groups = self.all_can_run_compaction_groups_except != None and shortname not in self.all_can_run_compaction_groups_except
-        if options.parallel_cases and (shortname not in self.no_parallel_cases):
-            fqname = os.path.join(self.mode, self.name, shortname)
+        allows_compaction_groups = self.all_can_run_compaction_groups_except != None and name not in self.all_can_run_compaction_groups_except
+        if options.parallel_cases and (name not in self.no_parallel_cases):
+            fqname = os.path.join(self.mode, self.name, name)
             if fqname not in self._case_cache:
                 process = await asyncio.create_subprocess_exec(
                     exe, *['--list_content'],
@@ -326,14 +331,14 @@ class BoostTestSuite(UnitTestSuite):
 
             case_list = self._case_cache[fqname]
             if len(case_list) == 1:
-                test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None, allows_compaction_groups)
+                test = BoostTest(self.next_id((name, self.suite_key)), name, None, suite, args, allows_compaction_groups)
                 self.tests.append(test)
             else:
                 for case in case_list:
-                    test = BoostTest(self.next_id((shortname, self.suite_key, case)), shortname, suite, args, case, allows_compaction_groups)
+                    test = BoostTest(self.next_id((name, self.suite_key, case)), name, case, suite, args, allows_compaction_groups)
                     self.tests.append(test)
         else:
-            test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None, allows_compaction_groups)
+            test = BoostTest(self.next_id((name, self.suite_key)), name, None, suite, args, allows_compaction_groups)
             self.tests.append(test)
 
     def junit_tests(self) -> Iterable['Test']:
@@ -433,9 +438,10 @@ class PythonTestSuite(TestSuite):
     def pattern(self) -> str:
         assert False
 
-    async def add_test(self, shortname) -> None:
-        test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, self)
+    async def add_test(self, name: str) -> int:
+        test = PythonTest(self.next_id((name, self.suite_key)), name, None, self)
         self.tests.append(test)
+        return 1
 
 
 class CQLApprovalTestSuite(PythonTestSuite):
@@ -447,9 +453,10 @@ class CQLApprovalTestSuite(PythonTestSuite):
     def build_test_list(self) -> List[str]:
         return TestSuite.build_test_list(self)
 
-    async def add_test(self, shortname: str) -> None:
-        test = CQLApprovalTest(self.next_id((shortname, self.suite_key)), shortname, self)
+    async def add_test(self, name: str) -> int:
+        test = CQLApprovalTest(self.next_id((name, self.suite_key)), name, None, self)
         self.tests.append(test)
+        return 1
 
     @property
     def pattern(self) -> str:
@@ -467,10 +474,11 @@ class TopologyTestSuite(PythonTestSuite):
         """Build list of Topology python tests"""
         return TestSuite.build_test_list(self)
 
-    async def add_test(self, shortname: str) -> None:
+    async def add_test(self, name: str) -> int:
         """Add test to suite"""
-        test = TopologyTest(self.next_id((shortname, 'topology', self.mode)), shortname, self)
+        test = TopologyTest(self.next_id((name, 'topology', self.mode)), name, None, self)
         self.tests.append(test)
+        return 1
 
     @property
     def pattern(self) -> str:
@@ -490,9 +498,10 @@ class RunTestSuite(TestSuite):
             self.scylla_env = dict()
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
-    async def add_test(self, shortname) -> None:
-        test = RunTest(self.next_id((shortname, self.suite_key)), shortname, self)
+    async def add_test(self, name: str) -> int:
+        test = RunTest(self.next_id((name, self.suite_key)), name, None, self)
         self.tests.append(test)
+        return 1
 
     @property
     def pattern(self) -> str:
@@ -501,22 +510,29 @@ class RunTestSuite(TestSuite):
 
 class Test:
     """Base class for CQL, Unit and Boost tests"""
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
+    def __init__(self, test_no: int, name: str, case: Optional[str], suite: TestSuite) -> None:
         self.id = test_no
         self.path = ""
         self.args: List[str] = []
         self.valid_exit_codes = [0]
         # Name with test suite name
-        self.name = os.path.join(suite.name, shortname.split('.')[0])
+        self.path = os.path.join(suite.name, name)
         # Name within the suite
-        self.shortname = shortname
+        self.name = name
+        self.case = case
+        self.full_name = f"{name}::{case}"
+        self.full_name_dot = f"{name}.{case}"
         self.mode = suite.mode
         self.suite = suite
         # Unique file name, which is also readable by human, as filename prefix
-        self.uname = "{}.{}.{}".format(self.suite.name, self.shortname, self.id)
+        # TODO: change inner '.' to '-' for a more conventional file naming
+        self.uname = f"{self.suite.name}.{self.full_name_dot}.{self.id}"
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
-        self.is_flaky = self.shortname in suite.flaky_tests
+        if case is None:
+            self.is_flaky = self.name in suite.flaky_tests
+        else:
+            self.is_flaky = f"{self.name}::{self.case}" in suite.flaky_tests
         # True if the test was retried after it failed
         self.is_flaky_failure = False
         # True if the test was cancelled by a ctrl-c or timeout, so
@@ -572,8 +588,8 @@ class UnitTest(Test):
                                 "--blocked-reactor-notify-ms 2000000 --collectd 0 "
                                 "--max-networking-io-control-blocks=100 ")
 
-    def __init__(self, test_no: int, shortname: str, suite, args: str) -> None:
-        super().__init__(test_no, shortname, suite)
+    def __init__(self, test_no: int, name: str, case: Optional[str], suite, args: str) -> None:
+        super().__init__(test_no, name, case, suite)
         self.path = os.path.join("build", self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
         if self.mode == "coverage":
@@ -601,13 +617,12 @@ TestPath = collections.namedtuple('TestPath', ['suite_name', 'test_name', 'case_
 class BoostTest(UnitTest):
     """A unit test which can produce its own XML output"""
 
-    def __init__(self, test_no: int, shortname: str, suite, args: str,
-                 casename: Optional[str], allows_compaction_groups : bool) -> None:
+    def __init__(self, test_no: int, name: str, case: Optional[str], suite, args: str,
+                 allows_compaction_groups : bool) -> None:
         boost_args = []
-        if casename:
-            shortname += '.' + casename
-            boost_args += ['--run_test=' + casename]
-        super().__init__(test_no, shortname, suite, args)
+        if case:
+            boost_args += ['--run_test=' + case]
+        super().__init__(test_no, name, case, suite, args)
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
@@ -615,7 +630,6 @@ class BoostTest(UnitTest):
         boost_args += ['--color_output=false']
         boost_args += ['--']
         self.args = boost_args + self.args
-        self.casename = casename
         BoostTest._reset(self)
         self.__test_case_elements: list[ET.Element] = []
         self.allows_compaction_groups = allows_compaction_groups
@@ -675,14 +689,15 @@ class BoostTest(UnitTest):
 class CQLApprovalTest(Test):
     """Run a sequence of CQL commands against a standlone Scylla"""
 
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
-        super().__init__(test_no, shortname, suite)
+    def __init__(self, test_no: int, name: str, case: Optional[str], suite) -> None:
+        assert case is None, "CQLApprovalTest does not have test cases inside a test"
+        super().__init__(test_no, name, case, suite)
         # Path to cql_repl driver, in the given build mode
         self.path = "pytest"
-        self.cql = suite.suite_path / (self.shortname + ".cql")
-        self.result = suite.suite_path / (self.shortname + ".result")
+        self.cql = suite.suite_path / (self.name + ".cql")
+        self.result = suite.suite_path / (self.name + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
-        self.reject = suite.suite_path / (self.shortname + ".reject")
+        self.reject = suite.suite_path / (self.name + ".reject")
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
         CQLApprovalTest._reset(self)
@@ -812,9 +827,10 @@ Check test log at {}.""".format(self.log_filename))
 class RunTest(Test):
     """Run tests in a directory started by a run script"""
 
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
-        super().__init__(test_no, shortname, suite)
-        self.path = suite.suite_path / shortname
+    def __init__(self, test_no: int, name: str, case: Optional[str], suite) -> None:
+        assert case is None, "RunTest does not support running specific test cases"
+        super().__init__(test_no, name, case, suite)
+        self.path = suite.suite_path / name
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
         RunTest._reset(self)
@@ -837,8 +853,8 @@ class RunTest(Test):
 class PythonTest(Test):
     """Run a pytest collection of cases against a standalone Scylla"""
 
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
-        super().__init__(test_no, shortname, suite)
+    def __init__(self, test_no: int, name: str, case: Optional[str], suite) -> None:
+        super().__init__(test_no, name, case, suite)
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.server_log: Optional[str] = None
@@ -858,7 +874,7 @@ class PythonTest(Test):
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
-        self.args.append(str(self.suite.suite_path / (self.shortname + ".py")))
+        self.args.append(str(self.suite.suite_path / (self.name + ".py")))
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
@@ -917,8 +933,9 @@ class TopologyTest(PythonTest):
     """Run a pytest collection of cases against Scylla clusters handling topology changes"""
     status: bool
 
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
-        super().__init__(test_no, shortname, suite)
+    def __init__(self, test_no: int, name: str, case: Optional[str], suite) -> None:
+        assert case is None, "TopologyTest does not support running by test case at the moment"
+        super().__init__(test_no, name, case, suite)
 
     async def run(self, options: argparse.Namespace) -> Test:
 
@@ -1078,7 +1095,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             if isinstance(e, asyncio.TimeoutError):
                 report_error("Test timed out")
             elif isinstance(e, asyncio.CancelledError):
-                print(test.shortname, end=" ")
+                print(test.full_name, end=" ")
                 report_error("Test was cancelled: the parent process is exiting")
         except Exception as e:
             report_error("Failed to run the test:\n{e}".format(e=e))
@@ -1139,7 +1156,8 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Print list of tests instead of executing them")
     parser.add_argument('--skip', default="",
                         dest="skip_pattern", action="store",
-                        help="Skip tests which match the provided pattern")
+                        help="Skip tests which match the provided pattern. For example:\n"
+                             "'test_utf8', 'boost', 'boost::database_test::test_snapshot'")
     parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
                         help="Do not run individual test cases in parallel")
     parser.add_argument('--cpus', action="store",
@@ -1361,7 +1379,7 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
             total += 1
             # add the suite name to disambiguate tests named "run"
             xml_res = ET.SubElement(xml_results, 'testcase',
-                                    name="{}.{}.{}.{}".format(test.suite.name, test.shortname, mode, test.id))
+                                    name=f"{test.suite.name}.{test.full_name_dot}.{mode}.{test.id}")
             if test.success is True:
                 continue
             failed += 1
@@ -1493,7 +1511,7 @@ async def main() -> int:
 
     await find_tests(options)
     if options.list_tests:
-        print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
+        print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.full_name}"
                          for t in TestSuite.all_tests()]))
         return 0
 
