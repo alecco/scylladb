@@ -79,12 +79,25 @@ class palette:
 
 
 class TestCase(NamedTuple):
-    suite_name: str
-    name: str
+    suite_name: Optional[str]
+    name: Optional[str]
     case: Optional[str]
 
     def __str__(self):
-        return f"{self.suite_name}::{self.name}{'::' + self.case if self.case else ''}"
+        return f"{self.suite_name if self.suite_name else '*'}::{self.name}::{self.case if self.case else '*'}"
+
+    def match(self, other: "TestCase") -> bool:
+        """
+        Check if the 'other' TestCase matches the pattern specified by this TestCase instance.
+        An attribute in 'self' set to None is considered a wildcard, matching any value in 'other'.
+        """
+        if self.suite_name is not None and self.suite_name != other.suite_name:
+            return False
+        if self.name is not None and not self.name in other.name:
+            return False
+        if self.case is not None and not self.case in other.case:
+            return False
+        return True
 
 
 class TestSuite(ABC):
@@ -239,8 +252,13 @@ class TestSuite(ABC):
             # so pop them up while sorting the list
             test_defs.sort(key=lambda x: (str(x) not in self.run_first_tests, str(x)))
 
-        def is_enabled(name: str):
-            return not options.names or any (n in name for n in options.names)
+        def is_enabled(test: TestCase):
+            if not options.names:
+                return True             # no test specified, run all tests
+            # here names are patterns
+            if any (n.match(test) for n in options.names):
+                return True
+            return False
 
         def is_disabled(name: str):
             return name in self.disabled_tests
@@ -252,7 +270,7 @@ class TestSuite(ABC):
         for test_def in test_defs:
             name = str(test_def)
             for _ in range(options.repeat):
-                if not is_disabled(name) and not should_skip(name) and is_enabled(name):
+                if not is_disabled(name) and not should_skip(name) and is_enabled(test_def):
                     add_test_tasks.append(asyncio.create_task(self.add_test(test_def)))
 
         if add_test_tasks:
@@ -1134,6 +1152,17 @@ def setup_signal_handlers(loop, signaled) -> None:
         loop.add_signal_handler(signo, lambda: asyncio.create_task(shutdown(loop, signo, signaled)))
 
 
+def pattern_to_case(value: str) -> TestCase:
+    """From a command line test pattern create a TestCase."""
+    pattern = re.compile(r'^(?P<suite>[a-zA-Z0-9_-]*)(::(?P<test>[a-zA-Z0-9_-]+))?(::(?P<case>[a-zA-Z0-9_-]+))?$')
+    match = pattern.match(value)
+    if not match:
+        raise ValueError("Invalid pattern. Must be 'suite', 'suite::test', or 'suite::test::case'.")
+
+    suite = None if match.group('suite') == '' else match.group('suite')
+    return TestCase(suite, match.group('test'), match.group('case'))
+
+
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
 
@@ -1142,12 +1171,19 @@ def parse_cmd_line() -> argparse.Namespace:
         "names",
         nargs="*",
         action="store",
-        help="""Can be empty. List of test names, to look for in
-                suites. Each name is used as a substring to look for in the
-                path to test file, e.g. "mem" will run all tests that have
-                "mem" in their name in all suites, "boost/mem" will only enable
-                tests starting with "mem" in "boost" suite. Default: run all
-                tests in all suites.""",
+        type=pattern_to_case,
+        help="""Can be empty. Space separated list of tests look for.
+                The syntax is either test_suite, test_suite::test_file, or
+                test_suite::test_file::test_case. For example:
+                    boost::database_test::clear_snapshot       runs one test case
+                    topology::test_change_ip                   runs all tests in a file
+                    cql-pytest                                 suite only, runs all its tests
+                    ::test_tablets                             tests matching any suite
+
+                Test and case can be partial match. (e.g. "::tablets" instead of "::test_tablets").
+                Note: if suite is not specified the "::" prefix MUST be placed before test name.
+
+                If no name is specified, all tests in all suites will be run.""",
     )
     parser.add_argument(
         "--tmpdir",
