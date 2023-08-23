@@ -1117,6 +1117,30 @@ def setup_signal_handlers(loop, signaled) -> None:
         loop.add_signal_handler(signo, lambda: asyncio.create_task(shutdown(loop, signo, signaled)))
 
 
+class TestPattern:
+    """A provided pattern for tests to match.
+       Parses strings in the format suite::file::case were file and case are optional.
+    """
+    def __init__(self, value):
+        pattern = re.compile(r'^([a-zA-Z0-9_-]+)(::([a-zA-Z0-9_-]+))?(::([a-zA-Z0-9_-]+))?$')
+        match = pattern.match(value)
+        if not match:
+            raise ValueError("Invalid pattern. Must be 'suite', 'suite::test', or 'suite::test::case'.")
+
+        self.suite = match.group(1)
+        self.test = match.group(3)
+        self.case = match.group(5)
+        self.value = value
+
+    def match(self, suite: str, test: Optional[str], case: Optional[str]):
+        """Check if passed suite, test, and case match the pattern seen from command line"""
+        return self.suite == suite and self.test == test and self.case == case
+
+
+def test_pattern(value):
+    return TestPattern(value)
+
+
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
 
@@ -1125,12 +1149,15 @@ def parse_cmd_line() -> argparse.Namespace:
         "name",
         nargs="*",
         action="store",
-        help="""Can be empty. List of test names, to look for in
-                suites. Each name is used as a substring to look for in the
-                path to test file, e.g. "mem" will run all tests that have
-                "mem" in their name in all suites, "boost/mem" will only enable
-                tests starting with "mem" in "boost" suite. Default: run all
-                tests in all suites.""",
+        type=test_pattern,
+        help="""Can be empty. Space separated list of tests look for.
+                The syntax is either test_suite, test_suite::test_file, or
+                test_suite::test_file::test_case. For example:
+                    boost::database_test::clear_snapshot       runs one test case
+                    topology::test_change_ip                   runs all tests in a file
+                    cql-pytest                                 runs all files in the suite
+
+                If no name is specified, all tests in all suites will be run.""",
     )
     parser.add_argument(
         "--tmpdir",
@@ -1244,6 +1271,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
 async def find_tests(options: argparse.Namespace) -> None:
 
+    # XXX if suites specified, only those, else all
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
