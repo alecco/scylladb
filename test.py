@@ -86,13 +86,38 @@ class TestTaskDef(NamedTuple):
        Representation is  suite::test[::case_name] where case_name is ommitted if not present.
        For a match for any suite (specified with ::test in command line), it will show as
        "all::test".
+       For a match for any test of a suite, it's represented as "suite::all"
     """
-    suite_name: str
-    test_file: str
+    suite_name: Optional[str]
+    test_file: Optional[str]
     case_name: Optional[str]
 
     def __str__(self):
-        return f"{self.suite_name}::{self.test_file}{'::' + self.case_name if self.case_name else ''}"
+        """Represent this TestTaskDef as suite::test_file::case_namae
+           If suite is not specified, 'all::test_file::case_namae' or 'all::test_file'.
+           If test file is not specified, 'suite::'.
+           If case name is not specified, 'suite::test'.
+        """
+        assert self.test_file or self.suite_name, "Either test file or suite name must be present"
+        suite = f"{self.suite_name}::" if self.suite_name else "all::"
+        assert self.test_file or (not self.test_file and not self.case_name), "No case if test is undefined"
+        test_name = self.test_file if self.test_file else ""
+        case_ = f"::{self.case_name}" if self.case_name else ""
+        return f"{suite}{test_name}{case_}"
+
+    def match(self, other: "TestTaskDef") -> bool:
+        """
+        Check if the 'other' TestTaskDef matches the pattern specified by this TestTaskDef instance.
+        An attribute in 'self' set to None is considered a wildcard, matching any value in 'other'.
+        """
+        if self.suite_name is not None and self.suite_name != other.suite_name:
+            return False
+        if self.test_file is not None and other.test_file is not None and \
+                not self.test_file in other.test_file:
+            return False
+        if self.case_name is not None and other.case_name is not None and not self.case_name in other.case_name:
+            return False
+        return True
 
     def startswith(self, test_file: str, case_name: Optional[str]):
         """Checks if self's test_file string starts with provided test_file string.
@@ -101,8 +126,9 @@ class TestTaskDef(NamedTuple):
            If case_name is provided but not definded in self, returns False.
            If case_name is provided and definded in self, and self starts with provided, returns True.
         """
+        assert self.test_file, "Need to have test_file to compare"
         return self.test_file.startswith(test_file) and \
-                (not case_name or (self.case_name and self.case_name.startswith(case_name)))
+                (not case_name or (self.case_name is not None and self.case_name.startswith(case_name)))
 
 
 class TestSuite(ABC):
@@ -266,20 +292,26 @@ class TestSuite(ABC):
             test_defs.sort(key=lambda tc: not any(tc.startswith(test_file, case_name)
                                                   for test_file, case_name in run_first_tc))
 
-        def is_enabled(name: str):
-            return not options.names or any (n in name for n in options.names)
+        def is_enabled(test_def: TestTaskDef):
+            if not options.names:
+                return True             # no test specified in command line, run all tests
+            # TODO: options.names is actually List[TestTaskDef]
+            return any(n.match(test_def) for n in options.names)
 
         def is_disabled(name: str):
+            # TODO: support disabling specific cases
             return name in self.disabled_tests
 
         def should_skip(name: str):
+            # TODO: support skipping specific cases
             return options.skip_pattern and options.skip_pattern in name
 
         add_test_tasks = []
         for test_def in test_defs:
-            name = str(test_def)
+            assert test_def.test_file is not None
             for _ in range(options.repeat):
-                if not is_disabled(test_def.test_file) and not should_skip(name) and is_enabled(name):
+                if not is_disabled(test_def.test_file) and not should_skip(test_def.test_file) \
+                        and is_enabled(test_def):
                     add_test_tasks.append(asyncio.create_task(self.add_test(test_def)))
 
         if add_test_tasks:
@@ -601,7 +633,10 @@ class Test:
         self.suite = suite
         # Unique file name, which is also readable by human, as filename prefix
         # TODO: change inner '.' to '-' for a more conventional file naming
-        self.uname = f"{self.full_name.replace('::', '.')}.{self.id}"
+        if test_def.case_name:
+            self.uname = f"{test_def.suite_name}.{test_def.test_file}.{test_def.case_name}.{self.id}"
+        else:
+            self.uname = f"{test_def.suite_name}.{test_def.test_file}.{self.id}"
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         if test_def.case_name is None:
@@ -720,8 +755,8 @@ class BoostTest(UnitTest):
     @staticmethod
     def test_path_of_element(test: ET.Element) -> TestTaskDef:
         path = test.attrib['path']
-        suite_name, test_name, case_name = path.rsplit('::')
-        return TestTaskDef(suite_name, test_name, case_name)
+        elems = path.rsplit('::')
+        return TestTaskDef(elems[0], elems[1], elems[2] if len(elems) == 3 else None)
 
     def __parse_logger(self) -> None:
         def attach_path_and_mode(test):
@@ -1242,6 +1277,17 @@ def setup_signal_handlers(loop, signaled) -> None:
         loop.add_signal_handler(signo, lambda: asyncio.create_task(shutdown(loop, signo, signaled)))
 
 
+def pattern_to_case(value: str) -> TestTaskDef:
+    """From a command line test pattern create a TestTaskDef."""
+    pattern = re.compile(r'^(?P<suite>[a-zA-Z0-9_-]*)(::(?P<test>[a-zA-Z0-9_/-]+))?(::(?P<case>[a-zA-Z0-9_-]+))?$')
+    match = pattern.match(value)
+    if not match:
+        raise ValueError("Invalid pattern. Must be 'suite', 'suite::test', or 'suite::test::case'.")
+
+    suite = None if match.group('suite') == '' else match.group('suite')
+    return TestTaskDef(suite, match.group('test'), match.group('case'))
+
+
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
 
@@ -1250,12 +1296,19 @@ def parse_cmd_line() -> argparse.Namespace:
         "names",
         nargs="*",
         action="store",
-        help="""Can be empty. List of test names, to look for in
-                suites. Each name is used as a substring to look for in the
-                path to test file, e.g. "mem" will run all tests that have
-                "mem" in their name in all suites, "boost/mem" will only enable
-                tests starting with "mem" in "boost" suite. Default: run all
-                tests in all suites.""",
+        type=pattern_to_case,
+        help="""Can be empty. Space separated list of tests look for.
+                The syntax is either test_suite, test_suite::test_file, or
+                test_suite::test_file::test_case. For example:
+                    boost::database_test::clear_snapshot       runs one test case
+                    topology::test_change_ip                   runs all tests in a file
+                    cql-pytest                                 suite only, runs all its tests
+                    ::test_tablets                             tests matching any suite
+
+                Test and case can be partial match. (e.g. "::tablets" instead of "::test_tablets").
+                Note: if suite is not specified the "::" prefix MUST be placed before test name.
+
+                If no name is specified, all tests in all suites will be run.""",
     )
     parser.add_argument(
         "--tmpdir",
