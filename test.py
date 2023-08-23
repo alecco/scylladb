@@ -245,20 +245,24 @@ class TestSuite(ABC):
             # e.g. self.name "boost" test_name "database_test"   XXX
             test_full_name = f"{self.name}::{test_name}"
             # print(f"XXX TestSuite add_test_list {test_full_name}")
-            patterns = options.name if options.name else [test_full_name]
-            if options.skip_pattern and options.skip_pattern in test_full_name:
-                continue
+            if not options.names:
+                pending.add(asyncio.create_task(add_test_entries(test_name)))
+            else:
+                if options.skip_pattern and options.skip_pattern in test_full_name:
+                    print(f"XXX skipping {test_full_name} because of skip pattern {options.skip_pattern}") # XXX
+                    continue
 
-            async def add_test_entries(test_name) -> None:
-                # Add variants of the same test sequentially
-                # so that case cache has a chance to populate
-                for i in range(options.repeat):
-                    # add_test() might add multiple cases
-                    self.pending_test_count += await self.add_test(test_case)
+                async def add_test_entries(test_name) -> None:
+                    # Add variants of the same test sequentially
+                    # so that case cache has a chance to populate
+                    for i in range(options.repeat):
+                        # add_test() might add multiple cases
+                        self.pending_test_count += await self.add_test(test_name)
 
-            for p in patterns:
-                if p in test_full_name:
-                    pending.add(asyncio.create_task(add_test_entries(test_name)))
+                for test_spec in options.names:
+                    if test_spec.match(suite = self.name, test = test_name):
+                        pending.add(asyncio.create_task(add_test_entries(test_name)))
+
         if len(pending) == 0:
             return
         try:
@@ -1137,20 +1141,54 @@ def setup_signal_handlers(loop, signaled) -> None:
         loop.add_signal_handler(signo, lambda: asyncio.create_task(shutdown(loop, signo, signaled)))
 
 
+class TestPattern:
+    """A provided pattern for tests to match.
+       Parses strings in the format suite::file::case were file and case are optional.
+    """
+    def __init__(self, value):
+        pattern = re.compile(r'^([a-zA-Z0-9_-]+)(::([a-zA-Z0-9_-]+))?(::([a-zA-Z0-9_-]+))?$')
+        match = pattern.match(value)
+        if not match:
+            raise ValueError("Invalid pattern. Must be 'suite', 'suite::test', or 'suite::test::case'.")
+
+        self.suite = match.group(1)
+        self.test = match.group(3)
+        self.case = match.group(5)
+        self.value = value
+
+    def __str__(self):
+        return self.value
+
+    def match(self, suite: str, test: Optional[str] = None, case: Optional[str] = None):
+        """Check if passed suite, test, and case match the pattern seen from command line"""
+        if self.suite == suite:
+            if not self.test or self.test == test:
+                if not self.case or self.case == case:
+                    return True     # run all tests of specified suite
+        return False
+
+
+def test_pattern(value):
+    return TestPattern(value)
+
+
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
 
     parser = argparse.ArgumentParser(description="Scylla test runner")
     parser.add_argument(
-        "name",
+        "names",
         nargs="*",
         action="store",
-        help="""Can be empty. List of test names, to look for in
-                suites. Each name is used as a substring to look for in the
-                path to test file, e.g. "mem" will run all tests that have
-                "mem" in their name in all suites, "boost/mem" will only enable
-                tests starting with "mem" in "boost" suite. Default: run all
-                tests in all suites.""",
+        type=test_pattern,
+        help="""Can be empty. Space separated list of tests look for.
+                The syntax is either test_suite, test_suite::test_file, or
+                test_suite::test_file::test_case. For example:
+                    boost::database_test::clear_snapshot       runs one test case
+                    topology::test_change_ip                   runs all tests in a file
+                    cql-pytest                                 runs all files in the suite
+
+                If no name is specified, all tests in all suites will be run.""",
     )
     parser.add_argument(
         "--tmpdir",
@@ -1264,6 +1302,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
 async def find_tests(options: argparse.Namespace) -> None:
 
+    # XXX if suites specified, only those, else all
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
@@ -1271,8 +1310,8 @@ async def find_tests(options: argparse.Namespace) -> None:
                 await suite.add_test_list()
 
     if not TestSuite.test_count():
-        if len(options.name):
-            print("Test {} not found".format(palette.path(options.name[0])))
+        if len(options.names):
+            print("Test {} not found".format(palette.path(options.names[0])))
             sys.exit(1)
         else:
             print(palette.warn("No tests found. Please enable tests in ./configure.py first."))
