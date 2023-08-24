@@ -216,9 +216,20 @@ class TestSuite(ABC):
         return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
                 self.suite_path.glob(self.pattern)]
 
+    def _case_list(self, test_list: List[str]) -> Dict[str, str]:
+        """For the tests of the suite, build a test cases map test: case with the list of cases.
+           By default just provide a map to None for existing test names (meaning no cases)."""
+        def default_case_lookup(test_name: str):
+            if test_name in test_list:
+                return None
+            raise KeyError(test_name)
+        return collections.defaultdict(default_case_lookup)
+
     async def add_test_list(self) -> None:
+        print(f"XXX TestSuite add_test_list {self.mode} {self.name} ")
         options = self.options
         lst = self.build_test_list()
+        case_dict = self._case_list(lst)
         if lst:
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
@@ -231,6 +242,7 @@ class TestSuite(ABC):
 
             # e.g. self.name "boost" test_name "database_test"   XXX
             test_full_name = f"{self.name}::{test_name}"
+            # print(f"XXX TestSuite add_test_list {test_full_name}")
             patterns = options.name if options.name else [test_full_name]
             if options.skip_pattern and options.skip_pattern in test_full_name:
                 continue
@@ -302,6 +314,9 @@ class BoostTestSuite(UnitTestSuite):
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
+
+    def _case_list(self, test_list: List[str]) -> Dict[str, str]:
+        pass  # XXX move here the case logic
 
     async def create_test(self, name: str, suite, args) -> None:
         exe = os.path.join("build", suite.mode, "test", suite.name, name)
