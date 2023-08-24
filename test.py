@@ -193,7 +193,7 @@ class TestSuite(ABC):
         pass
 
     @abstractmethod
-    async def add_test(self, name: str) -> int:
+    async def add_test(self, test_case: TestCase) -> int:
         pass
 
     async def run(self, test: 'Test', options: argparse.Namespace):
@@ -221,21 +221,30 @@ class TestSuite(ABC):
         return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
                 self.suite_path.glob(self.pattern)]
 
+    async def _case_list(self, test_list: List[str]) -> List[TestCase]:
+        """For the tests of the suite, build a list (test, case)"""
+        # if not implemented in subclass, just return the list of tests
+        return [TestCase(test, None) for test in test_list]
+
     async def add_test_list(self) -> None:
+        print(f"XXX TestSuite add_test_list {self.mode} {self.name} ")
         options = self.options
         lst = self.build_test_list()
+        case_dict = await self._case_list(lst)
         if lst:
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
             lst.sort(key=lambda x: (x not in self.run_first_tests, x))
 
         pending = set()
+        # XXX use filter
         for test_name in lst:
             if test_name in self.disabled_tests:
                 continue
 
             # e.g. self.name "boost" test_name "database_test"   XXX
             test_full_name = f"{self.name}::{test_name}"
+            # print(f"XXX TestSuite add_test_list {test_full_name}")
             patterns = options.name if options.name else [test_full_name]
             if options.skip_pattern and options.skip_pattern in test_full_name:
                 continue
@@ -245,7 +254,7 @@ class TestSuite(ABC):
                 # so that case cache has a chance to populate
                 for i in range(options.repeat):
                     # add_test() might add multiple cases
-                    self.pending_test_count += await self.add_test(test_name)
+                    self.pending_test_count += await self.add_test(test_case)
 
             for p in patterns:
                 if p in test_full_name:
@@ -275,20 +284,21 @@ class UnitTestSuite(TestSuite):
         exe = os.path.join("build", suite.mode, "test", suite.name, name)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Unit test executable {exe} not found."))
+            logging.warning(f"Unit test executable {exe} not found.")
             return
         test = UnitTest(self.next_id((name, self.suite_key)), name, suite, args)
         self.tests.append(test)
 
-    async def add_test(self, name: str) -> int:
+    async def add_test(self, test_case: TestCase) -> int:
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
         # Skip tests which are not configured, and hence are not built
-        if os.path.join("test", self.name, name) not in self.options.tests:
+        if os.path.join("test", self.name, test_case) not in self.options.tests:
             return 0
 
         # Default seastar arguments, if not provided in custom test options,
         # are two cores and 2G of RAM
-        # TODO: custom args for test and/or case!!
+        # XXX custom args for test and/or case!!
         args = self.custom_args.get(name, ["-c2 -m2G"])
         for a in args:
             await self.create_test(name, a)
@@ -309,42 +319,46 @@ class BoostTestSuite(UnitTestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
 
-    async def create_test(self, test: TestCase, args: str) -> None:
-        assert isinstance(self, BoostTestSuite)
-        exe = os.path.join("build", self.mode, "test", self.name, test.test)
-        if not os.access(exe, os.X_OK):
-            print(palette.warn(f"Boost test executable {exe} not found."))
-            return
-        options = self.options
-        allows_compaction_groups = self.all_can_run_compaction_groups_except != None and test.test not in self.all_can_run_compaction_groups_except
-        if options.parallel_cases and (test.test not in self.no_parallel_cases):
-            fqname = os.path.join(self.mode, self.name, test.test)
-            if fqname not in self._case_cache:
-                process = await asyncio.create_subprocess_exec(
-                    exe, *['--list_content'],
-                    stderr=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    env=dict(os.environ,
-                             **{"ASAN_OPTIONS": "halt_on_error=0"}),
-                    preexec_fn=os.setsid,
-                )
-                _, stderr = await asyncio.wait_for(process.communicate(), options.timeout)
+    async def _exe_list_cases(self, exe: str) -> List[str]:
+        process = await asyncio.create_subprocess_exec(
+            exe, *['--list_content'],
+            stderr=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            env=dict(os.environ, **{"ASAN_OPTIONS": "halt_on_error=0"}),
+            preexec_fn=os.setsid,
+        )
+        _, stderr = await asyncio.wait_for(process.communicate(), self.options.timeout)
+        return [case[:-1] for case in stderr.decode().splitlines() if case.endswith('*')]
 
-                case_list = [case[:-1] for case in stderr.decode().splitlines() if case.endswith('*')]
-                self._case_cache[fqname] = case_list
+    async def _case_list(self, test_list: List[str]) -> List[TestCase]:
+        """For the tests of this suite, build a list (test, case)"""
 
-            case_list = self._case_cache[fqname]
-            # XXX here do with TestCase not name, only 1 loop
-            if len(case_list) == 1:
-                test = BoostTest(self.next_id((test.test, test.case, self.suite_key)), test.name, suite, args, allows_compaction_groups)
-                self.tests.append(test)
+        if not self.options.parallel_cases:
+            return [TestCase(test_name, None) for test_name in test_list]
+
+        ret: List[TestCase] = []
+
+        for test_name in test_list:
+            if test_name in self.no_parallel_cases:
+                case_list = [None]
             else:
-                for case in case_list:
-                    test = BoostTest(self.next_id((test.test, test.case, self.suite_key, case)), test, suite, args, allows_compaction_groups)
-                    self.tests.append(test)
-        else:
-            test = BoostTest(self.next_id((test.test, test.case, self.suite_key)), test, suite, args, allows_compaction_groups)
-            self.tests.append(test)
+                exe = os.path.join("build", self.mode, "test", self.name, test_name)
+                if not os.access(exe, os.X_OK):
+                    print(palette.warn(f"Boost test executable {exe} not found."))
+                    logging.warning(f"Boost test executable {exe} not found.")
+                    continue
+                fqname = os.path.join(self.mode, self.name, test_name)
+                if fqname not in self._case_cache:
+                    case_list = await self._exe_list_cases(exe)
+                    self._case_cache[fqname] = case_list           # store in cache
+                case_list = self._case_cache[fqname]
+
+            ret.extend([TestCase(test_name, case) for case in case_list])
+
+    async def create_test(self, test: TestCase, args) -> None:
+        allows_compaction_groups = self.all_can_run_compaction_groups_except != None and test.test not in self.all_can_run_compaction_groups_except
+        test_inst = BoostTest(self.next_id((test.test, self.suite_key, case)), test.test, case, self, args, allows_compaction_groups)
+        self.tests.append(test_inst)
 
     def junit_tests(self) -> Iterable['Test']:
         """Boost tests produce an own XML output, so are not included in a junit report"""
@@ -624,6 +638,7 @@ class BoostTest(UnitTest):
 
     def __init__(self, test_no: int, test: TestCase, suite, args: str,
                  allows_compaction_groups : bool) -> None:
+        assert isinstance(suite, BoostTestSuite)
         boost_args = []
         if test.case is not None:
             boost_args += ['--run_test=' + test.case]
