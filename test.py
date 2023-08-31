@@ -391,6 +391,7 @@ class BoostTestSuite(UnitTestSuite):
 
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
+    _case_cache: Dict[str, List[Optional[str]]] = dict()
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
@@ -479,11 +480,52 @@ class PythonTestSuite(TestSuite):
         return self._filter_test_list(tests)
 
     @property
+    def _extra_pytest_dummy_args(self) -> List[str]:
+        # Needed args for listing test cases
+        return []
+
+    async def _pytest_list_cases(self, test_file: str) -> List[Optional[str]]:
+        process = await asyncio.create_subprocess_exec(
+            "pytest", "--collect-only", "-q",
+            *self._extra_pytest_dummy_args,
+            test_file,
+            stderr=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), self.options.timeout)
+        # Note: output contains lines with file.py::<test_case> among other things, match cases
+        pattern = rf"{re.escape(os.path.basename(test_file))}::(\w+)"
+        matches = re.findall(pattern, stdout.decode())
+        assert matches, f"No test cases found in test {test_file}"
+        return matches
+
+    async def _test_defs(self, test_list: List[str]) -> List[TestCase]:
+        """For the tests of this suite, build a list (test, case)"""
+
+        if not self.options.parallel_cases:
+            return [TestCase(self.name, test_name, None) for test_name in test_list]
+
+        ret: List[TestCase] = []
+
+        for test_name in test_list:
+            if test_name in self.no_parallel_cases:
+                case_list: List[Optional[str]] = [None]
+            else:
+                test_file = os.path.join("test", self.name, test_name + ".py")
+                if test_file not in self._case_cache:
+                    case_list = await self._pytest_list_cases(test_file)
+                    self._case_cache[test_file] = case_list           # store in cache
+                case_list = self._case_cache[test_file]
+
+            ret.extend([TestCase(self.name, test_name, case) for case in case_list])
+
+        return ret
+
+    @property
     def pattern(self) -> str:
         assert False
 
     async def add_test(self, test_def: TestCase) -> None:
-        assert test_def.case is None
         test = PythonTest(self.next_id((test_def.name, self.suite_key)), test_def, self)
         self.tests.append(test)
 
@@ -496,6 +538,10 @@ class CQLApprovalTestSuite(PythonTestSuite):
 
     def build_test_list(self) -> List[str]:
         return TestSuite.build_test_list(self)
+
+    async def _test_defs(self, test_list: List[str]) -> List[TestCase]:
+        # no test cases for CQL
+        return [TestCase(self.name, test_name, None) for test_name in test_list]
 
     async def add_test(self, test_def: TestCase) -> None:
         assert test_def.case is None
@@ -514,13 +560,16 @@ class TopologyTestSuite(PythonTestSuite):
        are done per test case.
     """
 
+    @property
+    def _extra_pytest_dummy_args(self) -> List[str]:
+        return ["--manager-api=FOO", "--mode=BAR"]
+
     def build_test_list(self) -> List[str]:
         """Build list of Topology python tests"""
         return TestSuite.build_test_list(self)
 
     async def add_test(self, test_def: TestCase) -> None:
         """Add test to suite"""
-        assert test_def.case is None
         test = TopologyTest(self.next_id((test_def.name, test_def.case, 'topology', self.mode)), test_def, self)
         self.tests.append(test)
 
@@ -911,6 +960,9 @@ class PythonTest(Test):
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),
             "-rs"]
+        if self.case:
+            self.args.extend(["-k", self.case])
+
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
@@ -977,7 +1029,6 @@ class TopologyTest(PythonTest):
     status: bool
 
     def __init__(self, test_no: int, test_def: TestCase, suite) -> None:
-        assert test_def.case is None, "TopologyTest does not support running by test case at the moment"
         super().__init__(test_no, test_def, suite)
 
     async def run(self, options: argparse.Namespace) -> Test:
