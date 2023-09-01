@@ -152,7 +152,7 @@ class TestSuite(ABC):
         self.n_failed = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
-        self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
+        self.parallel_cases = set(cfg.get("parallel_cases", []))
         # Skip tests disabled in suite.yaml
         self.disabled_tests = set(self.cfg.get("disable", []))
         # Skip tests disabled in specific mode.
@@ -402,7 +402,7 @@ class BoostTestSuite(UnitTestSuite):
         ret: List[TestCase] = []
 
         for test_name in test_list:
-            if test_name in self.no_parallel_cases:
+            if not test_name in self.parallel_cases:
                 case_list: List[Optional[str]] = [None]
             else:
                 exe = os.path.join("build", self.mode, "test", self.name, test_name)
@@ -542,15 +542,15 @@ class PythonTestSuite(TestSuite):
         return matches
 
     async def _create_test_case(self, test_name: str) -> List[TestCase]:
-        if test_name in self.no_parallel_cases:
-            case_list: List[Optional[str]] = [None]
-        else:
+        if test_name in self.parallel_cases:
             test_file = os.path.join("test", self.name, test_name)
             if test_file not in self._case_cache:
                 case_list = await self._pytest_list_cases(test_file)
                 self._case_cache[test_file] = case_list  # Assuming cache is thread-safe
             else:
                 case_list = self._case_cache[test_file]
+        else:
+            case_list: List[Optional[str]] = [None]
 
         return [TestCase(self.name, test_name, case) for case in case_list]
 
