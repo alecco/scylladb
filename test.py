@@ -155,7 +155,7 @@ class TestSuite(ABC):
         self.n_failed = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
-        self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
+        self.parallel_cases = set(cfg.get("parallel_cases", []))
         # Skip tests disabled in suite.yaml
         self.disabled_tests = set(self.cfg.get("disable", []))
         # Skip tests disabled in specific mode.
@@ -266,7 +266,7 @@ class TestSuite(ABC):
         return self.tests
 
     def _filter_test_list(self, tests: List[str]) -> List[str]:
-        patterns = [tc.name for tc in self.options.names if tc.suite_name in [self.name, None]]
+        patterns = [tc.test_file for tc in self.options.names if tc.suite_name in [self.name, None]]
         # If any of the patterns is wildcard (None), include all tests, else only specified tests
         patterns = [""] if not patterns or None in patterns else patterns
         tests = [test for test in tests if any(patt in test for patt in patterns)]
@@ -406,9 +406,7 @@ class BoostTestSuite(UnitTestSuite):
         ret: List[TestDef] = []
 
         for test_file in test_list:
-            if test_file in self.no_parallel_cases:
-                case_list: List[Optional[str]] = [None]
-            else:
+            if test_file in self.parallel_cases:
                 exe = os.path.join("build", self.mode, "test", self.name, test_file)
                 if not os.access(exe, os.X_OK):
                     print(palette.warn(f"Boost test executable {exe} not found."))
@@ -419,6 +417,8 @@ class BoostTestSuite(UnitTestSuite):
                     case_list = await self._exe_list_cases(exe)
                     self._case_cache[fqname] = case_list           # store in cache
                 case_list = self._case_cache[fqname]
+            else:
+                case_list: List[Optional[str]] = [None]            # no parallel cases
 
             ret.extend([TestDef(self.name, test_file, case) for case in case_list])
 
@@ -546,15 +546,15 @@ class PythonTestSuite(TestSuite):
         return matches
 
     async def _create_test_case(self, test_name: str) -> List[TestDef]:
-        if test_name in self.no_parallel_cases:
-            case_list: List[Optional[str]] = [None]
-        else:
+        if test_name[:-3] in self.parallel_cases:
             test_file = os.path.join("test", self.name, test_name)
             if test_file not in self._case_cache:
                 case_list = await self._pytest_list_cases(test_file)
                 self._case_cache[test_file] = case_list  # Assuming cache is thread-safe
             else:
                 case_list = self._case_cache[test_file]
+        else:
+            case_list: List[Optional[str]] = [None]      # no parallel cases
 
         return [TestDef(self.name, test_name, case) for case in case_list]
 
