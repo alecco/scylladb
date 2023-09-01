@@ -152,7 +152,7 @@ class TestSuite(ABC):
         self.n_failed = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
-        self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
+        self.parallel_cases = set(cfg.get("parallel_cases", []))
         # Skip tests disabled in suite.yaml
         self.disabled_tests = set(self.cfg.get("disable", []))
         # Skip tests disabled in specific mode.
@@ -402,7 +402,7 @@ class BoostTestSuite(UnitTestSuite):
         ret: List[TestCase] = []
 
         for test_name in test_list:
-            if test_name in self.no_parallel_cases:
+            if not test_name in self.parallel_cases:
                 case_list: List[Optional[str]] = [None]
             else:
                 exe = os.path.join("build", self.mode, "test", self.name, test_name)
@@ -556,7 +556,7 @@ class PythonTestSuite(TestSuite):
     async def _test_defs(self, test_list: List[str]) -> List[TestCase]:
         """For the tests of this suite, build a list (test, case)"""
 
-        if not self.options.parallel_cases:
+        if not self.options.parallel_cases or self.mode in self.no_parallel_cases_modes:
             return [TestCase(self.name, test_name, None) for test_name in test_list]
 
         # Query pytest files in parallel to obtain their test cases
