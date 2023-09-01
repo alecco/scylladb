@@ -10,6 +10,7 @@ run_first:
     - database_test
     - cql_function_test
     - memtable_test
+no_parallel_cases_modes: [dev, release]
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:

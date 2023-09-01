@@ -1,1 +1,2 @@
 type: boost
+no_parallel_cases_modes: [dev, release, debug]
