@@ -8,6 +8,7 @@ extra_scylla_config_options:
     enable_user_defined_functions: False
     experimental_features: []
     consistent_cluster_management: False
+no_parallel_cases_modes: [dev, release]
 run_first:
   - test_raft_upgrade_stuck
   - test_raft_upgrade_majority_loss
