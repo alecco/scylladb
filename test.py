@@ -124,6 +124,7 @@ class TestSuite(ABC):
         self.n_failed = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
+        self.no_parallel_cases_modes = set(cfg.get("no_parallel_cases_modes", []))
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
         # Skip tests disabled in suite.yaml
         self.disabled_tests = set(self.cfg.get("disable", []))
@@ -355,7 +356,7 @@ class BoostTestSuite(UnitTestSuite):
     async def _test_defs(self, test_list: List[str]) -> List[TestCase]:
         """For the tests of this suite, build a list (test, case)"""
 
-        if not self.options.parallel_cases:
+        if not self.options.parallel_cases or self.mode in self.no_parallel_cases_modes:
             return [TestCase(self.name, test_name, None) for test_name in test_list]
 
         ret: List[TestCase] = []
@@ -502,7 +503,7 @@ class PythonTestSuite(TestSuite):
     async def _test_defs(self, test_list: List[str]) -> List[TestCase]:
         """For the tests of this suite, build a list (test, case)"""
 
-        if not self.options.parallel_cases:
+        if not self.options.parallel_cases or self.mode in self.no_parallel_cases_modes:
             return [TestCase(self.name, test_name, None) for test_name in test_list]
 
         ret: List[TestCase] = []
