@@ -475,7 +475,7 @@ class PythonTestSuite(TestSuite):
         """For pytest, search for directories recursively"""
         path = self.suite_path
         pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
-        tests = [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
+        tests = [str(t.relative_to(self.suite_path)) for t in pytests]
         return self._filter_test_list(tests)
 
     @property
@@ -917,7 +917,7 @@ class PythonTest(Test):
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
-        self.args.append(str(self.suite.suite_path / (self.name + ".py")))
+        self.args.append(str(self.suite.suite_path / self.name))
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
