@@ -224,15 +224,19 @@ class TestSuite(ABC):
             # so pop them up while sorting the list
             lst.sort(key=lambda x: (x not in self.run_first_tests, x))
 
+        def is_enabled(name: str):
+            return not options.names or any (n in name for n in options.names)
+
+        def is_disabled(name: str):
+            return name in self.disabled_tests
+
+        def should_skip(name: str):
+            return options.skip_pattern and options.skip_pattern in name
+
         add_test_tasks: List[asyncio.Task]= []
         for test_name in lst:
-            if test_name in self.disabled_tests:
-                continue
 
             t = os.path.join(self.name, test_name)
-            patterns = options.names if options.names else [t]
-            if options.skip_pattern and options.skip_pattern in t:
-                continue
 
             async def add_test(test_name) -> None:
                 # Add variants of the same test sequentially
@@ -241,9 +245,9 @@ class TestSuite(ABC):
                     await self.add_test(test_name)
                     self.pending_test_count += 1
 
-            for p in patterns:
-                if p in t:
-                    add_test_tasks.append(asyncio.create_task(add_test(test_name)))
+            if not is_disabled(test_name) and not should_skip(t) and is_enabled(t):
+                add_test_tasks.append(asyncio.create_task(add_test(test_name)))
+
         if len(add_test_tasks) == 0:
             return
         try:
