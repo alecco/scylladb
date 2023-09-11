@@ -224,9 +224,9 @@ class TestSuite(ABC):
             # so pop them up while sorting the list
             lst.sort(key=lambda x: (x not in self.run_first_tests, x))
 
-        pending = set()
-        for test_name in lst:
-            if test_name in self.disabled_tests:
+        add_test_tasks: List[asyncio.Task]= []
+        for test_file_name in lst:
+            if test_file_name in self.disabled_tests:
                 continue
 
             t = os.path.join(self.name, test_file_name)
@@ -243,15 +243,15 @@ class TestSuite(ABC):
 
             for p in patterns:
                 if p in t:
-                    pending.add(asyncio.create_task(add_test(test_name)))
-        if len(pending) == 0:
+                    add_test_tasks.append(asyncio.create_task(add_test(test_file_name)))
+        if len(add_test_tasks) == 0:
             return
         try:
-            await asyncio.gather(*pending)
+            await asyncio.gather(*add_test_tasks)
         except asyncio.CancelledError:
-            for task in pending:
+            for task in add_test_tasks:
                 task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(*add_test_tasks, return_exceptions=True)
             raise
 
 
