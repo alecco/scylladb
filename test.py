@@ -267,6 +267,7 @@ class UnitTestSuite(TestSuite):
 
     async def create_test(self, shortname, suite, args):
         exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+        print(f"XXX BoostTestSuite exe {exe}") # XXX
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Unit test executable {exe} not found."))
             return
@@ -602,6 +603,7 @@ class UnitTest(Test):
         super().__init__(test_no, shortname, suite)
         self.path = os.path.join("build", self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
+        print(f"XXX UnitTest  path {self.path} args {self.args}")  # XXX
         if self.mode == "coverage":
             self.env = coverage.env(self.path)
         else:
@@ -635,6 +637,7 @@ class BoostTest(UnitTest):
             boost_args += ['--run_test=' + casename]
         super().__init__(test_no, shortname, suite, args)
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        print(f"XXX BoostTest self.uname={self.uname} {str(self.xmlout)}")  #  XXX
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
         boost_args += ['--catch_system_errors=no']  # causes undebuggable cores
